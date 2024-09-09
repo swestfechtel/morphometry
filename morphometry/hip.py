@@ -21,12 +21,11 @@ def get_femoral_head_center(segmentation_mask: np.array, z_ratio: float) -> Tupl
 
     # get highest layer with a mask point, its centroid
     # and lowest layer with mask point on this centroid
-    layer_high = np.amin(contour_pts[:, 0])
+    layer_high = np.amin(contour_pts[:, 0]) + 1  # exclude the most proximal layer because it's tiny
 
     # com_high = get_centroid(mask[layer_high - 1])
     com_high = center_of_mass(segmentation_mask[layer_high + 1])
     com_high = (int(com_high[0]), int(com_high[1]))
-    print(com_high)
     layer_low = layer_high
     while segmentation_mask[layer_low, com_high[0], com_high[1]] != 0:
         layer_low += 1
@@ -46,8 +45,6 @@ def get_femoral_head_center(segmentation_mask: np.array, z_ratio: float) -> Tupl
     min_y = np.min(point_cloud[:, 1])
     radius = com_high[0] - min_y
     max_y = com_high[0] + radius
-
-    print(min_y, max_y)
 
     point_cloud = point_cloud[point_cloud[:, 2] >= min_z]
     point_cloud = point_cloud[point_cloud[:, 1] <= max_y]
