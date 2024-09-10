@@ -10,11 +10,10 @@ from skimage.measure import find_contours
 from sklearn.cluster import KMeans
 
 
-def get_femoral_head_center(segmentation_mask: np.array, z_ratio: float) -> Tuple[float, Tuple[float, float, float]]:
+def get_femoral_head_center(segmentation_mask: np.array) -> Tuple[float, np.array]:
     """
     Get the center of the femoral head from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur.
-    :param z_ratio: The pixel to mm ratio of the z axis.
     :return: The radius and location of the femoral head center.
     """
     contour_pts = get_contour_points(segmentation_mask)
@@ -55,17 +54,17 @@ def get_femoral_head_center(segmentation_mask: np.array, z_ratio: float) -> Tupl
     # get center coordinates of the fitting sphere
     r, center = sphere_fit(point_cloud)
     # compensate pixel mm ratio between x, y and z axis
-    center = (int(center[0]), int(center[1]), int(center[2]))
+    center = np.array([center[0], center[1], center[2]]).T[0]  # not sure why this is necessary, returns a column vector otherwise
 
     return r, center
 
 
-def get_femoral_neck_axis(segmentation_mask: np.array, femoral_head_center: Tuple[float, Tuple[float, float, float]]) -> Tuple[float, float, float]:
+def get_femoral_neck_center(segmentation_mask: np.array, femoral_head_center: Tuple[float, np.array]) -> Tuple[np.array, np.array]:
     """
     Get the endpoint of the femoral neck axis from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur.
     :param femoral_head_center: The radius and center of the femoral head.
-    :return: The endpoint of the femoral neck axis.
+    :return: The points constituting the femoral neck and the endpoint of the femoral neck axis.
     """
 
     r, c = femoral_head_center
@@ -97,8 +96,8 @@ def get_femoral_neck_axis(segmentation_mask: np.array, femoral_head_center: Tupl
 
     # Get the center of mass of these points
     com = KMeans(n_clusters=1).fit(neck_points).cluster_centers_[0]
-    return com[0], com[1], com[2]
 
+    return neck_points, np.array([com[0], com[1], com[2]])
 
 
 def get_femoral_shaft_axis(segmentation_mask: np.array) -> Tuple[np.array, np.array]:
@@ -118,19 +117,52 @@ def get_femoral_shaft_axis(segmentation_mask: np.array) -> Tuple[np.array, np.ar
     return np.array(com_low), np.array(com_high)
 
 
-def calc_ccd(femoral_head_center: Tuple[float, float, float], femoral_neck_axis: Tuple[float, float, float], femoral_shaft_axis: Tuple[np.array, np.array]) -> float:
+def calc_ccd(segmentation_mask: np.array) -> float:
     """
     Calculate the CCD angle from the femoral head center, femoral neck axis and femoral shaft axis.
-    :param femoral_head_center: The center of the femoral head.
-    :param femoral_neck_axis: The endpoint of the femoral neck axis.
-    :param femoral_shaft_axis: Start and end point of the vector representing the femoral shaft axis.
+    :param segmentation_mask: A segmentation mask of the proximal femur.
     :return: The CCD angle.
     """
+    r, femoral_head_center = get_femoral_head_center(segmentation_mask)
+    femoral_neck_points, femoral_neck_center = get_femoral_neck_center(segmentation_mask, (r, femoral_head_center))
+    femoral_shaft_axis = get_femoral_shaft_axis(segmentation_mask)
+
     # Calculate the angle between the femoral neck axis and the femoral shaft axis
-    neck_vector = np.array(femoral_neck_axis) - np.array(femoral_head_center)
+    neck_vector = femoral_neck_center - femoral_head_center
     shaft_vector = femoral_shaft_axis[1] - femoral_shaft_axis[0]
     neck_vector = neck_vector / np.linalg.norm(neck_vector)
     shaft_vector = shaft_vector / np.linalg.norm(shaft_vector)
     ccd = math.degrees(np.arccos(np.dot(neck_vector, shaft_vector)))
 
     return ccd
+
+
+def get_femoral_neck_transition(neck_points: np.array) -> np.array:
+    """
+    Get the point where the femoral neck transitions into the femoral head.
+    :param neck_points: The points constituting the femoral neck.
+    :return: The point where the femoral neck transitions into the femoral head.
+    """
+    most_proximal_points = neck_points[neck_points[:, 0] == np.min(neck_points[:, 0])]  # get the most proximal points
+    most_proximal_lateral_point = most_proximal_points[most_proximal_points[:, 2] == np.max(most_proximal_points[:, 2])]  # of the most proximal points, get the most lateral one
+    return most_proximal_lateral_point[0]  # this point is one possible transition point
+
+
+def calc_alpha_angle(segmentation_mask: np.array) -> float:
+    """
+    Calculate the alpha angle from the femoral head center and the femoral neck transition.
+    :param segmentation_mask: A segmentation mask of the proximal femur.
+    :return: The alpha angle.
+    """
+    r, femoral_head_center = get_femoral_head_center(segmentation_mask)
+    femoral_neck_points, femoral_neck_center = get_femoral_neck_center(segmentation_mask, (r, femoral_head_center))
+    femoral_neck_transition = get_femoral_neck_transition(femoral_neck_points)
+
+    # Calculate the angle between the femoral neck axis and the transition axis
+    neck_vector = femoral_neck_center - femoral_head_center
+    transition_vector = femoral_neck_transition - femoral_head_center
+    neck_vector = neck_vector / np.linalg.norm(neck_vector)
+    transition_vector = transition_vector / np.linalg.norm(transition_vector)
+    alpha = math.degrees(np.arccos(np.dot(neck_vector, transition_vector)))
+
+    return alpha
