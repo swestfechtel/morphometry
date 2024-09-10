@@ -2,7 +2,7 @@ import math
 import numpy as np
 import pyvista as pv
 
-from morphometry.utils import sphere_fit, get_contour_points
+from morphometry.utils import sphere_fit, get_contour_points, calc_angle_between_vectors
 from scipy.ndimage import center_of_mass, binary_erosion
 from scipy.spatial import KDTree
 from typing import Tuple
@@ -130,9 +130,7 @@ def calc_ccd(segmentation_mask: np.array) -> float:
     # Calculate the angle between the femoral neck axis and the femoral shaft axis
     neck_vector = femoral_neck_center - femoral_head_center
     shaft_vector = femoral_shaft_axis[1] - femoral_shaft_axis[0]
-    neck_vector = neck_vector / np.linalg.norm(neck_vector)
-    shaft_vector = shaft_vector / np.linalg.norm(shaft_vector)
-    ccd = math.degrees(np.arccos(np.dot(neck_vector, shaft_vector)))
+    ccd = calc_angle_between_vectors(neck_vector, shaft_vector)
 
     return ccd
 
@@ -161,8 +159,67 @@ def calc_alpha_angle(segmentation_mask: np.array) -> float:
     # Calculate the angle between the femoral neck axis and the transition axis
     neck_vector = femoral_neck_center - femoral_head_center
     transition_vector = femoral_neck_transition - femoral_head_center
-    neck_vector = neck_vector / np.linalg.norm(neck_vector)
-    transition_vector = transition_vector / np.linalg.norm(transition_vector)
-    alpha = math.degrees(np.arccos(np.dot(neck_vector, transition_vector)))
+    alpha = calc_angle_between_vectors(neck_vector, transition_vector)
 
     return alpha
+
+
+def calc_acetabular_anteversion(segmentation_mask: np.array) -> Tuple[float, float]:
+    """
+    Calculate the acetabular anteversion for both sides from a segmentation mask.
+    :param segmentation_mask: A segmentation mask of the proximal femur.
+    :return: The acetabular anteversion for both sides.
+    """
+    femur_array = np.where(segmentation_mask == 1, 1, 0)
+    acetabulum_array = np.where(segmentation_mask == 3, 3, 0)
+
+    left_femur = femur_array[:, :femur_array.shape[2] // 2]
+    right_femur = femur_array[:, femur_array.shape[2] // 2:]
+
+    left_acetabulum = acetabulum_array[:, :acetabulum_array.shape[2] // 2]
+    right_acetabulum = acetabulum_array[:, acetabulum_array.shape[2] // 2:]
+
+    _, left_fhc = get_femoral_head_center(left_femur)
+    _, right_fhc = get_femoral_head_center(right_femur)
+
+    slice_gap = abs(int(left_fhc[0]) - int(right_fhc[0]))
+    correct_slice = min(int(left_fhc[0]), int(right_fhc[0])) + slice_gap // 2
+
+    p1_left = np.argwhere(left_acetabulum[correct_slice])
+    p1_left = p1_left[p1_left[:, 1].argmin()]  # p1 is the posterior acetabulum rim
+
+    p1_right = np.argwhere(right_acetabulum[correct_slice])
+    p1_right = p1_right[p1_right[:, 1].argmax()]  # p1 is the posterior acetabulum rim
+
+    p2_left = np.argwhere(left_acetabulum[correct_slice][:left_acetabulum.shape[1] // 3])
+    p2_left = p2_left[p2_left[:, 1].argmin()]  # p2 is the anterior acetabulum rim
+
+    p2_right = np.argwhere(right_acetabulum[correct_slice][:right_acetabulum.shape[1] // 3])
+    p2_right = p2_right[p2_right[:, 1].argmax()]  # p2 is the anterior acetabulum rim
+
+    right_fhc_adj = right_fhc.copy()
+    right_fhc_adj[2] += left_femur.shape[2]  # adjust the x coordinate of the right femoral head center to account for the splitting into left and right
+    G = left_fhc[1:] - right_fhc_adj[1:]  # G is the vector connecting the left and right femoral head center
+
+    def calc_s(u, v, p) -> np.array:
+        p_ = np.dot(np.dot((p - u), v) / np.dot(v, v), v) + u
+        return p - p_
+
+    u = left_fhc[1:]
+    v = G
+    p = p1_left
+    s_left = calc_s(u, v, p)  # s is the vector that goes through p1 and is perpendicular to G
+
+    u = right_fhc_adj[1:]
+    p = p1_right
+    s_right = calc_s(u, v, p)
+
+    v1 = (p1_left - p2_left).astype('float32')
+    v2 = s_left.copy()
+    left_aa = calc_angle_between_vectors(v1, v2)
+
+    v1 = (p1_right - p2_right).astype('float32')
+    v2 = s_right.copy()
+    right_aa = calc_angle_between_vectors(v1, v2)
+
+    return left_aa, right_aa

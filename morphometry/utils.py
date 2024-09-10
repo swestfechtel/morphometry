@@ -44,3 +44,15 @@ def get_contour_points(segmentation_mask: np.array) -> np.array:
     diff_mask = segmentation_mask - eroded_mask
     contour_pts = np.argwhere(diff_mask == 1)
     return contour_pts
+
+
+def calc_angle_between_vectors(v1: np.array, v2: np.array) -> float:
+    """
+    Calculate the angle (in degrees) between two vectors.
+    :param v1:
+    :param v2:
+    :return: The angle (in degrees) between v1 and v2.
+    """
+    v1 /= np.linalg.norm(v1)
+    v2 /= np.linalg.norm(v2)
+    return math.degrees(np.arccos(np.dot(v1, v2)))
