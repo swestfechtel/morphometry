@@ -164,6 +164,36 @@ def calc_alpha_angle(segmentation_mask: np.array) -> float:
     return alpha
 
 
+def get_p1(acetabulum_array: np.array, side: str = 'left') -> np.array:
+    """
+    Get the posterior acetabulum rim.
+    :param acetabulum_array: A 2D segmentation mask of the acetabulum
+    :param side: Side of the image (not patient!), either 'left' or 'right'
+    :return: The posterior acetabulum rim.
+    """
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
+    p1 = np.argwhere(acetabulum_array)
+    p1 = p1[p1[:, 1].argmin()] if side == 'left' else p1[p1[:, 1].argmax()]
+
+    return p1
+
+
+def get_p2(acetabulum_array: np.array, side: str = 'left') -> np.array:
+    """
+    Get the anterior acetabulum rim.
+    :param acetabulum_array: A 2D segmentation mask of the acetabulum
+    :param side: Side of the image (not patient!), either 'left' or 'right'
+    :return: The anterior acetabulum rim.
+    """
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
+    p2 = np.argwhere(acetabulum_array[:acetabulum_array.shape[0] // 2])
+    p2 = p2[p2[:, 1].argmin()] if side == 'left' else p2[p2[:, 1].argmax()]
+
+    return p2
+
+
 def calc_acetabular_anteversion(segmentation_mask: np.array) -> Tuple[float, float]:
     """
     Calculate the acetabular anteversion for both sides from a segmentation mask.
@@ -171,7 +201,7 @@ def calc_acetabular_anteversion(segmentation_mask: np.array) -> Tuple[float, flo
     :return: The acetabular anteversion for both sides.
     """
     femur_array = np.where(segmentation_mask == 1, 1, 0)
-    acetabulum_array = np.where(segmentation_mask == 3, 3, 0)
+    acetabulum_array = np.where(segmentation_mask == 1, 1, 0)
 
     left_femur = femur_array[:, :femur_array.shape[2] // 2]
     right_femur = femur_array[:, femur_array.shape[2] // 2:]
@@ -185,17 +215,10 @@ def calc_acetabular_anteversion(segmentation_mask: np.array) -> Tuple[float, flo
     slice_gap = abs(int(left_fhc[0]) - int(right_fhc[0]))
     correct_slice = min(int(left_fhc[0]), int(right_fhc[0])) + slice_gap // 2
 
-    p1_left = np.argwhere(left_acetabulum[correct_slice])
-    p1_left = p1_left[p1_left[:, 1].argmin()]  # p1 is the posterior acetabulum rim
-
-    p1_right = np.argwhere(right_acetabulum[correct_slice])
-    p1_right = p1_right[p1_right[:, 1].argmax()]  # p1 is the posterior acetabulum rim
-
-    p2_left = np.argwhere(left_acetabulum[correct_slice][:left_acetabulum.shape[1] // 3])
-    p2_left = p2_left[p2_left[:, 1].argmin()]  # p2 is the anterior acetabulum rim
-
-    p2_right = np.argwhere(right_acetabulum[correct_slice][:right_acetabulum.shape[1] // 3])
-    p2_right = p2_right[p2_right[:, 1].argmax()]  # p2 is the anterior acetabulum rim
+    p1_left = get_p1(left_acetabulum[correct_slice], 'left')
+    p2_left = get_p2(left_acetabulum[correct_slice], 'left')
+    p1_right = get_p1(right_acetabulum[correct_slice], 'right')
+    p2_right = get_p2(right_acetabulum[correct_slice], 'right')
 
     right_fhc_adj = right_fhc.copy()
     right_fhc_adj[2] += left_femur.shape[2]  # adjust the x coordinate of the right femoral head center to account for the splitting into left and right
@@ -223,3 +246,47 @@ def calc_acetabular_anteversion(segmentation_mask: np.array) -> Tuple[float, flo
     right_aa = calc_angle_between_vectors(v1, v2)
 
     return left_aa, right_aa
+
+
+def calc_acetabular_depth(segmentation_mask: np.array) -> Tuple[float, float]:
+    """
+    Get the minimum distance between the line connecting the anterior and posterior acetabulum rim and the femoral head center.
+    :param segmentation_mask: A segmentation mask of the proximal femur.
+    :return: The acetabular depth for both sides.
+    """
+    femur_array = np.where(segmentation_mask == 1, 1, 0)
+    acetabulum_array = np.where(segmentation_mask == 1, 1, 0)
+
+    left_femur = femur_array[:, :femur_array.shape[2] // 2]
+    right_femur = femur_array[:, femur_array.shape[2] // 2:]
+
+    left_acetabulum = acetabulum_array[:, :acetabulum_array.shape[2] // 2]
+    right_acetabulum = acetabulum_array[:, acetabulum_array.shape[2] // 2:]
+
+    _, left_fhc = get_femoral_head_center(left_femur)
+    _, right_fhc = get_femoral_head_center(right_femur)
+
+    slice_gap = abs(int(left_fhc[0]) - int(right_fhc[0]))
+    correct_slice = min(int(left_fhc[0]), int(right_fhc[0])) + slice_gap // 2
+
+    p1_left = get_p1(left_acetabulum[correct_slice], 'left')
+    p2_left = get_p2(left_acetabulum[correct_slice], 'left')
+    p1_right = get_p1(right_acetabulum[correct_slice], 'right')
+    p2_right = get_p2(right_acetabulum[correct_slice], 'right')
+
+    # right_fhc_adj = right_fhc.copy()
+    # right_fhc_adj[2] += left_femur.shape[2]  # adjust the x coordinate of the right femoral head center to account for the splitting into left and right
+
+    def get_acetabular_depth(p1, p2, femoral_head_center):
+        """
+        Get the minimum distance between the line connecting the anterior and posterior acetabulum rim and the femoral head center.
+        https://en.wikipedia.org/wiki/Distance_from_a_point_to_a_line
+        """
+        numerator = abs((p2[1] - p1[1]) * femoral_head_center[0] - (p2[0] - p1[0]) * femoral_head_center[1] + p2[0] * p1[1] - p2[1] * p1[0])
+        denominator = math.sqrt((p2[1] - p1[1]) ** 2 + (p2[0] - p1[0]) ** 2)
+        return numerator / denominator
+
+    left_ad = get_acetabular_depth(p1_left, p2_left, left_fhc[1:])
+    right_ad = get_acetabular_depth(p1_right, p2_right, right_fhc[1:])
+
+    return left_ad, right_ad
