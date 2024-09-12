@@ -10,12 +10,15 @@ from skimage.measure import find_contours
 from sklearn.cluster import KMeans
 
 
-def get_femoral_head_center(segmentation_mask: np.array) -> Tuple[float, np.array]:
+def get_femoral_head_center(segmentation_mask: np.array, side:str = 'left') -> Tuple[float, np.array]:
     """
     Get the center of the femoral head from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur.
+    :param side: Side of the image (not patient!), either 'left' or 'right'
     :return: The radius and location of the femoral head center.
     """
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
     contour_pts = get_contour_points(segmentation_mask)
 
     # get highest layer with a mask point, its centroid
@@ -37,19 +40,24 @@ def get_femoral_head_center(segmentation_mask: np.array) -> Tuple[float, np.arra
                 point_cloud.append([i, coord[0], coord[1]])
 
     point_cloud = np.array(point_cloud)
-    max_z = np.max(point_cloud[:, 2])
-    radius = max_z - com_high[1]
-    min_z = com_high[1] - radius
+
+    # need to exclude lateral parts of the mask: compute distance between com and max medial point of femoral head,
+    # then exclude everything that is farther away than this distance in the lateral direction
+    if side == 'left':
+        max_z = np.max(point_cloud[:, 2])
+        radius = max_z - com_high[1]
+        min_z = com_high[1] - radius  # the most lateral point of the femoral head
+        point_cloud = point_cloud[point_cloud[:, 2] >= min_z]
+    else:
+        min_z = np.min(point_cloud[:, 2])
+        radius = com_high[1] - min_z
+        max_z = com_high[1] + radius  # the most lateral point of the femoral head
+        point_cloud = point_cloud[point_cloud[:, 2] <= max_z]
 
     min_y = np.min(point_cloud[:, 1])
     radius = com_high[0] - min_y
     max_y = com_high[0] + radius
-
-    point_cloud = point_cloud[point_cloud[:, 2] >= min_z]
     point_cloud = point_cloud[point_cloud[:, 1] <= max_y]
-    # need to exclude lateral parts of the mask: compute distance between com and max medial point of femoral head,
-    # then exclude everything that is farther away than this distance in the lateral direction
-
 
     # get center coordinates of the fitting sphere
     r, center = sphere_fit(point_cloud)
@@ -59,25 +67,32 @@ def get_femoral_head_center(segmentation_mask: np.array) -> Tuple[float, np.arra
     return r, center
 
 
-def get_femoral_neck_center(segmentation_mask: np.array, femoral_head_center: Tuple[float, np.array]) -> Tuple[np.array, np.array]:
+def get_femoral_neck_center(segmentation_mask: np.array, femoral_head_center: Tuple[float, np.array], side: str = 'left') -> Tuple[np.array, np.array]:
     """
     Get the endpoint of the femoral neck axis from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur.
     :param femoral_head_center: The radius and center of the femoral head.
+    :param side: Side of the image (not patient!), either 'left' or 'right'
     :return: The points constituting the femoral neck and the endpoint of the femoral neck axis.
     """
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
     r, c = femoral_head_center
     point_cloud = np.argwhere(segmentation_mask)
+
     # Get a sphere around the femoral head center with a radius of 1.2 times the femoral head radius
     # This sphere only includes the points between r and 1.2*r, i.e. is hollow
     solid_sphere = pv.SolidSphere(inner_radius=r, outer_radius=1.2 * r, center=c)
+
     # Get the points that are distal to the femoral head center
     points_i_want = np.array(solid_sphere.points)
     points_i_want = points_i_want[points_i_want[:, 0] > c[0]]
+
     # Get the points that are lateral to the femoral head center
-    # TODO: handle left and right femur
-    points_i_want = points_i_want[points_i_want[:, 2] < c[2]]
+    if side == 'left':
+        points_i_want = points_i_want[points_i_want[:, 2] < c[2]]
+    else:
+        points_i_want = points_i_want[points_i_want[:, 2] > c[2]]
 
     # Build a KDTree for the point cloud and the points we want
     pc_tree = KDTree(point_cloud)
@@ -117,44 +132,60 @@ def get_femoral_shaft_axis(segmentation_mask: np.array) -> Tuple[np.array, np.ar
     return np.array(com_low), np.array(com_high)
 
 
-def calc_ccd(segmentation_mask: np.array) -> float:
+def calc_ccd(segmentation_mask: np.array, side: str = 'left') -> float:
     """
     Calculate the CCD angle from the femoral head center, femoral neck axis and femoral shaft axis.
     :param segmentation_mask: A segmentation mask of the proximal femur.
+    :param side: Side of the image (not patient!), either 'left' or 'right'
     :return: The CCD angle.
     """
-    r, femoral_head_center = get_femoral_head_center(segmentation_mask)
-    femoral_neck_points, femoral_neck_center = get_femoral_neck_center(segmentation_mask, (r, femoral_head_center))
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
+    segmentation_mask = np.where(segmentation_mask == 1, 1, 0)
+    r, femoral_head_center = get_femoral_head_center(segmentation_mask, side)
+    femoral_neck_points, femoral_neck_center = get_femoral_neck_center(segmentation_mask, (r, femoral_head_center), side)
     femoral_shaft_axis = get_femoral_shaft_axis(segmentation_mask)
 
     # Calculate the angle between the femoral neck axis and the femoral shaft axis
     neck_vector = femoral_neck_center - femoral_head_center
     shaft_vector = femoral_shaft_axis[1] - femoral_shaft_axis[0]
-    ccd = calc_angle_between_vectors(neck_vector, shaft_vector)
+    ccd = calc_angle_between_vectors(neck_vector.astype('float32'), shaft_vector.astype('float32'))
 
     return ccd
 
 
-def get_femoral_neck_transition(neck_points: np.array) -> np.array:
+def get_femoral_neck_transition(neck_points: np.array, side: str = 'left') -> np.array:
     """
     Get the point where the femoral neck transitions into the femoral head.
     :param neck_points: The points constituting the femoral neck.
+    :param side: Side of the image (not patient!), either 'left' or 'right'
     :return: The point where the femoral neck transitions into the femoral head.
     """
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
     most_proximal_points = neck_points[neck_points[:, 0] == np.min(neck_points[:, 0])]  # get the most proximal points
-    most_proximal_lateral_point = most_proximal_points[most_proximal_points[:, 2] == np.max(most_proximal_points[:, 2])]  # of the most proximal points, get the most lateral one
-    return most_proximal_lateral_point[0]  # this point is one possible transition point
+
+    if side == 'left':
+        most_proximal_medial_point = most_proximal_points[most_proximal_points[:, 2] == np.max(most_proximal_points[:, 2])]  # of the most proximal points, get the most medial one
+    else:
+        most_proximal_medial_point = most_proximal_points[most_proximal_points[:, 2] == np.min(most_proximal_points[:, 2])]  # of the most proximal points, get the most medial one
+
+    return most_proximal_medial_point[0]  # this point is one possible transition point
 
 
-def calc_alpha_angle(segmentation_mask: np.array) -> float:
+def calc_alpha_angle(segmentation_mask: np.array, side: str = 'left') -> float:
     """
     Calculate the alpha angle from the femoral head center and the femoral neck transition.
     :param segmentation_mask: A segmentation mask of the proximal femur.
+    :param side: Side of the image (not patient!), either 'left' or 'right'
     :return: The alpha angle.
     """
-    r, femoral_head_center = get_femoral_head_center(segmentation_mask)
-    femoral_neck_points, femoral_neck_center = get_femoral_neck_center(segmentation_mask, (r, femoral_head_center))
-    femoral_neck_transition = get_femoral_neck_transition(femoral_neck_points)
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
+    segmentation_mask = np.where(segmentation_mask == 1, 1, 0)
+    r, femoral_head_center = get_femoral_head_center(segmentation_mask, side)
+    femoral_neck_points, femoral_neck_center = get_femoral_neck_center(segmentation_mask, (r, femoral_head_center), side)
+    femoral_neck_transition = get_femoral_neck_transition(femoral_neck_points, side)
 
     # Calculate the angle between the femoral neck axis and the transition axis
     neck_vector = femoral_neck_center - femoral_head_center
@@ -356,12 +387,12 @@ def calc_center_edge_angle(segmentation_mask: np.array) -> Tuple[float, float]:
     s = get_vector_through_point_perpendicular_to_line(u, v,
                                                            p)  # s is perpendicular to G and goes in proximal direction
     s2 = right_fhc - get_lateral_edge_point(right_femur, right_acetabulum)
-    cea_right = calc_angle_between_vectors(s, s2)
+    cea_right = calc_angle_between_vectors(np.abs(s), s2)
 
     u = left_fhc
     p = left_fhc + np.array([-1, 0, 0])
     s = get_vector_through_point_perpendicular_to_line(u, v, p)
     s2 = left_fhc - get_lateral_edge_point(left_femur, left_acetabulum)
-    cea_left = calc_angle_between_vectors(s, s2)
+    cea_left = calc_angle_between_vectors(np.abs(s), s2)
 
     return cea_left, cea_right
