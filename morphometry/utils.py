@@ -4,6 +4,7 @@ import numpy as np
 
 from typing import Tuple
 from scipy.ndimage import binary_erosion
+from scipy.spatial import KDTree
 
 
 def sphere_fit(point_cloud: np.array) -> Tuple[float, Tuple[float, float, float]]:
@@ -56,3 +57,17 @@ def calc_angle_between_vectors(v1: np.array, v2: np.array) -> float:
     v1 /= np.linalg.norm(v1)
     v2 /= np.linalg.norm(v2)
     return math.degrees(np.arccos(np.dot(v1, v2)))
+
+
+def calc_min_distance_between_point_clouds(pc1: np.array, pc2: np.array) -> float:
+    """
+    Calculate the minimum distance between two point clouds.
+    :param pc1: A Nx3 array representing the first point cloud.
+    :param pc2: A Nx3 array representing the second point cloud.
+    :return: The minimum distance between the two point clouds.
+    """
+    tree = KDTree(pc1)
+    distances, _ = tree.query(pc2)
+    min_distance = np.min(distances)
+
+    return min_distance

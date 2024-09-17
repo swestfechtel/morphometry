@@ -2,7 +2,8 @@ import math
 import numpy as np
 import pyvista as pv
 
-from morphometry.utils import sphere_fit, get_contour_points, calc_angle_between_vectors
+from morphometry.utils import sphere_fit, get_contour_points, calc_angle_between_vectors, \
+    calc_min_distance_between_point_clouds
 from scipy.ndimage import center_of_mass, binary_erosion
 from scipy.spatial import KDTree
 from typing import Tuple
@@ -154,6 +155,23 @@ def calc_ccd(segmentation_mask: np.array, side: str = 'left') -> float:
     return ccd
 
 
+def calc_anteversion(segmentation_mask: np.array, side: str = 'left') -> float:
+    """
+    Calculate the anteversion of the femur.
+    :param segmentation_mask: A segmentation mask of the proximal femur.
+    :param side: Side of the image (not patient!), either 'left' or 'right'
+    :return: The anteversion angle.
+    """
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
+    segmentation_mask = np.where(segmentation_mask == 1, 1, 0)
+    r, femoral_head_center = get_femoral_head_center(segmentation_mask, side)
+    femoral_neck_points, femoral_neck_center = get_femoral_neck_center(segmentation_mask, (r, femoral_head_center),
+                                                                       side)
+    horizontal_axis = np.array([0, 0, 1])  # the horizontal axis in the image
+    return calc_angle_between_vectors(horizontal_axis, femoral_neck_center - femoral_head_center)
+
+
 def get_femoral_neck_transition(neck_points: np.array, side: str = 'left') -> np.array:
     """
     Get the point where the femoral neck transitions into the femoral head.
@@ -241,7 +259,7 @@ def get_vector_through_point_perpendicular_to_line(u: np.array, v: np.array, p: 
 def calc_acetabular_anteversion(segmentation_mask: np.array) -> Tuple[float, float]:
     """
     Calculate the acetabular anteversion for both sides from a segmentation mask.
-    :param segmentation_mask: A segmentation mask of the proximal femur.
+    :param segmentation_mask: A segmentation mask of the hip.
     :return: The acetabular anteversion for both sides.
     """
     femur_array = np.where(segmentation_mask == 1, 1, 0)
@@ -307,7 +325,7 @@ def get_minimum_distance_between_line_and_point(p1: np.array, p2: np.array, p0: 
 def calc_acetabular_depth(segmentation_mask: np.array) -> Tuple[float, float]:
     """
     Get the minimum distance between the line connecting the anterior and posterior acetabulum rim and the femoral head center.
-    :param segmentation_mask: A segmentation mask of the proximal femur.
+    :param segmentation_mask: A segmentation mask of the hip.
     :return: The acetabular depth for both sides.
     """
     femur_array = np.where(segmentation_mask == 1, 1, 0)
@@ -396,3 +414,38 @@ def calc_center_edge_angle(segmentation_mask: np.array) -> Tuple[float, float]:
     cea_left = calc_angle_between_vectors(np.abs(s), s2)
 
     return cea_left, cea_right
+
+
+def get_min_distance_between_femoral_head_and_acetabulum(segmentation_mask: np.array, side: str = 'left') -> float:
+    """
+    Get the minimum distance between the femoral head and the acetabulum.
+    :param segmentation_mask: A segmentation mask for the hip.
+    :param side: Side of the image (not patient!), either 'left' or 'right'
+    :return: The minimum distance between the femoral head and the acetabulum.
+    """
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
+    r, c = get_femoral_head_center(np.where(segmentation_mask == 1, 1, 0))
+    femur_mask = np.where(segmentation_mask == 1, 1, 0)
+    point_cloud = np.argwhere(femur_mask)
+    solid_sphere = pv.SolidSphere(inner_radius=0, outer_radius=1.05 * r, center=c)
+
+    # Get the points that are distal to the femoral head center
+    points_i_want = np.array(solid_sphere.points)
+    points_i_want = points_i_want[points_i_want[:, 0] > c[0]]
+
+    # Build a KDTree for the point cloud and the points we want
+    pc_tree = KDTree(point_cloud)
+    sphere_tree = KDTree(points_i_want)
+
+    pairs = pc_tree.query_ball_tree(sphere_tree, 2)
+    femoral_head_points = list()
+    for pair in pairs:
+        if len(pair) > 0:
+            for index in pair:
+                femoral_head_points.append(sphere_tree.data[index])
+
+    femoral_head_points = np.array(femoral_head_points)
+    acetabulum_points = np.argwhere(np.where(segmentation_mask == 3, 1, 0))
+
+    return calc_min_distance_between_point_clouds(femoral_head_points, acetabulum_points)
