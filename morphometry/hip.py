@@ -168,8 +168,8 @@ def calc_anteversion(segmentation_mask: np.array, side: str = 'left') -> float:
     r, femoral_head_center = get_femoral_head_center(segmentation_mask, side)
     femoral_neck_points, femoral_neck_center = get_femoral_neck_center(segmentation_mask, (r, femoral_head_center),
                                                                        side)
-    horizontal_axis = np.array([0, 0, 1])  # the horizontal axis in the image
-    return calc_angle_between_vectors(horizontal_axis, femoral_neck_center - femoral_head_center)
+    horizontal_axis = np.array([0, 0, (1 if side == 'left' else -1)]).astype('float32')  # the horizontal axis in the image
+    return calc_angle_between_vectors(horizontal_axis[1:], femoral_neck_center[1:] - femoral_head_center[1:])
 
 
 def get_femoral_neck_transition(neck_points: np.array, side: str = 'left') -> np.array:
