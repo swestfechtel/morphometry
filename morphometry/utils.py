@@ -71,3 +71,32 @@ def calc_min_distance_between_point_clouds(pc1: np.array, pc2: np.array) -> floa
     min_distance = np.min(distances)
 
     return min_distance
+
+
+def get_minimum_distance_between_line_and_point(p1: np.array, p2: np.array, p0: np.array) -> float:
+    """
+    Get the minimum distance between a line that passes through two points p1 and p2 and a point p0.
+    https://en.wikipedia.org/wiki/Distance_from_a_point_to_a_line
+    :param p1: The first point the line passes through.
+    :param p2: The second point the line passes through.
+    :param p0: The point.
+    :return: The minimum distance between the line and the point.
+    """
+    numerator = abs(
+        (p2[1] - p1[1]) * p0[0] - (p2[0] - p1[0]) * p0[1] + p2[0] * p1[1] - p2[1] *
+        p1[0])
+    denominator = math.sqrt((p2[1] - p1[1]) ** 2 + (p2[0] - p1[0]) ** 2)
+    return numerator / denominator
+
+
+def get_vector_through_point_perpendicular_to_line(u: np.array, v: np.array, p: np.array) -> np.array:
+    """
+    Get a vector that goes through a point p and is perpendicular to the line defined by u + lambda * v.
+    https://math.stackexchange.com/questions/1398634/finding-a-perpendicular-vector-from-a-line-to-a-point
+    :param u: The origin vector of the line.
+    :param v: The directional vector of the line.
+    :param p: The point the perpendicular vector goes through.
+    :return: A vector that goes through p and is perpendicular to the line defined by u + lambda * v.
+    """
+    p_ = np.dot(np.dot((p - u), v) / np.dot(v, v), v) + u
+    return p - p_

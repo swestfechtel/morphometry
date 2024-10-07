@@ -16,12 +16,12 @@ if __name__ == '__main__':
         left_mask = mask_array[:, :, :mask_array.shape[2] // 2]
         right_mask = mask_array[:, :, mask_array.shape[2] // 2:]
 
-        print(f'Anteversion (L): {hip.calc_anteversion(left_mask)}')
-        print(f'Anteversion (R): {hip.calc_anteversion(right_mask, side="right")}')
-        print(f'CCD (L): {hip.calc_ccd(left_mask)}')
-        print(f'CCD (R): {hip.calc_ccd(right_mask, side="right")}')
-        print(f'Alpha angle (L): {hip.calc_alpha_angle(left_mask)}')
-        print(f'Alpha angle (R): {hip.calc_alpha_angle(right_mask, side="right")}')
+        print(f'Anteversion (L): {hip.calc_anteversion(left_mask, side="left", segmentation_label=1)}')
+        print(f'Anteversion (R): {hip.calc_anteversion(right_mask, side="right", segmentation_label=1)}')
+        print(f'CCD (L): {hip.calc_ccd(left_mask, side="left", segmentation_label=1)}')
+        print(f'CCD (R): {hip.calc_ccd(right_mask, side="right", segmentation_label=1)}')
+        print(f'Alpha angle (L): {hip.calc_alpha_angle(left_mask, side="left", segmentation_label=1)}')
+        print(f'Alpha angle (R): {hip.calc_alpha_angle(right_mask, side="right", segmentation_label=1)}')
         print(f'Acetabular anteversion: {hip.calc_acetabular_anteversion(mask_array)}')
         print(f'Acetabular depth: {hip.calc_acetabular_depth(mask_array)}')
         print(f'Center edge angle: {hip.calc_center_edge_angle(mask_array)}')
