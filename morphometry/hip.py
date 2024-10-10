@@ -6,17 +6,24 @@ from morphometry.utils import sphere_fit, get_contour_points, calc_angle_between
     get_minimum_distance_between_line_and_point
 from scipy.ndimage import center_of_mass
 from scipy.spatial import KDTree
-from typing import Tuple
+from typing import Tuple, Optional
 from skimage.measure import find_contours
 from sklearn.cluster import KMeans
 
 
-def get_femoral_head_center(segmentation_mask: np.array, side: str = 'left', segmentation_label: int = 1) -> Tuple[float, np.array]:
+"""
+All functions assume axis ordering is x = axial, y = coronal, z = sagittal.
+"""
+
+
+def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, return_layers: bool = False, x_ratio: float = 1.) -> Tuple[float, np.ndarray, Optional[int], Optional[int]]:
     """
     Get the center of the femoral head from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur where the femur is 1 and everything else 0.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
+    :param return_layers: Whether to return layer_high and layer_low.
+    :param x_ratio: Correction factor for slice thickness.
     :return: The radius and location of the femoral head center.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
@@ -40,19 +47,23 @@ def get_femoral_head_center(segmentation_mask: np.array, side: str = 'left', seg
         contours = find_contours(segmentation_mask[i], 0.8)
         for contour in contours:
             for coord in contour:
-                point_cloud.append([i, coord[0], coord[1]])
+                point_cloud.append([i * x_ratio, coord[0], coord[1]])
 
     point_cloud = np.array(point_cloud)
 
     # need to exclude lateral parts of the mask: compute distance between com and max medial point of femoral head,
     # then exclude everything that is farther away than this distance in the lateral direction
+    middle_slice = layer_low + (layer_high - layer_low) // 2
+    superior_half = point_cloud[point_cloud[:, 0] <= middle_slice]
     if side == 'left':
-        max_z = np.max(point_cloud[:, 2])
+        # max_z = np.max(point_cloud[:, 2])
+        max_z = np.max(superior_half[:, 2]) * 0.9  # only look at the superior half of the femoral head
         radius = max_z - com_high[1]
         min_z = com_high[1] - radius  # the most lateral point of the femoral head
         point_cloud = point_cloud[point_cloud[:, 2] >= min_z]
     else:
-        min_z = np.min(point_cloud[:, 2])
+        # min_z = np.min(point_cloud[:, 2])
+        min_z = np.min(superior_half[:, 2]) * 0.9  # only look at the superior half of the femoral head
         radius = com_high[1] - min_z
         max_z = com_high[1] + radius  # the most lateral point of the femoral head
         point_cloud = point_cloud[point_cloud[:, 2] <= max_z]
@@ -65,12 +76,12 @@ def get_femoral_head_center(segmentation_mask: np.array, side: str = 'left', seg
     # get center coordinates of the fitting sphere
     r, center = sphere_fit(point_cloud)
     # compensate pixel mm ratio between x, y and z axis
-    center = np.array([center[0], center[1], center[2]]).T[0]  # not sure why this is necessary, returns a column vector otherwise
+    center = np.array([center[0] / x_ratio, center[1], center[2]]).T[0]  # not sure why this is necessary, returns a column vector otherwise
 
-    return r, center
+    return (r, center) if not return_layers else (r, center, layer_high, layer_low)
 
 
-def get_femoral_neck_center(segmentation_mask: np.array, femoral_head_center: Tuple[float, np.array], side: str = 'left', segmentation_label: int = 1) -> Tuple[np.array, np.array]:
+def get_femoral_neck_center(segmentation_mask: np.ndarray, femoral_head_center: Tuple[float, np.ndarray], side: str = 'left', segmentation_label: int = 1) -> Tuple[np.ndarray, np.ndarray]:
     """
     Get the endpoint of the femoral neck axis from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur where the femur is 1 and everything else 0.
@@ -120,7 +131,7 @@ def get_femoral_neck_center(segmentation_mask: np.array, femoral_head_center: Tu
     return neck_points, np.array([com[0], com[1], com[2]])
 
 
-def get_femoral_shaft_axis(segmentation_mask: np.array, segmentation_label: int = 1) -> Tuple[np.array, np.array]:
+def get_femoral_shaft_axis(segmentation_mask: np.ndarray, segmentation_label: int = 1) -> Tuple[np.ndarray, np.ndarray]:
     """
     Get the femoral shaft axis from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur where the femur is 1 and everything else 0.
@@ -141,7 +152,7 @@ def get_femoral_shaft_axis(segmentation_mask: np.array, segmentation_label: int 
     return np.array(com_low), np.array(com_high)  # return the two points as the femoral shaft axis
 
 
-def calc_ccd(segmentation_mask: np.array, side: str = 'left', segmentation_label: int = 1) -> float:
+def calc_ccd(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1) -> float:
     """
     Calculate the CCD angle from the femoral head center, femoral neck axis and femoral shaft axis.
     :param segmentation_mask: A segmentation mask of the proximal femur.
@@ -163,7 +174,7 @@ def calc_ccd(segmentation_mask: np.array, side: str = 'left', segmentation_label
     return ccd
 
 
-def calc_anteversion(segmentation_mask: np.array, side: str = 'left', segmentation_label: int = 1) -> float:
+def calc_anteversion(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1) -> float:
     """
     Calculate the anteversion of the femur.
     :param segmentation_mask: A segmentation mask of the proximal femur.
@@ -180,7 +191,7 @@ def calc_anteversion(segmentation_mask: np.array, side: str = 'left', segmentati
     return calc_angle_between_vectors(horizontal_axis[1:], femoral_neck_center[1:] - femoral_head_center[1:])
 
 
-def get_femoral_neck_transition(neck_points: np.array, side: str = 'left') -> np.array:
+def get_femoral_neck_transition(neck_points: np.ndarray, side: str = 'left') -> np.ndarray:
     """
     Get the point where the femoral neck transitions into the femoral head.
     :param neck_points: The points constituting the femoral neck.
@@ -199,7 +210,7 @@ def get_femoral_neck_transition(neck_points: np.array, side: str = 'left') -> np
     return most_proximal_medial_point[0]  # this point is one possible transition point
 
 
-def calc_alpha_angle(segmentation_mask: np.array, side: str = 'left', segmentation_label: int = 1) -> float:
+def calc_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1) -> float:
     """
     Calculate the alpha angle from the femoral head center and the femoral neck transition.
     :param segmentation_mask: A segmentation mask of the proximal femur.
@@ -221,7 +232,7 @@ def calc_alpha_angle(segmentation_mask: np.array, side: str = 'left', segmentati
     return alpha
 
 
-def get_p1(acetabulum_array: np.array, side: str = 'left', segmentation_label: int = 3) -> np.array:
+def get_p1(acetabulum_array: np.ndarray, side: str = 'left', segmentation_label: int = 3) -> np.ndarray:
     """
     Get the posterior acetabulum rim.
     :param acetabulum_array: A 2D segmentation mask of the acetabulum
@@ -238,7 +249,7 @@ def get_p1(acetabulum_array: np.array, side: str = 'left', segmentation_label: i
     return p1
 
 
-def get_p2(acetabulum_array: np.array, side: str = 'left', segmentation_label: int = 3) -> np.array:
+def get_p2(acetabulum_array: np.ndarray, side: str = 'left', segmentation_label: int = 3) -> np.ndarray:
     """
     Get the anterior acetabulum rim.
     :param acetabulum_array: A 2D segmentation mask of the acetabulum
@@ -255,7 +266,7 @@ def get_p2(acetabulum_array: np.array, side: str = 'left', segmentation_label: i
     return p2
 
 
-def calc_acetabular_anteversion(segmentation_mask: np.array, femur_label: int = 1, acetabulum_label: int = 3) -> Tuple[float, float]:
+def calc_acetabular_anteversion(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3) -> Tuple[float, float]:
     """
     Calculate the acetabular anteversion for both sides from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the hip.
@@ -304,7 +315,7 @@ def calc_acetabular_anteversion(segmentation_mask: np.array, femur_label: int = 
     return left_aa, right_aa
 
 
-def calc_acetabular_depth(segmentation_mask: np.array, femur_label: int = 1, acetabulum_label: int = 3) -> Tuple[float, float]:
+def calc_acetabular_depth(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3) -> Tuple[float, float]:
     """
     Get the minimum distance between the line connecting the anterior and posterior acetabulum rim and the femoral head center.
     :param segmentation_mask: A segmentation mask of the hip.
@@ -335,7 +346,7 @@ def calc_acetabular_depth(segmentation_mask: np.array, femur_label: int = 1, ace
     return left_ad, right_ad
 
 
-def calc_center_edge_angle(segmentation_mask: np.array, femur_label: int = 1, acetabulum_label: int = 3) -> Tuple[float, float]:
+def calc_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3) -> Tuple[float, float]:
     """
     Calculate the center edge angle for both sides from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur.
@@ -358,7 +369,7 @@ def calc_center_edge_angle(segmentation_mask: np.array, femur_label: int = 1, ac
         2]  # adjust the x coordinate of the right femoral head center to account for the splitting into left and right
     G = left_fhc - right_fhc_adj  # G is the vector connecting the left and right femoral head center
 
-    def get_lateral_edge_point(fa: np.array, aa: np.array, side: str = 'left') -> np.array:
+    def get_lateral_edge_point(fa: np.ndarray, aa: np.ndarray, side: str = 'left') -> np.ndarray:
         """
         Get the most lateral edge point of the acetabulum right above the femoral head.
         :param fa: A segmentation mask of the femur.
@@ -399,7 +410,7 @@ def calc_center_edge_angle(segmentation_mask: np.array, femur_label: int = 1, ac
     return cea_left, cea_right
 
 
-def get_min_distance_between_femoral_head_and_acetabulum(segmentation_mask: np.array, side: str = 'left', femur_label: int = 1, acetabulum_label: int = 3) -> float:
+def get_min_distance_between_femoral_head_and_acetabulum(segmentation_mask: np.ndarray, side: str = 'left', femur_label: int = 1, acetabulum_label: int = 3) -> float:
     """
     Get the minimum distance between the femoral head and the acetabulum.
     :param segmentation_mask: A segmentation mask for the hip.
