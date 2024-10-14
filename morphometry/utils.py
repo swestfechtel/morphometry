@@ -77,7 +77,6 @@ def points_on_circle(mask: np.ndarray, r: float, center: np.ndarray) -> np.ndarr
     :param r: The radius of the circle.
     :return: An array of points (y, z) that lie on the circle's circumference and have a value of 1 in the mask.
     """
-    print(center, r)
     points = []
     y_center, z_center = center[0], center[1]
     for angle in range(360):
@@ -90,16 +89,56 @@ def points_on_circle(mask: np.ndarray, r: float, center: np.ndarray) -> np.ndarr
     return np.array(points) > 0
 
 
-def get_contour_points(segmentation_mask: np.ndarray) -> np.ndarray:
+def get_contour(segmentation_mask: np.array) -> np.array:
     """
-    Get the contour points of a segmentation mask.
-    :param segmentation_mask: A segmentation mask.
-    :return: The contour points.
+    Get the contour of a segmentation mask. Returns a binary mask where contour coordinates are set to 1.
+
+    Example::
+
+        >>> mask = np.array([[0, 0, 0, 0, 0],
+        ...                  [0, 1, 1, 1, 0],
+        ...                  [0, 1, 1, 1, 0],
+        ...                  [0, 1, 1, 1, 0],
+        ...                  [0, 0, 0, 0, 0]])
+        >>> get_contour(mask)
+        array([[0, 0, 0, 0, 0],
+               [0, 1, 1, 1, 0],
+               [0, 1, 0, 1, 0],
+               [0, 1, 1, 1, 0],
+               [0, 0, 0, 0, 0]])
+
+    :param segmentation_mask: A segmentation mask with shape S.
+    :return: A binary mask with shape S, where contour coordinates are set to 1.
     """
     eroded_mask = binary_erosion(segmentation_mask)
-    diff_mask = segmentation_mask - eroded_mask
-    contour_pts = np.argwhere(diff_mask == 1)
-    return contour_pts
+    return segmentation_mask - eroded_mask
+
+
+def get_contour_points(segmentation_mask: np.ndarray) -> np.ndarray:
+    """
+    Get the contour points of a segmentation mask. Returns an array of contour points.
+
+    Example::
+
+        >>> mask = np.array([[0, 0, 0, 0, 0],
+        ...                  [0, 1, 1, 1, 0],
+        ...                  [0, 1, 1, 1, 0],
+        ...                  [0, 1, 1, 1, 0],
+        ...                  [0, 0, 0, 0, 0]])
+        >>> get_contour_points(mask)
+        array([[1, 1],
+               [1, 2],
+               [1, 3],
+               [2, 1],
+               [2, 3],
+               [3, 1],
+               [3, 2],
+               [3, 3]])
+
+    :param segmentation_mask: A segmentation mask.
+    :return: A Nx2 or Nx3 array of contour points, where points are defined by (y, z) or (x, y, z).
+    """
+    return np.argwhere(get_contour(segmentation_mask))
 
 
 def calc_angle_between_vectors(v1: np.ndarray, v2: np.ndarray) -> float:
@@ -214,7 +253,6 @@ def rotate_mask_vec_parallel(mask: np.ndarray, vec1: np.ndarray, vec2: np.ndarra
     :param return_angle: Whether to return the rotation angle.
     :return: The rotated mask and optionally the rotation angle.
     """
-    print(f'vec1: {vec1}, vec2: {vec2}')
     angle = np.rad2deg(angle_between(vec1, vec2))
 
     # need to rotate clockwise or counterclockwise?
@@ -237,10 +275,9 @@ def get_dorsal_mask_point(mask: np.ndarray) -> np.ndarray:
     :return: The point with the greatest y value, given as (y, z), where y is the coronal axis and z is the sagittal axis.
     """
     points = get_contour_points(mask)
-    print(f'points: {points}')
-    indices = np.argsort(points[0])
+    indices = np.argsort(points[:, 0])
 
-    return np.array([points[0][indices[-1]], points[1][indices[-1]]])
+    return np.array([points[:, 0][indices[-1]], points[:, 1][indices[-1]]])
 
 
 def rotate_mask_dorsal_points(mask: np.ndarray, thresh_point: np.ndarray) -> Tuple[np.ndarray, Optional[float]]:
@@ -252,15 +289,12 @@ def rotate_mask_dorsal_points(mask: np.ndarray, thresh_point: np.ndarray) -> Tup
     :return: The rotated mask and optionally the rotation angle.
     """
     start = get_dorsal_mask_point(mask)
-    print(f'start: {start}')
     if start[1] < thresh_point[1]:
         end = get_dorsal_mask_point(mask[:, thresh_point[1] + 3:])
         end = (end[0], end[1] + thresh_point[1])
-        print(f'end: {end}')
     else:
         end = start
         start = get_dorsal_mask_point(mask[:, :thresh_point[1] - 3])
-        print(f'start: {start}, end: {end}')
 
     return rotate_mask_vec_parallel(mask, np.array(end) - np.array(start), np.array([0, 1]))
 
@@ -285,9 +319,9 @@ def determine_min_y(mask: np.ndarray, percentage: float = 0.5) -> int:
     """
     contour_points = get_contour_points(mask)
 
-    num_points = int(len(contour_points[0]) * percentage)  # max number of points to consider
+    num_points = int(len(contour_points[:, 0]) * percentage)  # max number of points to consider
 
-    sorted_y = np.sort(contour_points[0])
+    sorted_y = np.sort(contour_points[:, 0])
     return sorted_y[-num_points]
 
 
@@ -320,7 +354,7 @@ def find_notch(mask: np.ndarray, min_y: int = None, percentage: float = 0.5, thr
     y = int(y)
 
     return_allowed = False
-    notch = np.empty(0)
+    notch = None
 
     # lowest mask pt >= y coord of notch >= min_y
     while y >= min_y:
@@ -340,6 +374,9 @@ def find_notch(mask: np.ndarray, min_y: int = None, percentage: float = 0.5, thr
                 if break_after_first:
                     break
         y -= 1
+
+    if notch is None:
+        raise ValueError("No notch found.")
     return notch
 
 

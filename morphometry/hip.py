@@ -3,7 +3,7 @@ import pyvista as pv
 
 from morphometry.utils import sphere_fit, get_contour_points, calc_angle_between_vectors, \
     calc_min_distance_between_point_clouds, get_vector_through_point_perpendicular_to_line, \
-    get_minimum_distance_between_line_and_point
+    get_minimum_distance_between_line_and_point, get_contour_points
 from scipy.ndimage import center_of_mass
 from scipy.spatial import KDTree
 from typing import Tuple, Optional
@@ -42,18 +42,19 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     while segmentation_mask[layer_low, com_high[0], com_high[1]] != 0:
         layer_low += 1
 
+    """
     point_cloud = list()
     for i in range(layer_high, layer_low):
         contours = find_contours(segmentation_mask[i], 0.8)
         for contour in contours:
             for coord in contour:
                 point_cloud.append([i * x_ratio, coord[0], coord[1]])
-
-    point_cloud = np.array(point_cloud)
+    """
+    point_cloud = get_contour_points(segmentation_mask[layer_high:layer_low]) * np.array([x_ratio, 1, 1])
 
     # need to exclude lateral parts of the mask: compute distance between com and max medial point of femoral head,
     # then exclude everything that is farther away than this distance in the lateral direction
-    middle_slice = layer_low + (layer_high - layer_low) // 2
+    middle_slice = (layer_low + (layer_high - layer_low) // 2) * x_ratio
     superior_half = point_cloud[point_cloud[:, 0] <= middle_slice]
     if side == 'left':
         # max_z = np.max(point_cloud[:, 2])
