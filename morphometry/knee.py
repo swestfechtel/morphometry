@@ -1,11 +1,10 @@
-from typing import Tuple
-
 import numpy as np
 from scipy.ndimage import center_of_mass
-
 from morphometry.utils import get_layer_with_biggest_convex_area, find_notch, get_contour_points, \
     rotate_mask_vec_parallel, rotate_mask_dorsal_points, transform_point, rotate_point, num_mask_points_on_line, \
-    get_dorsal_mask_point, shrink_points_to_mask
+    get_dorsal_mask_point, shrink_points_to_mask, angle_between
+from typing import Tuple
+from matplotlib import pyplot as plt
 
 
 def rotate_tibia(segmentation_mask: np.ndarray):
@@ -41,7 +40,8 @@ def get_knee_reference_line(mask: np.ndarray, bone: str, thresh: int = 2, step_s
     Get the distal reference line of a segmentation mask for calculating the femoral torsion, or the proximal
     reference line for calculating tibial torsion.
 
-    :param mask: A 3D segmentation mask of the femur.
+    :param mask: A 3D segmentation mask of the femur or tibia, where the corresponding bone should be labeled 1 and
+    everything else 0.
     :param bone: Either 'femur' or 'tibia'.
     :param thresh: Minimum number of mask points on the reference line.
     :param step_size: Step size (in degrees) for rotating the reference line.
@@ -134,3 +134,46 @@ def get_knee_reference_line(mask: np.ndarray, bone: str, thresh: int = 2, step_s
     notch = np.array([layer_index, notch[0], notch[1]])
 
     return layer_index, start_pt_orig, end_pt_orig
+
+
+def get_knee_center(segmentation_mask: np.ndarray) -> np.ndarray:
+    """
+    Get the center point of the knee.
+    :param segmentation_mask: A 3D segmentation mask of the knee, where both the femur and tibia should be labeled 1
+    and everything else 0.
+    :return: The center point of the knee.
+    """
+    return np.array(center_of_mass(segmentation_mask))
+
+
+def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: int, tibia_label: int, plot: bool = False) -> float:
+    """
+    Calculate the knee rotation angle.
+
+    The knee rotation angle is the angle between the line connecting the posterior condyles of the femur
+    and the line connecting the posterior condyles of the tibia.
+    :param segmentation_mask: A 3D segmentation mask of the knee.
+    :param femur_label: The segmentation label of the femur.
+    :param tibia_label: The segmentation label of the tibia.
+    :param plot: Whether to plot the reference lines.
+    :return: The knee rotation angle.
+    """
+    femur_mask = np.where(segmentation_mask == femur_label, 1, 0)
+    proximal_layer, femur_start, femur_end = get_knee_reference_line(femur_mask, 'femur')
+    proximal_line = femur_end - femur_start
+
+    tibia_mask = np.where(segmentation_mask == tibia_label, 1, 0)
+    distal_layer, tibia_start, tibia_end = get_knee_reference_line(tibia_mask, 'tibia')
+    distal_line = tibia_end - tibia_start
+
+    angle = np.degrees(angle_between(proximal_line, distal_line))
+
+    if plot:
+        fig, ax = plt.subplots(1, 2)
+        ax[0].imshow(segmentation_mask[proximal_layer])
+        ax[0].plot([femur_start[2], femur_end[2]], [femur_start[1], femur_end[1]], color='red')
+        ax[1].imshow(segmentation_mask[distal_layer])
+        ax[1].plot([tibia_start[2], tibia_end[2]], [tibia_start[1], tibia_end[1]], color='red')
+        plt.show()
+
+    return angle

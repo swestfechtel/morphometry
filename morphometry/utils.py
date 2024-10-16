@@ -1,6 +1,7 @@
 import math
 
 import numpy as np
+import SimpleITK as sitk
 
 from typing import Tuple, Optional
 from scipy.ndimage import binary_erosion
@@ -460,3 +461,27 @@ def shrink_points_to_mask(mask: np.ndarray, start_pt: np.ndarray, end_pt: np.nda
             break
 
     return shrinked_start, shrinked_end
+
+
+def translate_image_coord_to_world_coord(image_coord: np.ndarray, reference_image: sitk.Image) -> np.ndarray:
+    """
+    Transform image coordinates to world coordinates.
+    Can also be achieved with reference_image.TransformIndexToPhysicalPoint(image_coord).
+    https://itk.org/pipermail/insight-users/2010-June/037400.html
+    :param image_coord: A point in image coordinates to transform.
+    :param reference_image: A reference SimpleITK image.
+    :return: The transformed coordinates.
+    """
+    image_coord = np.array(list(reversed(image_coord)))  # because sitk and numpy ordering is flipped
+    D_ = reference_image.GetDirection()
+    D = np.empty((3,3))
+    D[0] = np.array(D_[0:3])
+    D[1] = np.array(D_[3:6])
+    D[2] = np.array(D_[6:])
+    S = reference_image.GetSpacing()
+    O = reference_image.GetOrigin()
+    S2 = np.zeros((3,3))
+    np.fill_diagonal(S2, S)
+
+    world_coordinates = D @ S2 @ image_coord.T + O
+    return np.array(list(reversed(world_coordinates)))

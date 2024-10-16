@@ -16,7 +16,7 @@ All functions assume axis ordering is x = axial, y = coronal, z = sagittal.
 """
 
 
-def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, return_layers: bool = False, x_ratio: float = 1.) -> Tuple[float, np.ndarray, Optional[int], Optional[int]]:
+def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, return_layers: bool = False, x_ratio: float = 1., isotropic: bool = False) -> Tuple[float, np.ndarray, Optional[int], Optional[int]]:
     """
     Get the center of the femoral head from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur where the femur is 1 and everything else 0.
@@ -24,6 +24,7 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     :param segmentation_label: The label of the femur in the segmentation mask.
     :param return_layers: Whether to return layer_high and layer_low.
     :param x_ratio: Correction factor for slice thickness.
+    :param isotropic: Whether the image has isotropic voxels.
     :return: The radius and location of the femoral head center.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
@@ -50,21 +51,22 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
             for coord in contour:
                 point_cloud.append([i * x_ratio, coord[0], coord[1]])
     """
-    point_cloud = get_contour_points(segmentation_mask[layer_high:layer_low]) * np.array([x_ratio, 1, 1])
+    point_cloud = get_contour_points(segmentation_mask)
+    point_cloud = point_cloud[point_cloud[:, 0] >= layer_high]
+    point_cloud = point_cloud[point_cloud[:, 0] <= layer_low]
+    point_cloud = point_cloud.astype(np.float32) * np.array([x_ratio, 1, 1])
 
     # need to exclude lateral parts of the mask: compute distance between com and max medial point of femoral head,
     # then exclude everything that is farther away than this distance in the lateral direction
-    middle_slice = (layer_low + (layer_high - layer_low) // 2) * x_ratio
+    middle_slice = (layer_high * x_ratio + (layer_low * x_ratio - layer_high * x_ratio) // 2)
     superior_half = point_cloud[point_cloud[:, 0] <= middle_slice]
     if side == 'left':
-        # max_z = np.max(point_cloud[:, 2])
-        max_z = np.max(superior_half[:, 2]) * 0.9  # only look at the superior half of the femoral head
+        max_z = np.max(point_cloud[:, 2]) if isotropic else np.max(superior_half[:, 2]) * 0.9  # only look at the superior half of the femoral head
         radius = max_z - com_high[1]
         min_z = com_high[1] - radius  # the most lateral point of the femoral head
         point_cloud = point_cloud[point_cloud[:, 2] >= min_z]
     else:
-        # min_z = np.min(point_cloud[:, 2])
-        min_z = np.min(superior_half[:, 2]) * 0.9  # only look at the superior half of the femoral head
+        min_z = np.min(point_cloud[:, 2]) if isotropic else np.min(superior_half[:, 2]) * 0.9 # only look at the superior half of the femoral head
         radius = com_high[1] - min_z
         max_z = com_high[1] + radius  # the most lateral point of the femoral head
         point_cloud = point_cloud[point_cloud[:, 2] <= max_z]
@@ -74,8 +76,11 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     max_y = com_high[0] + radius
     point_cloud = point_cloud[point_cloud[:, 1] <= max_y]
 
+    # return point_cloud
+
     # get center coordinates of the fitting sphere
     r, center = sphere_fit(point_cloud)
+    print(center)
     # compensate pixel mm ratio between x, y and z axis
     center = np.array([center[0] / x_ratio, center[1], center[2]]).T[0]  # not sure why this is necessary, returns a column vector otherwise
 
