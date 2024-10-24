@@ -1,5 +1,6 @@
 import numpy as np
 import pyvista as pv
+import pandas as pd
 
 from morphometry.utils import sphere_fit, get_contour_points, calc_angle_between_vectors, \
     calc_min_distance_between_point_clouds, get_vector_through_point_perpendicular_to_line, \
@@ -82,7 +83,7 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     r, center = sphere_fit(point_cloud)
     print(center)
     # compensate pixel mm ratio between x, y and z axis
-    center = np.array([center[0] / x_ratio, center[1], center[2]]).T[0]  # not sure why this is necessary, returns a column vector otherwise
+    center = np.array([center[0] / x_ratio, center[1], center[2]])
 
     return (r, center) if not return_layers else (r, center, layer_high, layer_low)
 
@@ -158,7 +159,7 @@ def get_femoral_shaft_axis(segmentation_mask: np.ndarray, segmentation_label: in
     return np.array(com_low), np.array(com_high)  # return the two points as the femoral shaft axis
 
 
-def calc_ccd(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1) -> float:
+def calculate_ccd(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1) -> float:
     """
     Calculate the CCD angle from the femoral head center, femoral neck axis and femoral shaft axis.
     :param segmentation_mask: A segmentation mask of the proximal femur.
@@ -180,7 +181,7 @@ def calc_ccd(segmentation_mask: np.ndarray, side: str = 'left', segmentation_lab
     return ccd
 
 
-def calc_anteversion(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1) -> float:
+def calculate_anteversion(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1) -> float:
     """
     Calculate the anteversion of the femur.
     :param segmentation_mask: A segmentation mask of the proximal femur.
@@ -216,7 +217,7 @@ def get_femoral_neck_transition(neck_points: np.ndarray, side: str = 'left') -> 
     return most_proximal_medial_point[0]  # this point is one possible transition point
 
 
-def calc_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1) -> float:
+def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1) -> float:
     """
     Calculate the alpha angle from the femoral head center and the femoral neck transition.
     :param segmentation_mask: A segmentation mask of the proximal femur.
@@ -272,7 +273,7 @@ def get_p2(acetabulum_array: np.ndarray, side: str = 'left', segmentation_label:
     return p2
 
 
-def calc_acetabular_anteversion(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3) -> Tuple[float, float]:
+def calculate_acetabular_anteversion(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3) -> Tuple[float, float]:
     """
     Calculate the acetabular anteversion for both sides from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the hip.
@@ -321,7 +322,7 @@ def calc_acetabular_anteversion(segmentation_mask: np.ndarray, femur_label: int 
     return left_aa, right_aa
 
 
-def calc_acetabular_depth(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3) -> Tuple[float, float]:
+def calculate_acetabular_depth(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3) -> Tuple[float, float]:
     """
     Get the minimum distance between the line connecting the anterior and posterior acetabulum rim and the femoral head center.
     :param segmentation_mask: A segmentation mask of the hip.
@@ -352,7 +353,7 @@ def calc_acetabular_depth(segmentation_mask: np.ndarray, femur_label: int = 1, a
     return left_ad, right_ad
 
 
-def calc_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3) -> Tuple[float, float]:
+def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3) -> Tuple[float, float]:
     """
     Calculate the center edge angle for both sides from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur.
@@ -416,7 +417,7 @@ def calc_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int = 1, 
     return cea_left, cea_right
 
 
-def get_min_distance_between_femoral_head_and_acetabulum(segmentation_mask: np.ndarray, side: str = 'left', femur_label: int = 1, acetabulum_label: int = 3) -> float:
+def calculate_min_distance_between_femoral_head_and_acetabulum(segmentation_mask: np.ndarray, side: str = 'left', femur_label: int = 1, acetabulum_label: int = 3) -> float:
     """
     Get the minimum distance between the femoral head and the acetabulum.
     :param segmentation_mask: A segmentation mask for the hip.
@@ -451,3 +452,82 @@ def get_min_distance_between_femoral_head_and_acetabulum(segmentation_mask: np.n
     acetabulum_points = np.argwhere(np.where(segmentation_mask == acetabulum_label, 1, 0))
 
     return calc_min_distance_between_point_clouds(femoral_head_points, acetabulum_points)
+
+
+def get_cartilage_inner_and_outer_surface_points(segmentation_mask: np.ndarray, cartilage_label: int = 2) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Get the inner and outer surface points of the cartilage.
+    :param segmentation_mask: A 3D segmentation mask of the hip.
+    :param cartilage_label: The segmentation label of the cartilage.
+    :return: The inner and outer surface points.
+    """
+    cartilage = np.argwhere(segmentation_mask == cartilage_label)
+    radius, center = sphere_fit(cartilage)  # fit a sphere to the cartilage
+
+    # define one sphere that is "inside" of the cartilage and one that is "outside" of it
+    resolution = int(np.sqrt(len(cartilage) * 2))  # resolution of the sphere; assuming ~half of the sphere is inside the cartilage, it needs to have twice the number of cartilage points
+    inner_sphere = pv.Sphere(radius=0.8 * radius, center=center, theta_resolution=resolution, phi_resolution=resolution)
+    outer_sphere = pv.Sphere(radius=1.2 * radius, center=center, theta_resolution=resolution, phi_resolution=resolution)
+
+    # extract the "inner" and "outer" surface points of the cartilage
+    inner_surface, outer_surface = dict(), dict()
+    cartilage_tree = KDTree(cartilage)
+
+    for point in inner_sphere.points:  # for every sphere point, find the closest cartilage point
+        distance, index = cartilage_tree.query(point)
+        if index in inner_surface.keys():
+            if distance > inner_surface[index]:
+                continue  # skip if the cartilage point has already been added with a smaller distance
+        inner_surface[index] = distance  # save index and distance for the corresponding cartilage point
+
+    for point in outer_sphere.points:
+        distance, index = cartilage_tree.query(point)
+        if index in outer_surface.keys():
+            if distance > outer_surface[index]:
+                continue
+        outer_surface[index] = distance
+
+    # need to filter out points that are too far away from the sphere points
+    # this is necessary because ~half the sphere is not covered by the cartilage and thus these sphere points
+    # should have no corresponding cartilage point
+    inner_distances = pd.Series(inner_surface.values())
+    outer_distances = pd.Series(outer_surface.values())
+
+    # get the indices of the points that are within the 75th percentile of the distances
+    inner_surface_indices = [k for k, v in inner_surface.items() if v < inner_distances.quantile(0.75)]
+    outer_surface_indices = [k for k, v in outer_surface.items() if v < outer_distances.quantile(0.75)]
+
+    inner_surface = cartilage[inner_surface_indices]
+    outer_surface = cartilage[outer_surface_indices]
+
+    return inner_surface, outer_surface
+
+
+def calculate_cartilage_thickness_knn(segmentation_mask: np.ndarray, cartilage_label: int = 2) -> float:
+    """
+    Calculate the cartilage thickness using a k-nearest neighbors approach.
+    :param segmentation_mask: A 3D segmentation mask of the hip.
+    :param cartilage_label: The segmentation label of the cartilage.
+    :return: The average thickness of the cartilage.
+    """
+    inner_surface, outer_surface = get_cartilage_inner_and_outer_surface_points(segmentation_mask, cartilage_label=cartilage_label)
+    inner_tree = KDTree(inner_surface)
+    distances = np.empty(len(outer_surface))
+
+    for i, point in enumerate(outer_surface):
+        distance, _ = inner_tree.query(point)
+        distances[i] = distance
+
+    return np.nanmean(distances)
+
+
+def calculate_cartilage_thickness_ray_tracing(segmentation_mask: np.ndarray, cartilage_label: int = 2) -> float:
+    """
+    Calculate the cartilage thickness using ray tracing.
+    :param segmentation_mask: A 3D segmentation mask of the hip.
+    :param cartilage_label: The segmentation label of the cartilage.
+    :return: The average thickness of the cartilage.
+    """
+    inner_surface, outer_surface = get_cartilage_inner_and_outer_surface_points(segmentation_mask, cartilage_label=cartilage_label)
+    raise NotImplementedError('Ray tracing is not yet implemented for cartilage thickness calculation.')
+    return 1.

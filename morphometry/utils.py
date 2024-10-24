@@ -36,7 +36,7 @@ def sphere_fit(point_cloud: np.ndarray) -> Tuple[float, np.ndarray]:
     t = (C[0] * C[0]) + (C[1] * C[1]) + (C[2] * C[2]) + C[3]
     radius = math.sqrt(t)
 
-    return radius, np.array([C[0], C[1], C[2]])
+    return radius, np.array([C[0], C[1], C[2]]).T[0]  # not sure why this is necessary, returns a column vector otherwise
 
 
 def points_on_circle_(mask: np.ndarray, r: float, center: np.ndarray) -> bool:
