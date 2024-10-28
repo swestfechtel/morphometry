@@ -142,7 +142,7 @@ def get_contour_points(segmentation_mask: np.ndarray) -> np.ndarray:
     return np.argwhere(get_contour(segmentation_mask))
 
 
-def calc_angle_between_vectors(v1: np.ndarray, v2: np.ndarray) -> float:
+def calculate_angle_between_vectors(v1: np.ndarray, v2: np.ndarray) -> float:
     """
     Calculate the angle (in degrees) between two vectors.
     :param v1:
@@ -154,7 +154,7 @@ def calc_angle_between_vectors(v1: np.ndarray, v2: np.ndarray) -> float:
     return math.degrees(np.arccos(np.dot(v1, v2)))
 
 
-def calc_min_distance_between_point_clouds(pc1: np.ndarray, pc2: np.ndarray) -> float:
+def calculate_min_distance_between_point_clouds(pc1: np.ndarray, pc2: np.ndarray) -> float:
     """
     Calculate the minimum distance between two point clouds.
     :param pc1: A Nx3 array representing the first point cloud.
@@ -326,7 +326,7 @@ def determine_min_y(mask: np.ndarray, percentage: float = 0.5) -> int:
     return sorted_y[-num_points]
 
 
-def calc_discontinuity(mask: np.ndarray, y: int) -> int:
+def calculate_discontinuity(mask: np.ndarray, y: int) -> int:
     """
     Find a discontinuity in the mask for a given y (i.e. coronal) coordinate
     :param mask: The 2D mask.
@@ -359,7 +359,7 @@ def find_notch(mask: np.ndarray, min_y: int = None, percentage: float = 0.5, thr
 
     # lowest mask pt >= y coord of notch >= min_y
     while y >= min_y:
-        discontinuity = calc_discontinuity(mask, y)
+        discontinuity = calculate_discontinuity(mask, y)
 
         # discontinuity found, return is now possible
         if isinstance(discontinuity, np.ndarray) and len(discontinuity) > thresh:
@@ -369,7 +369,7 @@ def find_notch(mask: np.ndarray, min_y: int = None, percentage: float = 0.5, thr
         # previous level and return its center
         else:
             if return_allowed:
-                new_discontinuity = calc_discontinuity(mask, y+1)
+                new_discontinuity = calculate_discontinuity(mask, y + 1)
                 notch = np.array([y+1, new_discontinuity[int(len(new_discontinuity)/2)]])
                 return_allowed = False
                 if break_after_first:

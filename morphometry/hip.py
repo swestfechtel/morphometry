@@ -2,8 +2,8 @@ import numpy as np
 import pyvista as pv
 import pandas as pd
 
-from morphometry.utils import sphere_fit, get_contour_points, calc_angle_between_vectors, \
-    calc_min_distance_between_point_clouds, get_vector_through_point_perpendicular_to_line, \
+from morphometry.utils import sphere_fit, get_contour_points, calculate_angle_between_vectors, \
+    calculate_min_distance_between_point_clouds, get_vector_through_point_perpendicular_to_line, \
     get_minimum_distance_between_line_and_point, get_contour_points
 from scipy.ndimage import center_of_mass
 from scipy.spatial import KDTree
@@ -176,7 +176,7 @@ def calculate_ccd(segmentation_mask: np.ndarray, side: str = 'left', segmentatio
     # Calculate the angle between the femoral neck axis and the femoral shaft axis
     neck_vector = femoral_neck_center - femoral_head_center
     shaft_vector = femoral_shaft_axis[1] - femoral_shaft_axis[0]
-    ccd = calc_angle_between_vectors(neck_vector.astype('float32'), shaft_vector.astype('float32'))
+    ccd = calculate_angle_between_vectors(neck_vector.astype('float32'), shaft_vector.astype('float32'))
 
     return ccd
 
@@ -195,7 +195,7 @@ def calculate_anteversion(segmentation_mask: np.ndarray, side: str = 'left', seg
     femoral_neck_points, femoral_neck_center = get_femoral_neck_center(segmentation_mask, (r, femoral_head_center),
                                                                        side=side, segmentation_label=segmentation_label)
     horizontal_axis = np.array([0, 0, (1 if side == 'left' else -1)]).astype('float32')  # the horizontal axis in the image
-    return calc_angle_between_vectors(horizontal_axis[1:], femoral_neck_center[1:] - femoral_head_center[1:])
+    return calculate_angle_between_vectors(horizontal_axis[1:], femoral_neck_center[1:] - femoral_head_center[1:])
 
 
 def get_femoral_neck_transition(neck_points: np.ndarray, side: str = 'left') -> np.ndarray:
@@ -234,7 +234,7 @@ def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', seg
     # Calculate the angle between the femoral neck axis and the transition axis
     neck_vector = femoral_neck_center - femoral_head_center
     transition_vector = femoral_neck_transition - femoral_head_center
-    alpha = calc_angle_between_vectors(neck_vector, transition_vector)
+    alpha = calculate_angle_between_vectors(neck_vector, transition_vector)
 
     return alpha
 
@@ -313,11 +313,11 @@ def calculate_acetabular_anteversion(segmentation_mask: np.ndarray, femur_label:
 
     v1 = (p1_left - p2_left).astype('float32')
     v2 = s_left.copy()
-    left_aa = calc_angle_between_vectors(v1, v2)
+    left_aa = calculate_angle_between_vectors(v1, v2)
 
     v1 = (p1_right - p2_right).astype('float32')
     v2 = s_right.copy()
-    right_aa = calc_angle_between_vectors(v1, v2)
+    right_aa = calculate_angle_between_vectors(v1, v2)
 
     return left_aa, right_aa
 
@@ -406,13 +406,13 @@ def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int 
     s = get_vector_through_point_perpendicular_to_line(u, v,
                                                            p)  # s is perpendicular to G and goes in proximal direction
     s2 = right_fhc - get_lateral_edge_point(right_femur, right_acetabulum)
-    cea_right = calc_angle_between_vectors(np.abs(s), s2)
+    cea_right = calculate_angle_between_vectors(np.abs(s), s2)
 
     u = left_fhc
     p = left_fhc + np.array([-1, 0, 0])
     s = get_vector_through_point_perpendicular_to_line(u, v, p)
     s2 = left_fhc - get_lateral_edge_point(left_femur, left_acetabulum)
-    cea_left = calc_angle_between_vectors(np.abs(s), s2)
+    cea_left = calculate_angle_between_vectors(np.abs(s), s2)
 
     return cea_left, cea_right
 
@@ -451,7 +451,7 @@ def calculate_min_distance_between_femoral_head_and_acetabulum(segmentation_mask
     femoral_head_points = np.array(femoral_head_points)
     acetabulum_points = np.argwhere(np.where(segmentation_mask == acetabulum_label, 1, 0))
 
-    return calc_min_distance_between_point_clouds(femoral_head_points, acetabulum_points)
+    return calculate_min_distance_between_point_clouds(femoral_head_points, acetabulum_points)
 
 
 def get_cartilage_inner_and_outer_surface_points(segmentation_mask: np.ndarray, cartilage_label: int = 2) -> Tuple[np.ndarray, np.ndarray]:
