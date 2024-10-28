@@ -2,7 +2,7 @@ import numpy as np
 import SimpleITK as sitk
 from morphometry.hip import get_femoral_head_center
 from morphometry.knee import get_knee_center
-from morphometry.utils import get_minimum_distance_between_line_and_point
+from morphometry.utils import get_minimum_distance_between_line_and_point, get_point_orientation_to_vertical_line
 from typing import Tuple
 from scipy.ndimage import center_of_mass
 
@@ -61,11 +61,22 @@ def calculate_mikulicz_deviation(hip_mask: np.ndarray, knee_mask: np.ndarray, an
     knee_center = get_knee_center(knee_mask)
 
     hip_layer = hip_mask.shape[0] - femoral_head_center[0] if hip_x_axis_flipped else femoral_head_center[0]  # flip back if necessary to align with sitk image
-    fhc_world = np.array(hip_image.TransformContinuousIndexToPhysicalPoint((femoral_head_center[2], femoral_head_center[1], hip_layer)))  # remember that sitk and numpy ordering for coordinates are reversed)
+    fhc_world = np.array(hip_image.TransformContinuousIndexToPhysicalPoint((femoral_head_center[2], femoral_head_center[1], hip_layer)))  # remember that sitk and numpy ordering for coordinates are reversed
     kc_world = np.array(knee_image.TransformContinuousIndexToPhysicalPoint((knee_center[2], knee_center[1], knee_center[0])))
     ac_world = np.array(ankle_image.TransformContinuousIndexToPhysicalPoint((ankle_center[2], ankle_center[1], ankle_center[0])))
 
-    print(f'Femoral head center: {fhc_world}, Knee center: {kc_world}, Ankle center: {ac_world}')
-    # TODO: determine if the knee is medial or lateral to the Mikulicz line
+    # switch coordinates back to numpy ordering
+    fhc_world = np.array([fhc_world[2], fhc_world[1], fhc_world[0]])
+    kc_world = np.array([kc_world[2], kc_world[1], kc_world[0]])
+    ac_world = np.array([ac_world[2], ac_world[1], ac_world[0]])
 
-    return get_minimum_distance_between_line_and_point(fhc_world, ac_world, kc_world)
+    print(f'Femoral head center: {fhc_world}, Knee center: {kc_world}, Ankle center: {ac_world}')
+    # discard y coordinate since we are only interested in the deviation in the x-z plane
+    # + minimum distance method is only defined for 2D points as of now.
+    fhc_world_2d = np.array([fhc_world[0], fhc_world[-1]])
+    kc_world_2d = np.array([kc_world[0], kc_world[-1]])
+    ac_world_2d = np.array([ac_world[0], ac_world[-1]])
+    orientation = get_point_orientation_to_vertical_line(fhc_world_2d, ac_world_2d, kc_world_2d)
+    print(f'Knee center is to the {orientation} image side of the Mikulicz line.')
+
+    return get_minimum_distance_between_line_and_point(fhc_world_2d, ac_world_2d, kc_world_2d)

@@ -171,6 +171,7 @@ def calculate_min_distance_between_point_clouds(pc1: np.ndarray, pc2: np.ndarray
 def get_minimum_distance_between_line_and_point(p1: np.ndarray, p2: np.ndarray, p0: np.ndarray) -> float:
     """
     Get the minimum distance between a line that passes through two points p1 and p2 and a point p0.
+    Only defined for 2D points.
     https://en.wikipedia.org/wiki/Distance_from_a_point_to_a_line
     :param p1: The first point the line passes through.
     :param p2: The second point the line passes through.
@@ -195,6 +196,20 @@ def get_vector_through_point_perpendicular_to_line(u: np.ndarray, v: np.ndarray,
     """
     p_ = np.dot(np.dot((p - u), v) / np.dot(v, v), v) + u
     return p - p_
+
+
+def get_point_orientation_to_vertical_line(p1: np.ndarray, p2: np.ndarray, p0: np.ndarray) -> str:
+    """
+    Get the orientation of a point p0 relative to a vertical line defined by p1 and p2.
+    Determines whether p0 is to the left or right of the line.
+    :param p1: The origin vector of the line.
+    :param p2: The end vector of the line.
+    :param p0: The point.
+    :return: The orientation of p0 relative to the line, either 'left' or 'right'.
+    """
+    p1_p2 = p2 - p1
+    cross = np.cross(p1_p2, p0)
+    return 'left' if cross > 0 else 'right'
 
 
 def rotate_point(origin: np.ndarray, point: np.ndarray, angle: float, deg: bool = True) -> np.ndarray:
