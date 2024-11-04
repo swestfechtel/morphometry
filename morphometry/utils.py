@@ -168,7 +168,7 @@ def calculate_min_distance_between_point_clouds(pc1: np.ndarray, pc2: np.ndarray
     return min_distance
 
 
-def get_minimum_distance_between_line_and_point(p1: np.ndarray, p2: np.ndarray, p0: np.ndarray) -> float:
+def get_minimum_distance_between_line_and_point_(p1: np.ndarray, p2: np.ndarray, p0: np.ndarray) -> float:
     """
     Get the minimum distance between a line that passes through two points p1 and p2 and a point p0.
     Only defined for 2D points.
@@ -183,6 +183,21 @@ def get_minimum_distance_between_line_and_point(p1: np.ndarray, p2: np.ndarray, 
         p1[0])
     denominator = math.sqrt((p2[1] - p1[1]) ** 2 + (p2[0] - p1[0]) ** 2)
     return numerator / denominator
+
+
+def get_minimum_distance_between_line_and_point(p1: np.ndarray, p2: np.ndarray, p0: np.ndarray) -> float:
+    """
+    Get the minimum distance between a line that passes through two points p1 and p2 and a point p0.
+    Only defined for 2D points.
+    https://en.wikipedia.org/wiki/Distance_from_a_point_to_a_line
+    :param p1: The first point the line passes through.
+    :param p2: The second point the line passes through.
+    :param p0: The point.
+    :return: The minimum distance between the line and the point.
+    """
+    ap = p0 - p1
+    u = p2 - p1
+    return np.linalg.norm(np.cross(ap, u)) / np.linalg.norm(u)
 
 
 def get_vector_through_point_perpendicular_to_line(u: np.ndarray, v: np.ndarray, p: np.ndarray) -> np.ndarray:

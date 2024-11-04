@@ -2,7 +2,8 @@ import numpy as np
 import SimpleITK as sitk
 from morphometry.hip import get_femoral_head_center
 from morphometry.knee import get_knee_center
-from morphometry.utils import get_minimum_distance_between_line_and_point, get_point_orientation_to_vertical_line
+from morphometry.utils import get_minimum_distance_between_line_and_point, get_point_orientation_to_vertical_line, \
+    get_minimum_distance_between_line_and_point_
 from typing import Tuple
 from scipy.ndimage import center_of_mass
 

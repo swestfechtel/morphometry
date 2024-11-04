@@ -81,7 +81,7 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
 
     # get center coordinates of the fitting sphere
     r, center = sphere_fit(point_cloud)
-    print(center)
+
     # compensate pixel mm ratio between x, y and z axis
     center = np.array([center[0] / x_ratio, center[1], center[2]])
 
@@ -138,18 +138,20 @@ def get_femoral_neck_center(segmentation_mask: np.ndarray, femoral_head_center: 
     return neck_points, np.array([com[0], com[1], com[2]])
 
 
-def get_femoral_shaft_axis(segmentation_mask: np.ndarray, segmentation_label: int = 1) -> Tuple[np.ndarray, np.ndarray]:
+def get_femoral_shaft_axis(segmentation_mask: np.ndarray, segmentation_label: int = 1, isotropic: bool = False) -> Tuple[np.ndarray, np.ndarray]:
     """
     Get the femoral shaft axis from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur where the femur is 1 and everything else 0.
     :param segmentation_label: The label of the femur in the segmentation mask.
+    :param isotropic: Whether the image has isotropic voxels.
     :return: Start and end point of the vector representing the femoral shaft axis.
     """
     segmentation_mask = np.where(segmentation_mask == segmentation_label, 1, 0)
     point_cloud = np.argwhere(segmentation_mask)
 
+    offset = 20 if isotropic else 5
     layer_low = np.max(point_cloud[:, 0]) - 1  # get the most distal layer with a mask point
-    layer_high = layer_low - 20  # get a layer superior to that with some distance, distance depends on the resolution of the image
+    layer_high = layer_low - offset  # get a layer superior to that with some distance, distance depends on the resolution of the image
 
     com_low = center_of_mass(segmentation_mask[layer_low])
     com_low = (layer_low, int(com_low[0]), int(com_low[1]))
@@ -159,26 +161,47 @@ def get_femoral_shaft_axis(segmentation_mask: np.ndarray, segmentation_label: in
     return np.array(com_low), np.array(com_high)  # return the two points as the femoral shaft axis
 
 
-def calculate_ccd(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1) -> float:
+def calculate_ccd(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1., debug: bool = False) -> Tuple[float, float]:
     """
     Calculate the CCD angle from the femoral head center, femoral neck axis and femoral shaft axis.
     :param segmentation_mask: A segmentation mask of the proximal femur.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
-    :return: The CCD angle.
+    :param isotropic: Whether the image has isotropic voxels.
+    :param x_ratio: Correction factor for slice thickness.
+    :param debug: Whether to display debug messages.
+    :return: The actual and projected CCD angle.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
-    r, femoral_head_center = get_femoral_head_center(segmentation_mask, side=side, segmentation_label=segmentation_label)
+    r, femoral_head_center = get_femoral_head_center(segmentation_mask, side=side, segmentation_label=segmentation_label, x_ratio=x_ratio, isotropic=isotropic)
     femoral_neck_points, femoral_neck_center = get_femoral_neck_center(segmentation_mask, (r, femoral_head_center), side=side, segmentation_label=segmentation_label)
-    femoral_shaft_axis = get_femoral_shaft_axis(segmentation_mask, segmentation_label=segmentation_label)
+    femoral_shaft_axis = get_femoral_shaft_axis(segmentation_mask, segmentation_label=segmentation_label, isotropic=isotropic)
 
+    if debug:
+        print(f'Femoral head center: {femoral_head_center}, femoral neck center: {femoral_neck_center}, femoral shaft axis: {femoral_shaft_axis}')
     # Calculate the angle between the femoral neck axis and the femoral shaft axis
     neck_vector = femoral_neck_center - femoral_head_center
     shaft_vector = femoral_shaft_axis[1] - femoral_shaft_axis[0]
     ccd = calculate_angle_between_vectors(neck_vector.astype('float32'), shaft_vector.astype('float32'))
+    ccd = 180 - ccd if ccd < 90 else ccd
 
-    return ccd
+    # also calculate the projected ccd
+    # https://math.stackexchange.com/questions/2305792/3d-projection-on-a-2d-plane-weak-maths-ressources
+    projection_plane_index = femoral_head_center[1]
+    origin = np.array([segmentation_mask.shape[0] // 2, 0, segmentation_mask.shape[2] // 2])
+    projection_plane_center = np.array([origin[0], projection_plane_index, origin[2]])
+    d = np.linalg.norm(projection_plane_center - origin)
+    femoral_neck_center_projected = np.array([femoral_neck_center[0], femoral_neck_center[2]]) * (d / femoral_neck_center[1])
+    femoral_head_center_projected = np.array([femoral_head_center[0], femoral_head_center[2]]) * (d / femoral_head_center[1])
+    femoral_shaft_axis_1_projected = np.array([femoral_shaft_axis[1][0], femoral_shaft_axis[1][2]]) * (d / femoral_shaft_axis[1][1])
+    femoral_shaft_axis_0_projected = np.array([femoral_shaft_axis[0][0], femoral_shaft_axis[0][2]]) * (d / femoral_shaft_axis[0][1])
+    neck_vector_projected = femoral_neck_center_projected - femoral_head_center_projected
+    shaft_vector_projected = femoral_shaft_axis_1_projected - femoral_shaft_axis_0_projected
+    projected_ccd = calculate_angle_between_vectors(neck_vector_projected.astype('float32'), shaft_vector_projected.astype('float32'))
+    projected_ccd = 180 - projected_ccd if projected_ccd < 90 else projected_ccd
+
+    return ccd, projected_ccd
 
 
 def calculate_anteversion(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1) -> float:

@@ -23,6 +23,10 @@
 %\addbibresource{sources.bib}
 
 \newcommand{\add}[1]{\textbf{\textcolor{red}{$<$TODO$>$ #1 $</>$}}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\argmax}[1]{\underset{#1}{\mathrm{argmax}}}
+\newcommand{\argmin}[1]{\underset{#1}{\mathrm{argmin}}}
+\newcommand{\subheading}[1]{\bigskip \large \noindent \textbf{#1}\bigskip \normalsize}
 
 \title{Morphometry - Methods}
 \author{Simon Westfechtel}
@@ -43,14 +47,14 @@
 	image slice.
 	However, high-resolution three-dimensional imaging offers the opportunity to measure the CCD angle not as a projected angle but
 
-	\subsection{Axes definitions}
-	\label{subsec:axes}
-	The CCD angle is defined as the angle between the femoral neck axis and the femoral shaft axis.
+	\subheading{Axes Definition}
+
+	\noindent The CCD angle is defined as the angle between the femoral neck axis and the femoral shaft axis.
 	In a three-dimensional image, we may define these as follows.
 
 	\paragraph{Neck axis}
 	The neck axis is an axis from the centre of the femoral head through the femoral neck.
-	Algorithm\ref{alg:fhc} can be used to find the centre of the femoral head.
+	Algorithm \ref{alg:fhc} can be used to find the centre of the femoral head.
 
 	\begin{algorithm}
 		\caption{Femoral Head Centre Definition}
@@ -59,10 +63,10 @@
 			\Procedure{FindFemoralHeadCentre}{M}
 			\State $M \gets \text{A 3D Segmentation Mask of the Femur}$
 			\State $P \gets \{\emptyset\}$
-			\State $mpl \gets arg\:min_x(M)$
+			\State $mpl \gets \underset{x}\min \{(x, y, z) \in \Z \: | \: M[x,y,z] = 1\}$
 			\State $c \gets centroid(M[mpl])$
 			\Repeat
-				\State $P \gets P \cup contour\_points(M[mpl])}$
+				\State $P \gets P \cup contour\_points(M[mpl])$
 				\State $mpl \gets mpl + 1$
 			\Until
 				$M[mpl, c_y, c_z] = 0$
@@ -82,7 +86,7 @@
 	The centre of this sphere is the approximate centre of the femoral head.
 
 	Centre and radius of the fitted sphere can then be used to find the centre of the femoral neck.
-	Algorithm\ref{alg:fnc} can be used for this purpose.
+	Algorithm \ref{alg:fnc} can be used for this purpose.
 
 	\begin{algorithm}
 		\caption{Femoral Neck Centre Definition}
@@ -91,9 +95,9 @@
 			\Procedure{FindFemoralNeckCentre}{M}
 			\State $M \gets \text{A 3D Segmentation Mask of the Femur}$
 			\State $r,\: c \gets FindFemoralHeadCentre(M)$
-			\State $P \gets \{(x, y, z) | M[x, y, z] = 1\}$
-			\State $S \gets \{(x, y, z) | dist((x, y, z), c) \geq r \land dist((x, y, z), c) \leq 1.2 \cdot r\}$
-			\State $S \gets \{s \in S | s_z < c_z \land s_x > c_x\}$
+			\State $P \gets \{(x, y, z) \in \Z \: | \: M[x, y, z] = 1\}$
+			\State $S \gets \{(x, y, z) \in \Z \: | \: dist((x, y, z), c) \geq r \land dist((x, y, z), c) \leq 1.2 \cdot r\}$
+			\State $S \gets \{s \in S \: | \: s_z < c_z \land s_x > c_x\}$
 			\State $N \gets P \cap S$
 			\State $nc \gets centroid(N)$
 			\State \Return $nc$
@@ -105,20 +109,20 @@
 	The points of the hollow sphere are filtered to exclude everything superior and medial to the femoral head centre.
 	The intersection of those points and the femur are an approximation of the femoral neck, and the centroid of the femoral neck is calculated.
 
-	The femoral neck axis is then defined as the line from the femoral head centre to the femoral neck centre: \[fnc = c - nc\].
+	The femoral neck axis is then defined as the line from the femoral head centre to the femoral neck centre: \[fnc = c - nc\]
 
 	\paragraph{Shaft axis}
 	The shaft axis is an axis through the centre of the femoral shaft.
-	Algorithm\ref{alg:fsa} can be used to get the femoral shaft axis.
+	Algorithm \ref{alg:fsa} can be used to get the femoral shaft axis.
 	\begin{algorithm}
 		\caption{Femoral Shaft Axis Definition}
 		\label{alg:fsa}
 		\begin{algorithmic}[1]
 			\Procedure{GetFemoralShaftAxis}{M}
-				\State $M \gets A 3D Segmentation Mask of the Femur$
-				\State $mdl \gets arg max_x(M)$
+				\State $M \gets \text{A 3D Segmentation Mask of the Femur}$
+				\State $mdl \gets \underset{x}\max \{(x,y,z) \in \Z \: | \: M[x,y,z] = 1\}$
 				\State $c_1 \gets centroid(M[mdl])$
-				\State $l \gets mdl - 20$
+				\State $l \gets mdl - k$
 				\State $c_2 \gets centroid(M[l])$
 				\State $fsa \gets c_1 - c_2$
 				\State \Return $fsa$
@@ -126,5 +130,147 @@
 		\end{algorithmic}
 	\end{algorithm}
 
+	The algorithm starts by finding the most distal layer of the femur, which is the layer with the largest x-coordinate.
+	The first reference point is the centroid of this layer.
+	A second layer of the femoral shaft is defined $k$ layers proximal to the most distal layer, where $k$ depends on the transversal spacing of the image.
+	The centroid of this second layer is the second reference point.
+	The femoral shaft axis is then defined as the line from the first to the second reference point: \[fsa = c_1 - c_2\]
+
+	\subheading{Angle Calculation}
+
+	\noindent With both axes defined, the calculation of the CCD angle is trivial: \[CCD = \arccos\left(\frac{fnc \cdot fsa}{\|fnc\| \cdot \|fsa\|}\right)\]
+
+	\section{3D Alpha Angle}
+	\label{sec:alpha}
+	The alpha angle is defined as the angle between the femoral neck axis and the line from the femoral head centre to the point where the femoral head is no longer spherical.
+	Henceforth, this point is referred to as the alpha point, and the axis connecting the femoral head centre and the alpha point is referred to as alpha axis.
+	While there is only one possible alpha axis on a two-dimensional image, on which the alpha angle is usually measured, there are multiple possible alpha axes in three-dimensional space.
+	Specifically, any point around the circumference of the transition from femoral head to femoral neck can be chosen as the alpha point.
+	Therefore, we identify twelve points around said circumference in a clockwise manner, starting from the most superior point.
+
+	\subheading{Axes Definition}
+
+	\noindent The femoral head centre and neck axis are defined as in section \ref{sec:ccd}.
+
+	\paragraph{Alpha Points and Alpha Axes}
+	TODO
+
+	\section{Acetabular Anteversion}
+	\label{sec:acetabular_anteversion}
+	Anomalous acetabular anteversion is a risk factor for hip dysplasia and femoroacetabular impingement.
+
+	\subheading{Axes Definition}
+
+	\noindent Acetabular anteversion is defined as the angle between an axis $t$, which is perpendicular to a line $c$ connecting both femoral head centres and goes through the posterior acetabular rim, and an axis $g$, which connects the anterior and posterior acetabular rim.
+	Algorithm \ref{alg:acetabular_anteversion} can be used to calculate the acetabular anteversion.
+
+	\begin{algorithm}
+		\caption{Acetabular Anteversion Calculation}
+		\label{alg:acetabular_anteversion}
+		\begin{algorithmic}[1]
+			\Procedure{GetFemoralHeadConnector}{M}
+				\State $M \gets \text{A 3D Segmentation Mask of the Femur}$
+				\State $c_{left} \gets FindFemoralHeadCentre(M, left)$
+				\State $c_{right} \gets FindFemoralHeadCentre(M, right)$
+				\State $l \gets (c_{left}.x + c_{right}.x) \: / \: 2$
+				\State $c \gets c_{right} - c_{left}$
+				\State \Return $c, l$
+			\EndProcedure
+			\Procedure{GetAnteriorAcetabularRim}{M, s}
+				\State $M \gets \text{A 2D Segmentation Mask of the Acetabulum}$
+				\State $s \gets \text{Image side}$
+				\State $P \gets \{(y, z) \in Z \: | \: M[y, z] = 1 \land y < shape_y(M) \: / \: 2\}$
+				\State $P_z \gets \{p_z \in P\}$
+				\State $i \gets
+					\begin{cases}
+						\argmin{i} \: i \mapsto P_z[i] & \text{if} \: s = left \\
+						\argmax{i} \: i \mapsto P_z[i] & \text{if} \: s = right
+					\end{cases}
+				$
+				\State \Return $P[i]$
+			\EndProcedure
+			\Procedure{GetPosteriorAcetabularRim}{M, s}
+				\State $M \gets \text{A 2D Segmentation Mask of the Acetabulum}$
+				\State $s \gets \text{Image side}$
+				\State $P \gets \{(y, z) \in Z \: | \: M[y, z] = 1\}$
+				\State $P_z \gets \{p_z \in P\}$
+				\State $i \gets
+					\begin{cases}
+						\argmin{i} \: i \mapsto P_z[i] & \text{if} \: s = left \\
+						\argmax{i} \: i \mapsto P_z[i] & \text{if} \: s = right
+					\end{cases}
+				$
+				\State \Return $P[i]$
+			\EndProcedure
+			\Procedure{GetAcetabularAxes}{$M_A, M_F$, s}
+				\State $M_A \gets \text{A 3D Segmentation Mask of the Acetabulum}$
+				\State $M_F \gets \text{A 3D Segmentation Mask of the Femur}$
+				\State $s \gets \text{Image side}$
+				\State $c, l \gets GetFemoralHeadConnector(M_F)$
+				\State $a \gets GetAnteriorAcetabularRim(M_A[l], s)$
+				\State $p \gets GetPosteriorAcetabularRim(M_A[l], s)$
+				\State $g \gets a - p$
+				\State $M_s \gets split\_mask(M_F, s)$
+				\State $u \gets FindFemoralHeadCentre(M_s)$
+				\State $v \gets c$
+				\State $t \gets ((p - u) \cdot v \: / \: v \cdot v) \cdot v + u$
+				\State \Return $g, t$
+			\EndProcedure
+		\end{algorithmic}
+	\end{algorithm}
+
+	The algorithm starts by finding the femoral head centres of both femurs and the transversal plane between both centres, $l$.
+	Afterwards, a vector $c$ connecting both femoral head centres is determined.
+	For one image side, the anterior and posterior acetabular rims are found.
+	Both of these reference points are defined on the transversal plane $l$.
+	To find the anterior acetabular rim $a$, the algorithm searches for the most lateral point of the acetabulum in the anterior half of $l$, while the posterior rim $p$ is simply the most lateral point of the acetabulum in $l$.
+	With all reference points defined, a vector $g$ connecting $a$ and $p$ and a vector $t$, which is perpendicular to $c$ and goes through $p$, are calculated.
+
+	\subheading{Angle Calculation}
+
+	\noindent The acetabular anteversion is then calculated as the angle between $g$ and $t$: \[AA = \arccos\left(\frac{g \cdot t}{\|g\| \cdot \|t\|}\right)\]
+
+	\section{Mikulicz Line Deviation}
+	\label{sec:mikulicz}
+	The Mikulicz line is a line connecting the centre of the femoral head and the centre of the upper ankle joint.
+	It can be used to diagnose misalignment of the lower limb, namely genu varum and genu valgum.
+	This is determined by the deviation of the Mikulicz line from the mechanical axis of the femur, i.e. position of the knee joint relative to the Mikulicz line.
+	Normally, the Mikulicz line approximately goes through the centre of the knee joint.
+	If the centre of the knee joint lies medial to the Mikulicz line, the patient has genu valgum, and if it lies lateral to the Mikulicz line, the patient has genu varum.
+
+	\subheading{Axes Definition}
+
+	Three landmarks are needed to calculate the Mikulicz line deviation: The centre of the femoral head, the centre of the upper ankle joint, and the centre of the knee joint.
+	The femoral head centre is defined as in section \ref{sec:ccd}.
+	Algorithm \ref{alg:mikulicz} can be used to calculate the Mikulicz line deviation.
+
+	\begin{algorithm}
+		\caption{Mikulicz Line Deviation Calculation}
+		\label{alg:mikulicz}
+		\begin{algorithmic}[1]
+			\Procedure{GetKneeJointCentre}{M}
+				\State $M \gets A 3D Segmentation Mask of the Knee Joint$
+				\State $P \gets \{(x, y, z) \in \Z \: | \: M[x, y, z] = 1\}$
+				\State $c \gets centroid(P)$
+				\State \Return $c$
+			\EndProcedure
+			\Procedure{GetAnkleJointCentre}{M}
+				\State $M \gets A 3D Segmentation Mask of the Ankle Joint$
+				\State $P \gets \{(x, y, z) \in \Z \: | \: M[x, y, z] = 1\}$
+				\State $c \gets centroid(P)$
+				\State \Return $c$
+			\EndProcedure
+			\Procedure{CalculateMikuliczDeviation}{$M_k$, $M_a$}
+				\State $M_k \gets \text{A 3D Segmentation Mask of the Knee Joint}$
+				\State $M_a \gets \text{A 3D Segmentation Mask of the Ankle Joint}$
+				\State $c_{fh} \gets FindFemoralHeadCentre(M)$
+				\State $c_{k} \gets GetKneeJointCentre(M_k)$
+				\State $c_{a} \gets GetAnkleJointCentre(M_a)$
+				\State $m \gets c_{a} - c_{fh}$
+				\State $d \gets \lvert \lvert (c_{fh} - c_k) - ((c_{fh} - c_k) \cdot n) \cdot n \rvert \rvert$
+				\State \Return $d$
+			\EndProcedure
+		\end{algorithmic}
+	\end{algorithm}
 
 \end{document}
