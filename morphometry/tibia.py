@@ -93,7 +93,7 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
     distal_line = (ankle_end - ankle_start) if side == 'left' else (ankle_start - ankle_end)
 
     # calculate angle
-    angle = angle_between(proximal_line, distal_line)
+    angle = np.degrees(angle_between(proximal_line, distal_line))
 
     if plot:
         fig, ax = plt.subplots(1, 2)
@@ -103,4 +103,4 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
         ax[1].plot([ankle_start[2], ankle_end[2]], [ankle_start[1], ankle_end[1]], color='red')
         plt.show()
 
-    return np.degrees(angle)
+    return angle if angle < 90 else 180 - angle

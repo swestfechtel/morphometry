@@ -214,5 +214,5 @@ def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side:
         plt.show()
 
     # calculate angle between the two reference lines
-    angle = angle_between(proximal_line, distal_line)
-    return np.degrees(angle)
+    angle = np.degrees(angle_between(proximal_line, distal_line))
+    return angle if angle < 90 else 180 - angle
