@@ -11,7 +11,8 @@ if __name__ == '__main__':
     parser.add_argument('--hip_mask', type=str, help='Path to the hip segmentation mask.')
     parser.add_argument('--knee_mask', type=str, help='Path to the knee segmentation mask.')
     parser.add_argument('--ankle_mask', type=str, help='Path to the ankle segmentation mask.')
-    parser.add_argument('-flip_x', action='store_true', help='Whether the x-axis needs to be flipped.')
+    parser.add_argument('--flip_x', action='store_true', help='Whether the x-axis needs to be flipped.')
+    parser.add_argument('--plot', action='store_true', help='Whether to plot the results.')
 
     args = parser.parse_args()
 
@@ -36,13 +37,13 @@ if __name__ == '__main__':
     left_ankle = ankle_mask[:, :, :ankle_mask.shape[2] // 2]
     right_ankle = ankle_mask[:, :, ankle_mask.shape[2] // 2:]
 
-    femoral_torsion_left = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=True)
-    femoral_torsion_right = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio, plot=True)
+    femoral_torsion_left = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=args.plot)
+    femoral_torsion_right = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio, plot=args.plot)
 
-    tibial_torsion_left = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left', plot=True)
-    tibial_torsion_right = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right', plot=True)
+    tibial_torsion_left = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left', plot=args.plot)
+    tibial_torsion_right = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right', plot=args.plot)
 
-    print(f'Femoral torsion (right patient side): {femoral_torsion_left}°')
-    print(f'Femoral torsion (left patient side): {femoral_torsion_right}°')
-    print(f'Tibial torsion (right patient side): {tibial_torsion_left}°')
-    print(f'Tibial torsion (left patient side): {tibial_torsion_right}°')
+    print(f'Femoral torsion (right patient side): {femoral_torsion_left:.2f}°')
+    print(f'Femoral torsion (left patient side): {femoral_torsion_right:.2f}°')
+    print(f'Tibial torsion (right patient side): {tibial_torsion_left:.2f}°')
+    print(f'Tibial torsion (left patient side): {tibial_torsion_right:.2f}°')
