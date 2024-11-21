@@ -1,5 +1,6 @@
 import re
 import SimpleITK as sitk
+import pandas as pd
 import numpy as np
 from pathlib import Path
 from morphometry.femur import calculate_femoral_torsion
@@ -8,32 +9,35 @@ from morphometry.knee import calculate_knee_rotation_angle
 from morphometry.whole_leg import calculate_mikulicz_deviation
 from morphometry.ankle import calculate_pma_angle
 from morphometry.hip import calculate_ccd
+from morphometry.utils import correct_axis_ordering
 
 
 if __name__ == '__main__':
+    plot = False
+
+    df = pd.read_excel('/home/simon/Downloads/Augsburg Messungen 1.xlsx', index_col=[0, 1], header=1)
+    df = df.dropna(axis=1)
+    devs = pd.DataFrame(columns=['CCD', 'AT', 'TT', 'KRA'], index=df.index)
     r = re.compile(r'PA\d+')
-    for file in Path('/home/simon/Downloads/Augsburg_2/huefte').iterdir():
+    for file in Path('/home/simon/Downloads/Augsburg/labels/huefte').iterdir():
         patient = r.search(file.name)[0]
         try:
-            hip = sitk.ReadImage(f'/home/simon/Data/nnUnet_raw/Dataset001_AugsburgHip/labelsTr/t1_tse_tra_Huften_bds_{patient}.nii.gz')
-            knee = sitk.ReadImage(f'/home/simon/Data/nnUnet_raw/Dataset002_AugsburgKnee/labelsTr/t1_tse_tra_Knie_{patient}.nii.gz')
-            ankle = sitk.ReadImage(f'/home/simon/Data/nnUnet_raw/Dataset003_AugsburgAnkle/labelsTr/t1_tse_tra_OSG_{patient}.nii.gz')
+            hip = sitk.ReadImage(f'/home/simon/Downloads/Augsburg/labels/huefte/t1_tse_tra_Huften_bds_{patient}.nii.gz')
+            knee = sitk.ReadImage(f'/home/simon/Downloads/Augsburg/labels/knie/t1_tse_tra_Knie_{patient}.nii.gz')
+            ankle = sitk.ReadImage(f'/home/simon/Downloads/Augsburg/labels/osg/t1_tse_tra_OSG_{patient}.nii.gz')
         except RuntimeError as e:
             print(f'Patient {patient} could not be found.', e)
             continue
+
+        hip = correct_axis_ordering(hip)
+        knee = correct_axis_ordering(knee)
+        ankle = correct_axis_ordering(ankle)
 
         x_ratio = abs(hip.GetSpacing()[2]) / 2 * abs(hip.GetSpacing()[0])
 
         hip_mask = sitk.GetArrayFromImage(hip)
         knee_mask = sitk.GetArrayFromImage(knee)
         ankle_mask = sitk.GetArrayFromImage(ankle)
-
-        hip_mask = hip_mask[::-1]
-        hip_mask = hip_mask[:, ::-1]
-        knee_mask = knee_mask[::-1]
-        ankle_mask = ankle_mask[::-1]
-
-        print(hip_mask.shape, knee_mask.shape, ankle_mask.shape)
 
         left_hip = hip_mask[:, :, :hip_mask.shape[2] // 2]
         right_hip = hip_mask[:, :, hip_mask.shape[2] // 2:]
@@ -43,21 +47,41 @@ if __name__ == '__main__':
         right_ankle = ankle_mask[:, :, ankle_mask.shape[2] // 2:]
 
         try:
-            femoral_torsion_left = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=False)
+            femoral_torsion_left = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=plot)
             femoral_torsion_right = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio,
-                                                              plot=False)
+                                                              plot=plot)
 
             tibial_torsion_left = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1,
-                                                           fibula_label=2, side='left', plot=False)
+                                                           fibula_label=2, side='left', plot=plot)
             tibial_torsion_right = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2,
-                                                            tibia_label_ankle=1, fibula_label=2, side='right', plot=False)
-        except (ValueError, IndexError) as e:
+                                                            tibia_label_ankle=1, fibula_label=2, side='right', plot=plot)
+
+            ccd_left = calculate_ccd(left_hip, 'left', 1, False, x_ratio)
+            ccd_right = calculate_ccd(right_hip, 'right', 1, False, x_ratio)
+
+            kra_left = calculate_knee_rotation_angle(left_knee, 1, 2, False)
+            kra_right = calculate_knee_rotation_angle(right_knee, 1, 2, False)
+        except (ValueError, IndexError, RuntimeError) as e:
             print(f'Patient {patient} could not be processed.', e)
             continue
 
+        """
         print(f'Patient {patient}:')
         print(f'Femoral torsion (right patient side): {femoral_torsion_left}°')
         print(f'Femoral torsion (left patient side): {femoral_torsion_right}°')
         print(f'Tibial torsion (right patient side): {tibial_torsion_left}°')
         print(f'Tibial torsion (left patient side): {tibial_torsion_right}°')
         print('--------------------------------------------------')
+        """
+        patient_nr = int(patient[2:])
+        row = df.loc[patient_nr]
+        devs.loc[patient_nr, 'rechts']['AT'] = abs(row.loc['rechts']['AT (Lee)'] - femoral_torsion_right)
+        devs.loc[patient_nr, 'links']['AT'] = abs(row.loc['links']['AT (Lee)'] - femoral_torsion_left)
+        devs.loc[patient_nr, 'rechts']['TT'] = abs(row.loc['rechts']['TT'] - tibial_torsion_right)
+        devs.loc[patient_nr, 'links']['TT'] = abs(row.loc['links']['TT'] - tibial_torsion_left)
+        devs.loc[patient_nr, 'rechts']['CCD'] = abs(row.loc['rechts']['CCD'] - ccd_right[1])
+        devs.loc[patient_nr, 'links']['CCD'] = abs(row.loc['links']['CCD'] - ccd_left[1])
+        devs.loc[patient_nr, 'rechts']['KRA'] = abs(row.loc['rechts']['Knee Rotation'] - kra_right)
+        devs.loc[patient_nr, 'links']['KRA'] = abs(row.loc['links']['Knee Rotation'] - kra_left)
+
+    print(devs)

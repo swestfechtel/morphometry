@@ -5,8 +5,9 @@ import pandas as pd
 from morphometry.utils import sphere_fit, get_contour_points, calculate_angle_between_vectors, \
     calculate_min_distance_between_point_clouds, get_vector_through_point_perpendicular_to_line, \
     get_minimum_distance_between_line_and_point, get_contour_points
-from scipy.ndimage import center_of_mass
+from scipy.ndimage import center_of_mass, label
 from scipy.spatial import KDTree
+from scipy.stats import zscore
 from typing import Tuple, Optional
 from skimage.measure import find_contours
 from sklearn.cluster import KMeans
@@ -35,23 +36,30 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
 
     # get highest layer with a mask point, its centroid
     # and lowest layer with mask point on this centroid
-    layer_high = np.amin(contour_pts[:, 0]) + 1  # exclude the most proximal layer because it's tiny
+    layer_high = np.amin(contour_pts[:, 0])
+    layer_sizes = np.zeros(segmentation_mask.shape[0])
+    for i, layer in enumerate(segmentation_mask):
+        layer_sizes[i] = np.sum(layer)
 
-    # com_high = get_centroid(mask[layer_high - 1])
-    com_high = center_of_mass(segmentation_mask[layer_high + 1])
+    layer_zscores = np.abs(zscore(layer_sizes))
+    while layer_zscores[layer_high] > 2:
+        print(f'Layer {layer_high} has too few mask points, going to the next layer.')
+        layer_high += 1  # go to the next layer if the current one has too few mask points, i.e. its size is more than 2 standard deviations away from the mean of all slices
+
+    # if layer_high has two connected components, choose the larger one
+    label_mask, num_features = label(segmentation_mask[layer_high])
+    if num_features > 1:
+        print('Multiple connected components found on layer with femoral head, choosing the largest one.')
+        sizes = [len(np.argwhere(label_mask == i)) for i in range(1, num_features + 1)]
+        largest_component = np.argmax(sizes) + 1
+        segmentation_mask[layer_high] = np.where(label_mask == largest_component, 1, 0)
+
+    com_high = center_of_mass(segmentation_mask[layer_high])
     com_high = (int(com_high[0]), int(com_high[1]))
     layer_low = layer_high
     while segmentation_mask[layer_low, com_high[0], com_high[1]] != 0:
         layer_low += 1
 
-    """
-    point_cloud = list()
-    for i in range(layer_high, layer_low):
-        contours = find_contours(segmentation_mask[i], 0.8)
-        for contour in contours:
-            for coord in contour:
-                point_cloud.append([i * x_ratio, coord[0], coord[1]])
-    """
     point_cloud = get_contour_points(segmentation_mask)
     point_cloud = point_cloud[point_cloud[:, 0] >= layer_high]
     point_cloud = point_cloud[point_cloud[:, 0] <= layer_low]
