@@ -10,10 +10,11 @@ from morphometry.whole_leg import calculate_mikulicz_deviation
 from morphometry.ankle import calculate_pma_angle
 from morphometry.hip import calculate_ccd
 from morphometry.utils import correct_axis_ordering
+from matplotlib import pyplot as plt
 
 
 if __name__ == '__main__':
-    plot = False
+    plot = True
 
     df = pd.read_excel('/home/simon/Downloads/Augsburg Messungen 1.xlsx', index_col=[0, 1], header=1)
     df = df.dropna(axis=1)
@@ -47,15 +48,37 @@ if __name__ == '__main__':
         right_ankle = ankle_mask[:, :, ankle_mask.shape[2] // 2:]
 
         try:
-            femoral_torsion_left = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=plot)
-            femoral_torsion_right = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio,
-                                                              plot=plot)
+            if plot:
+                femoral_torsion_left, fig = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=plot)
+                fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_left.png')
+                plt.close(fig)
 
-            tibial_torsion_left = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1,
-                                                           fibula_label=2, side='left', plot=plot)
-            tibial_torsion_right = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2,
-                                                            tibia_label_ankle=1, fibula_label=2, side='right', plot=plot)
+                femoral_torsion_right, fig = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio,
+                                                                  plot=plot)
+                fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_right.png')
+                plt.close(fig)
 
+                tibial_torsion_left, fig = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1,
+                                                               fibula_label=2, side='left', plot=plot)
+                fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_tt_left.png')
+                plt.close(fig)
+
+                tibial_torsion_right, fig = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2,
+                                                                tibia_label_ankle=1, fibula_label=2, side='right', plot=plot)
+                fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_tt_right.png')
+                plt.close(fig)
+            else:
+                femoral_torsion_left = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio,
+                                                                 plot=plot)
+                femoral_torsion_right = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio,
+                                                                  plot=plot)
+
+                tibial_torsion_left = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2,
+                                                               tibia_label_ankle=1,
+                                                               fibula_label=2, side='left', plot=plot)
+                tibial_torsion_right = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2,
+                                                                tibia_label_ankle=1, fibula_label=2, side='right',
+                                                                plot=plot)
             ccd_left = calculate_ccd(left_hip, 'left', 1, False, x_ratio)
             ccd_right = calculate_ccd(right_hip, 'right', 1, False, x_ratio)
 
@@ -75,13 +98,14 @@ if __name__ == '__main__':
         """
         patient_nr = int(patient[2:])
         row = df.loc[patient_nr]
-        devs.loc[patient_nr, 'rechts']['AT'] = abs(row.loc['rechts']['AT (Lee)'] - femoral_torsion_right)
-        devs.loc[patient_nr, 'links']['AT'] = abs(row.loc['links']['AT (Lee)'] - femoral_torsion_left)
-        devs.loc[patient_nr, 'rechts']['TT'] = abs(row.loc['rechts']['TT'] - tibial_torsion_right)
-        devs.loc[patient_nr, 'links']['TT'] = abs(row.loc['links']['TT'] - tibial_torsion_left)
-        devs.loc[patient_nr, 'rechts']['CCD'] = abs(row.loc['rechts']['CCD'] - ccd_right[1])
-        devs.loc[patient_nr, 'links']['CCD'] = abs(row.loc['links']['CCD'] - ccd_left[1])
-        devs.loc[patient_nr, 'rechts']['KRA'] = abs(row.loc['rechts']['Knee Rotation'] - kra_right)
-        devs.loc[patient_nr, 'links']['KRA'] = abs(row.loc['links']['Knee Rotation'] - kra_left)
+        devs.loc[patient_nr, 'rechts']['AT'] = round(abs(row.loc['rechts']['AT (Lee)'] - femoral_torsion_left), 1)  # image side <-> patient side
+        devs.loc[patient_nr, 'links']['AT'] = round(abs(row.loc['links']['AT (Lee)'] - femoral_torsion_right), 1)
+        devs.loc[patient_nr, 'rechts']['TT'] = round(abs(row.loc['rechts']['TT'] - tibial_torsion_left), 1)
+        devs.loc[patient_nr, 'links']['TT'] = round(abs(row.loc['links']['TT'] - tibial_torsion_right), 1)
+        devs.loc[patient_nr, 'rechts']['CCD'] = round(abs(row.loc['rechts']['CCD'] - ccd_left[1]), 1)
+        devs.loc[patient_nr, 'links']['CCD'] = round(abs(row.loc['links']['CCD'] - ccd_right[1]), 1)
+        devs.loc[patient_nr, 'rechts']['KRA'] = round(abs(row.loc['rechts']['Knee Rotation'] - kra_left), 1)
+        devs.loc[patient_nr, 'links']['KRA'] = round(abs(row.loc['links']['Knee Rotation'] - kra_right), 1)
 
     print(devs)
+    devs.to_excel('/home/simon/Downloads/Augsburg/Augsburg_devs.xlsx')

@@ -85,20 +85,21 @@ Tuple[np.ndarray, np.ndarray, float, float]:
 
 
 def get_proximal_reference_line(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1,
-                                x_ratio: float = 1.) -> Tuple[int, np.ndarray, np.ndarray]:
+                                x_ratio: float = 1., isotropic: bool = False) -> Tuple[int, np.ndarray, np.ndarray]:
     """
     Get the proximal reference line of a segmentation mask for calculating the femoral torsion.
     :param segmentation_mask: A segmentation mask of the proximal femur.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the segmentation mask.
     :param x_ratio: Correction factor for slice thickness.
+    :param isotropic: Whether the image has isotropic voxels.
     :return: The layer and start and end points of the reference line.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
     r, center, layer_high, layer_low = get_femoral_head_center(segmentation_mask, side=side,
                                                                segmentation_label=segmentation_label,
-                                                               return_layers=True, x_ratio=x_ratio)
+                                                               return_layers=True, x_ratio=x_ratio, isotropic=isotropic)
     center = center.astype(np.int16)
 
     if side == 'right':  # flip z axis to make this 'left-sided'
@@ -186,7 +187,7 @@ def get_proximal_reference_line(segmentation_mask: np.ndarray, side: str = 'left
 
 
 def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side: str = 'left',
-                              segmentation_label: int = 1, x_ratio: float = 1., plot: bool = False) -> float:
+                              segmentation_label: int = 1, x_ratio: float = 1., plot: bool = False, isotropic: bool = False) -> float | Tuple[float, plt.Figure]:
     """
     Calculate the femoral torsion from a segmentation mask.
     :param hip_mask: A segmentation mask of the proximal femur.
@@ -195,15 +196,19 @@ def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side:
     :param segmentation_label: The label of the segmentation mask.
     :param x_ratio: Correction factor for slice thickness.
     :param plot: Whether to plot the reference lines or not.
-    :return: The femoral torsion in degrees.
+    :param isotropic: Whether the image has isotropic voxels.
+    :return: The femoral torsion in degrees and optionally a matplotlib figure of the reference lines.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
     hip_layer, hip_start, hip_end = get_proximal_reference_line(hip_mask, side=side,
-                                                                segmentation_label=segmentation_label, x_ratio=x_ratio)
+                                                                segmentation_label=segmentation_label, x_ratio=x_ratio, isotropic=isotropic)
     proximal_line = (hip_end - hip_start) if side == 'left' else (hip_start - hip_end)
     knee_layer, knee_start, knee_end = get_knee_reference_line(knee_mask, bone='femur')
     distal_line = knee_end - knee_start
+
+    # calculate angle between the two reference lines
+    angle = np.degrees(angle_between(proximal_line, distal_line))
 
     if plot:
         fig, ax = plt.subplots(1, 2)
@@ -211,8 +216,6 @@ def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side:
         ax[0].plot([hip_start[2], hip_end[2]], [hip_start[1], hip_end[1]], 'r')
         ax[1].imshow(knee_mask[knee_layer])
         ax[1].plot([knee_start[2], knee_end[2]], [knee_start[1], knee_end[1]], 'r')
-        plt.show()
+        return angle if angle < 90 else 180 - angle, fig
 
-    # calculate angle between the two reference lines
-    angle = np.degrees(angle_between(proximal_line, distal_line))
     return angle if angle < 90 else 180 - angle

@@ -90,7 +90,7 @@ def correct_axis_ordering(image: sitk.Image) -> sitk.Image:
         assert abs(z_row[1]) == 1 and abs(z_row[2]) == 1, f'Bad direction matrix: {direction}'
 
     else:
-        raise ValueError(f'Bad direction matrix: {direction}')
+        raise RuntimeError(f'Bad direction matrix: {direction}')
 
     if abs(x_row[1]) == 1:
         coronal_axis = 0
@@ -105,7 +105,7 @@ def correct_axis_ordering(image: sitk.Image) -> sitk.Image:
         assert abs(z_row[0]) == 0 and abs(z_row[2]) == 0, f'Bad direction matrix: {direction}'
 
     else:
-        raise ValueError(f'Bad direction matrix: {direction}')
+        raise RuntimeError(f'Bad direction matrix: {direction}')
 
     if abs(x_row[2]) == 1:
         axial_axis = 0
@@ -120,7 +120,7 @@ def correct_axis_ordering(image: sitk.Image) -> sitk.Image:
         assert abs(z_row[0]) == 0 and abs(z_row[1]) == 0, f'Bad direction matrix: {direction}'
 
     else:
-        raise ValueError(f'Bad direction matrix: {direction}')
+        raise RuntimeError(f'Bad direction matrix: {direction}')
 
     # reorder axes to sagittal, coronal, axial
     image = sitk.PermuteAxes(image, [sagittal_axis, coronal_axis, axial_axis])

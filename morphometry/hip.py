@@ -18,7 +18,7 @@ All functions assume axis ordering is x = axial, y = coronal, z = sagittal.
 """
 
 
-def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, return_layers: bool = False, x_ratio: float = 1., isotropic: bool = False) -> Tuple[float, np.ndarray, Optional[int], Optional[int]]:
+def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, return_layers: bool = False, x_ratio: float = 1., isotropic: bool = False) -> Tuple[float, np.ndarray] | Tuple[float, np.ndarray, int, int]:
     """
     Get the center of the femoral head from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur where the femur is 1 and everything else 0.
@@ -43,13 +43,13 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
 
     layer_zscores = np.abs(zscore(layer_sizes))
     while layer_zscores[layer_high] > 2:
-        print(f'Layer {layer_high} has too few mask points, going to the next layer.')
+        # print(f'Layer {layer_high} has too few mask points, going to the next layer.')
         layer_high += 1  # go to the next layer if the current one has too few mask points, i.e. its size is more than 2 standard deviations away from the mean of all slices
 
     # if layer_high has two connected components, choose the larger one
     label_mask, num_features = label(segmentation_mask[layer_high])
     if num_features > 1:
-        print('Multiple connected components found on layer with femoral head, choosing the largest one.')
+        # print('Multiple connected components found on layer with femoral head, choosing the largest one.')
         sizes = [len(np.argwhere(label_mask == i)) for i in range(1, num_features + 1)]
         largest_component = np.argmax(sizes) + 1
         segmentation_mask[layer_high] = np.where(label_mask == largest_component, 1, 0)
@@ -212,21 +212,23 @@ def calculate_ccd(segmentation_mask: np.ndarray, side: str = 'left', segmentatio
     return ccd, projected_ccd
 
 
-def calculate_anteversion(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1) -> float:
+def calculate_anteversion(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False) -> float:
     """
     Calculate the anteversion of the femur.
     :param segmentation_mask: A segmentation mask of the proximal femur.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
+    :param isotropic: Whether the image has isotropic voxels.
     :return: The anteversion angle.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
-    r, femoral_head_center = get_femoral_head_center(segmentation_mask, side=side, segmentation_label=segmentation_label)
+    r, femoral_head_center = get_femoral_head_center(segmentation_mask, side=side, segmentation_label=segmentation_label, isotropic=isotropic)
     femoral_neck_points, femoral_neck_center = get_femoral_neck_center(segmentation_mask, (r, femoral_head_center),
                                                                        side=side, segmentation_label=segmentation_label)
     horizontal_axis = np.array([0, 0, (1 if side == 'left' else -1)]).astype('float32')  # the horizontal axis in the image
-    return calculate_angle_between_vectors(horizontal_axis[1:], femoral_neck_center[1:] - femoral_head_center[1:])
+    at = calculate_angle_between_vectors(horizontal_axis[1:], femoral_neck_center[1:] - femoral_head_center[1:])
+    return at if at < 90 else 180 - at
 
 
 def get_femoral_neck_transition(neck_points: np.ndarray, side: str = 'left') -> np.ndarray:
@@ -248,17 +250,18 @@ def get_femoral_neck_transition(neck_points: np.ndarray, side: str = 'left') -> 
     return most_proximal_medial_point[0]  # this point is one possible transition point
 
 
-def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1) -> float:
+def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False) -> float:
     """
     Calculate the alpha angle from the femoral head center and the femoral neck transition.
     :param segmentation_mask: A segmentation mask of the proximal femur.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
+    :param isotropic: Whether the image has isotropic voxels.
     :return: The alpha angle.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
-    r, femoral_head_center = get_femoral_head_center(segmentation_mask, side=side, segmentation_label=segmentation_label)
+    r, femoral_head_center = get_femoral_head_center(segmentation_mask, side=side, segmentation_label=segmentation_label, isotropic=isotropic)
     femoral_neck_points, femoral_neck_center = get_femoral_neck_center(segmentation_mask, (r, femoral_head_center), side=side, segmentation_label=segmentation_label)
     femoral_neck_transition = get_femoral_neck_transition(femoral_neck_points, side=side)
 
@@ -304,19 +307,20 @@ def get_p2(acetabulum_array: np.ndarray, side: str = 'left', segmentation_label:
     return p2
 
 
-def calculate_acetabular_anteversion(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3) -> Tuple[float, float]:
+def calculate_acetabular_anteversion(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False) -> Tuple[float, float]:
     """
     Calculate the acetabular anteversion for both sides from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the hip.
     :param femur_label: The label of the femur in the segmentation mask.
     :param acetabulum_label: The label of the acetabulum in the segmentation mask.
+    :param isotropic: Whether the image has isotropic voxels.
     :return: The acetabular anteversion for both sides.
     """
     left_mask = segmentation_mask[:, :, :segmentation_mask.shape[2] // 2]
     right_mask = segmentation_mask[:, :, segmentation_mask.shape[2] // 2:]
 
-    _, left_fhc = get_femoral_head_center(left_mask, side='left', segmentation_label=femur_label)
-    _, right_fhc = get_femoral_head_center(right_mask, side='right', segmentation_label=femur_label)
+    _, left_fhc = get_femoral_head_center(left_mask, side='left', segmentation_label=femur_label, isotropic=isotropic)
+    _, right_fhc = get_femoral_head_center(right_mask, side='right', segmentation_label=femur_label, isotropic=isotropic)
 
     slice_gap = abs(int(left_fhc[0]) - int(right_fhc[0]))
     correct_slice = min(int(left_fhc[0]), int(right_fhc[0])) + slice_gap // 2
@@ -353,50 +357,44 @@ def calculate_acetabular_anteversion(segmentation_mask: np.ndarray, femur_label:
     return left_aa, right_aa
 
 
-def calculate_acetabular_depth(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3) -> Tuple[float, float]:
+def calculate_acetabular_depth(segmentation_mask: np.ndarray, side: str = 'left', femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False) -> float:
     """
     Get the minimum distance between the line connecting the anterior and posterior acetabulum rim and the femoral head center.
     :param segmentation_mask: A segmentation mask of the hip.
+    :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param femur_label: The label of the femur in the segmentation mask.
     :param acetabulum_label: The label of the acetabulum in the segmentation mask.
-    :return: The acetabular depth for both sides.
+    :param isotropic: Whether the image has isotropic voxels.
+    :return: The acetabular depth.
     """
-    left_mask = segmentation_mask[:, :, :segmentation_mask.shape[2] // 2]
-    right_mask = segmentation_mask[:, :, segmentation_mask.shape[2] // 2:]
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
-    _, left_fhc = get_femoral_head_center(left_mask, side='left', segmentation_label=femur_label)
-    _, right_fhc = get_femoral_head_center(right_mask, side='right', segmentation_label=femur_label)
+    _, fhc = get_femoral_head_center(segmentation_mask, side=side, segmentation_label=femur_label, isotropic=isotropic)
 
-    slice_gap = abs(int(left_fhc[0]) - int(right_fhc[0]))
-    correct_slice = min(int(left_fhc[0]), int(right_fhc[0])) + slice_gap // 2
+    correct_slice = int(fhc[0])
 
-    p1_left = get_p1(left_mask[correct_slice], side='left', segmentation_label=acetabulum_label)
-    p2_left = get_p2(left_mask[correct_slice], side='left', segmentation_label=acetabulum_label)
-    p1_right = get_p1(right_mask[correct_slice], side='right', segmentation_label=acetabulum_label)
-    p2_right = get_p2(right_mask[correct_slice], side='right', segmentation_label=acetabulum_label)
+    p1 = get_p1(segmentation_mask[correct_slice], side=side, segmentation_label=acetabulum_label)
+    p2 = get_p2(segmentation_mask[correct_slice], side=side, segmentation_label=acetabulum_label)
 
-    # right_fhc_adj = right_fhc.copy()
-    # right_fhc_adj[2] += left_femur.shape[2]  # adjust the x coordinate of the right femoral head center to account for the splitting into left and right
+    ad = get_minimum_distance_between_line_and_point(p1, p2, fhc[1:])
 
-    left_ad = get_minimum_distance_between_line_and_point(p1_left, p2_left, left_fhc[1:])
-    right_ad = get_minimum_distance_between_line_and_point(p1_right, p2_right, right_fhc[1:])
-
-    return left_ad, right_ad
+    return ad
 
 
-def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3) -> Tuple[float, float]:
+def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False) -> Tuple[float, float]:
     """
     Calculate the center edge angle for both sides from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur.
     :param femur_label: The label of the femur in the segmentation mask.
     :param acetabulum_label: The label of the acetabulum in the segmentation mask.
+    :param isotropic: Whether the image has isotropic voxels.
     :return: The center edge angle for both sides.
     """
     left_mask = segmentation_mask[:, :, :segmentation_mask.shape[2] // 2]
     right_mask = segmentation_mask[:, :, segmentation_mask.shape[2] // 2:]
 
-    _, left_fhc = get_femoral_head_center(left_mask, side='left', segmentation_label=femur_label)
-    _, right_fhc = get_femoral_head_center(right_mask, side='right', segmentation_label=femur_label)
+    _, left_fhc = get_femoral_head_center(left_mask, side='left', segmentation_label=femur_label, isotropic=isotropic)
+    _, right_fhc = get_femoral_head_center(right_mask, side='right', segmentation_label=femur_label, isotropic=isotropic)
 
     femur_array = np.where(segmentation_mask == femur_label, 1, 0)
     left_femur = femur_array[:, :, :femur_array.shape[2] // 2]
@@ -448,18 +446,19 @@ def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int 
     return cea_left, cea_right
 
 
-def calculate_min_distance_between_femoral_head_and_acetabulum(segmentation_mask: np.ndarray, side: str = 'left', femur_label: int = 1, acetabulum_label: int = 3) -> float:
+def calculate_min_distance_between_femoral_head_and_acetabulum(segmentation_mask: np.ndarray, side: str = 'left', femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False) -> float:
     """
     Get the minimum distance between the femoral head and the acetabulum.
     :param segmentation_mask: A segmentation mask for the hip.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param femur_label: The label of the femur in the segmentation mask.
     :param acetabulum_label: The label of the acetabulum in the segmentation mask.
+    :param isotropic: Whether the image has isotropic voxels.
     :return: The minimum distance between the femoral head and the acetabulum.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
-    r, c = get_femoral_head_center(segmentation_mask, side=side, segmentation_label=femur_label)
+    r, c = get_femoral_head_center(segmentation_mask, side=side, segmentation_label=femur_label, isotropic=isotropic)
     femur_mask = np.where(segmentation_mask == femur_label, 1, 0)
     point_cloud = np.argwhere(femur_mask)
     solid_sphere = pv.SolidSphere(inner_radius=0, outer_radius=1.05 * r, center=c)

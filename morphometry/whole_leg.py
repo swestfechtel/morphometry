@@ -7,7 +7,7 @@ from morphometry.utils import get_minimum_distance_between_line_and_point, get_p
 from typing import Tuple
 from scipy.ndimage import center_of_mass
 
-def get_mikulicz_line(hip_mask: np.ndarray, ankle_mask: np.ndarray, side: str = 'left', x_ratio: float = 1.) -> Tuple[np.ndarray, np.ndarray]:
+def get_mikulicz_line(hip_mask: np.ndarray, ankle_mask: np.ndarray, side: str = 'left', x_ratio: float = 1., isotropic: bool = False) -> Tuple[np.ndarray, np.ndarray]:
     """
     Get the Mikulicz line of one image side.
 
@@ -17,11 +17,12 @@ def get_mikulicz_line(hip_mask: np.ndarray, ankle_mask: np.ndarray, side: str = 
     everything else 0.
     :param side: The side of the image (not patient!), either 'left' or 'right'.
     :param x_ratio: Correction factor for slice thickness.
+    :param isotropic: Whether the image has isotropic voxels.
     :return: The proximal and distal points of the Mikulicz line, i.e. the center of the femoral head and the center
     of the ankle.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
-    r, femoral_head_center = get_femoral_head_center(hip_mask, side=side, x_ratio=x_ratio)
+    r, femoral_head_center = get_femoral_head_center(hip_mask, side=side, x_ratio=x_ratio, isotropic=isotropic)
     ankle_center = np.array(center_of_mass(ankle_mask))
 
     return femoral_head_center, ankle_center

@@ -65,7 +65,7 @@ def get_distal_reference_line(segmentation_mask: np.ndarray, tibia_label: int, f
     return layer_index, com_tibia, com_fibula
 
 
-def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibia_label_knee: int, tibia_label_ankle: int, fibula_label: int, side: str = 'left', plot: bool = False) -> float:
+def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibia_label_knee: int, tibia_label_ankle: int, fibula_label: int, side: str = 'left', plot: bool = False) -> float | Tuple[float, plt.Figure]:
     """
     Calculate the tibial torsion angle.
 
@@ -101,6 +101,6 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
         ax[0].plot([knee_start[2], knee_end[2]], [knee_start[1], knee_end[1]], color='red')
         ax[1].imshow(ankle_mask[ankle_layer])
         ax[1].plot([ankle_start[2], ankle_end[2]], [ankle_start[1], ankle_end[1]], color='red')
-        plt.show()
+        return angle if angle < 90 else 180 - angle, fig
 
     return angle if angle < 90 else 180 - angle
