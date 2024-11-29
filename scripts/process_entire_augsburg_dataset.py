@@ -1,4 +1,6 @@
-import re
+import sys
+sys.path.append('/home/simon/Work/morpohmetry')
+
 import SimpleITK as sitk
 import pandas as pd
 import numpy as np
@@ -11,31 +13,31 @@ from morphometry.ankle import calculate_pma_angle
 from morphometry.hip import calculate_ccd
 from morphometry.utils import correct_axis_ordering
 from matplotlib import pyplot as plt
+from tqdm import tqdm
 
 
 if __name__ == '__main__':
     plot = False
+    patients = [x.name for x in Path('/home/simon/Data/Augsburg_large/preprocessed/').iterdir()]
+    index = pd.MultiIndex.from_product([patients, ['right', 'left']], names=['patient', 'side'])
+    df = pd.DataFrame(columns=['CCD (actual)', 'CCD (projected)', 'AT', 'TT', 'KRA'], index=index)
 
-    df = pd.read_excel('/home/simon/Downloads/Augsburg Messungen 1.xlsx', index_col=[0, 1], header=1)
-    df = df.dropna(axis=1)
-
-    df['AT (Lee)'] = df['AT (Lee)'].apply(lambda x: abs(x))
-
-    devs = pd.DataFrame(columns=['CCD', 'AT', 'TT', 'KRA'], index=df.index)
-    r = re.compile(r'PA\d+')
-    for file in Path('/home/simon/Downloads/Augsburg/labels/huefte').iterdir():
-        patient = r.search(file.name)[0]
+    for patient in tqdm(patients):
         try:
-            hip = sitk.ReadImage(f'/home/simon/Downloads/Augsburg/labels/huefte/t1_tse_tra_Huften_bds_{patient}.nii.gz')
-            knee = sitk.ReadImage(f'/home/simon/Downloads/Augsburg/labels/knie/t1_tse_tra_Knie_{patient}.nii.gz')
-            ankle = sitk.ReadImage(f'/home/simon/Downloads/Augsburg/labels/osg/t1_tse_tra_OSG_{patient}.nii.gz')
+            hip = sitk.ReadImage(f'/home/simon/Data/Augsburg_large/preprocessed/{patient}/hip_seg.nii.gz')
+            knee = sitk.ReadImage(f'/home/simon/Data/Augsburg_large/preprocessed/{patient}/knee_seg.nii.gz')
+            ankle = sitk.ReadImage(f'/home/simon/Data/Augsburg_large/preprocessed/{patient}/ankle_seg.nii.gz')
         except RuntimeError as e:
-            print(f'Patient {patient} could not be found.', e)
+            print(f'Patient {patient} could not be found.')
             continue
 
-        hip = correct_axis_ordering(hip)
-        knee = correct_axis_ordering(knee)
-        ankle = correct_axis_ordering(ankle)
+        try:
+            hip = correct_axis_ordering(hip)
+            knee = correct_axis_ordering(knee)
+            ankle = correct_axis_ordering(ankle)
+        except (RuntimeError, AssertionError) as e:
+            print(f'Patient {patient} could not be processed.', e)
+            continue
 
         x_ratio = abs(hip.GetSpacing()[2]) / 2 * abs(hip.GetSpacing()[0])
 
@@ -91,24 +93,17 @@ if __name__ == '__main__':
             print(f'Patient {patient} could not be processed.', e)
             continue
 
-        """
-        print(f'Patient {patient}:')
-        print(f'Femoral torsion (right patient side): {femoral_torsion_left}°')
-        print(f'Femoral torsion (left patient side): {femoral_torsion_right}°')
-        print(f'Tibial torsion (right patient side): {tibial_torsion_left}°')
-        print(f'Tibial torsion (left patient side): {tibial_torsion_right}°')
-        print('--------------------------------------------------')
-        """
-        patient_nr = int(patient[2:])
-        row = df.loc[patient_nr]
-        devs.loc[patient_nr, 'rechts']['AT'] = round(abs(row.loc['rechts']['AT (Lee)'] - femoral_torsion_left), 1)  # image side <-> patient side
-        devs.loc[patient_nr, 'links']['AT'] = round(abs(row.loc['links']['AT (Lee)'] - femoral_torsion_right), 1)
-        devs.loc[patient_nr, 'rechts']['TT'] = round(abs(row.loc['rechts']['TT'] - tibial_torsion_left), 1)
-        devs.loc[patient_nr, 'links']['TT'] = round(abs(row.loc['links']['TT'] - tibial_torsion_right), 1)
-        devs.loc[patient_nr, 'rechts']['CCD'] = round(abs(row.loc['rechts']['CCD'] - ccd_left[1]), 1)
-        devs.loc[patient_nr, 'links']['CCD'] = round(abs(row.loc['links']['CCD'] - ccd_right[1]), 1)
-        devs.loc[patient_nr, 'rechts']['KRA'] = round(abs(row.loc['rechts']['Knee Rotation'] - kra_left), 1)
-        devs.loc[patient_nr, 'links']['KRA'] = round(abs(row.loc['links']['Knee Rotation'] - kra_right), 1)
+        df.loc[(patient, 'left'), 'CCD (actual)'] = ccd_right[0]
+        df.loc[(patient, 'right'), 'CCD (actual)'] = ccd_left[0]
+        df.loc[(patient, 'left'), 'CCD (projected)'] = ccd_right[1]
+        df.loc[(patient, 'right'), 'CCD (projected)'] = ccd_left[1]
+        df.loc[(patient, 'left'), 'AT'] = femoral_torsion_right
+        df.loc[(patient, 'right'), 'AT'] = femoral_torsion_left
+        df.loc[(patient, 'left'), 'TT'] = tibial_torsion_right
+        df.loc[(patient, 'right'), 'TT'] = tibial_torsion_left
+        df.loc[(patient, 'left'), 'KRA'] = kra_right
+        df.loc[(patient, 'right'), 'KRA'] = kra_left
 
-    print(devs)
-    devs.to_excel('/home/simon/Downloads/Augsburg/Augsburg_devs_2.xlsx')
+    df = df.apply(lambda x: np.round(x, 1))
+    df.to_excel('/home/simon/Data/Augsburg_large/results.xlsx')
+    print(f'{df.shape[0] - df.dropna().shape[0]} patients could not be processed.')

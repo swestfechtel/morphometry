@@ -15,12 +15,20 @@ def read_dicom(filename: str) -> sitk.Image:
     return reader.Execute()
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser('Convert a dicom image series to nifti format.')
-    parser.add_argument('--i', type=str, help='Path to the directory containing the dicom series.')
-    parser.add_argument('--o', type=str, help='Path to write the nifti file to.')
-    args = parser.parse_args()
-    input_path = args.i
-    output_path = args.o
+def dicom_to_nifti(input_path: str, output_path: str):
+    """
+    Convert a dicom image series to nifti format.
+
+    :param input_path: Path to the directory containing the dicom series.
+    :param output_path: Path to write the nifti file to.
+    """
     image = read_dicom(input_path)
     sitk.WriteImage(image, output_path)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser('Convert a dicom image series to nifti format.')
+    parser.add_argument('-i', type=str, help='Path to the directory containing the dicom series.')
+    parser.add_argument('-o', type=str, help='Path to write the nifti file to.')
+    args = parser.parse_args()
+    dicom_to_nifti(args.i, args.o)

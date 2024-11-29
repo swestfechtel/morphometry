@@ -1,7 +1,4 @@
 import sys
-
-sys.path += ['./rotation_prediction/rotation', './rotation_prediction/nnunet_rotation']
-
 from flask import Flask, render_template, request, redirect, url_for, make_response
 from pathlib import Path
 from collections import defaultdict
