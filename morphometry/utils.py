@@ -11,16 +11,6 @@ from skimage.measure import regionprops, label
 from morphometry.bresenham import bresenhamline
 
 
-def angle_between(v1: np.ndarray, v2: np.ndarray) -> float:
-    """
-    Calculate the angle in radians between vectors 'v1' and 'v2'.
-    :param v1: The first vector.
-    :param v2: The second vector.
-    :return: The angle in radians between vectors 'v1' and 'v2'.
-    """
-    return math.acos(np.vdot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)))
-
-
 def calculate_angle_between_vectors(v1: np.ndarray, v2: np.ndarray) -> float:
     """
     Calculate the angle (in degrees) between two vectors.
@@ -28,6 +18,8 @@ def calculate_angle_between_vectors(v1: np.ndarray, v2: np.ndarray) -> float:
     :param v2:
     :return: The angle (in degrees) between v1 and v2.
     """
+    v1 = v1.astype(np.float64)
+    v2 = v2.astype(np.float64)
     v1 /= np.linalg.norm(v1)
     v2 /= np.linalg.norm(v2)
     return math.degrees(np.arccos(np.dot(v1, v2)))
@@ -71,7 +63,8 @@ def correct_axis_ordering(image: sitk.Image) -> sitk.Image:
     :param image: A SimpleITK 3D image.
     :return: A SimpleITK image conforming to code expectations.
     """
-    direction = image.GetDirection()
+    direction = list(image.GetDirection())
+    direction = [round(x) for x in direction]
     x_row = direction[:3]
     y_row = direction[3:6]
     z_row = direction[6:]
@@ -482,10 +475,10 @@ def rotate_mask_vec_parallel(mask: np.ndarray, vec1: np.ndarray, vec2: np.ndarra
     :param return_angle: Whether to return the rotation angle.
     :return: The rotated mask and optionally the rotation angle.
     """
-    angle = np.rad2deg(angle_between(vec1, vec2))
+    angle = calculate_angle_between_vectors(vec1, vec2)
 
     # need to rotate clockwise or counterclockwise?
-    if np.rad2deg(angle_between(rotate_point(np.array([0, 0]), vec1, angle), vec2)) != 0:
+    if calculate_angle_between_vectors(rotate_point(np.array([0, 0]), vec1, angle), vec2) != 0:
         angle = -angle
 
     rotated_mask = rotate(mask, angle, resize=True, preserve_range=True) > 0

@@ -1,7 +1,7 @@
 import numpy as np
 from morphometry.knee import get_knee_reference_line
 from morphometry.bresenham import bresenhamline
-from morphometry.utils import angle_between
+from morphometry.utils import calculate_angle_between_vectors
 from scipy.ndimage import center_of_mass
 from skimage.measure import regionprops, label
 from typing import Tuple
@@ -87,13 +87,62 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
     # get proximal reference line
     knee_layer, knee_start, knee_end = get_knee_reference_line(knee_mask, 'tibia')
     proximal_line = knee_end - knee_start
+    x = np.array([0, 0, -1])  # because end is always left of start
+    proximal_angle = calculate_angle_between_vectors(proximal_line, x)
+
+    if proximal_angle > 90:
+        print('Warning: proximal angle > 90°. Correcting', proximal_angle)
+        proximal_angle = 180 - proximal_angle
+
+    proximal_orientation = knee_end[1] - knee_start[1]
+    if side == 'left':
+        if proximal_orientation < 0:  # lateral condyle is anterior to medial condyle
+            proximal_angle = -proximal_angle
+    else:
+        if proximal_orientation > 0:  # lateral condyle is anterior to medial condyle
+            proximal_angle = -proximal_angle
+
 
     # get distal reference line
     ankle_layer, ankle_start, ankle_end = get_distal_reference_line(ankle_mask, tibia_label_ankle, fibula_label)
-    distal_line = (ankle_end - ankle_start) if side == 'left' else (ankle_start - ankle_end)
+    distal_line = ankle_end - ankle_start
+    x = np.array([0, 0, -1]) if side == 'left' else np.array([0, 0, 1])
+    distal_angle = calculate_angle_between_vectors(distal_line, x)
 
+    if distal_angle > 90:
+        print('Warning: distal angle > 90°. Correcting', distal_angle)
+        distal_angle = 180 - distal_angle
+
+    distal_orientation = ankle_end[1] - ankle_start[1]
+    if distal_orientation < 0:  # fibula is anterior to tibia
+        distal_angle = -distal_angle
+
+    angle = distal_angle - proximal_angle
     # calculate angle
-    angle = np.degrees(angle_between(proximal_line, distal_line))
+    """
+    if side == 'left':
+        if distal_orientation < 0:  # fibula is anterior to tibia
+            if proximal_orientation < 0:  # lateral condyle is anterior to medial condyle
+                angle = proximal_angle - distal_angle
+            else:  # lateral condyle is posterior to medial condyle
+                angle = proximal_angle + distal_angle
+        else:  # fibula is posterior to tibia
+            if proximal_orientation < 0:  # lateral condyle is anterior to medial condyle
+                angle = proximal_angle + distal_angle
+            else:
+                angle = proximal_angle - distal_angle
+    else:
+        if distal_orientation < 0:
+            if proximal_orientation < 0:
+                angle = proximal_angle + distal_angle
+            else:
+                angle = proximal_angle - distal_angle
+        else:
+            if proximal_orientation < 0:
+                angle = proximal_angle - distal_angle
+            else:
+                angle = proximal_angle + distal_angle
+    """
 
     if plot:
         fig, ax = plt.subplots(1, 2)
@@ -101,6 +150,6 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
         ax[0].plot([knee_start[2], knee_end[2]], [knee_start[1], knee_end[1]], color='red')
         ax[1].imshow(ankle_mask[ankle_layer])
         ax[1].plot([ankle_start[2], ankle_end[2]], [ankle_start[1], ankle_end[1]], color='red')
-        return angle if angle < 90 else 180 - angle, fig
+        return angle, fig
 
-    return angle if angle < 90 else 180 - angle
+    return angle

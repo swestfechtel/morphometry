@@ -9,8 +9,8 @@ from skimage.measure import find_contours
 
 from morphometry.hip import get_femoral_head_center
 from morphometry.knee import get_knee_reference_line
-from morphometry.utils import rotate_mask_dorsal_points, find_notch, transform_point, points_on_circle, angle_between, \
-    get_contour
+from morphometry.utils import rotate_mask_dorsal_points, find_notch, transform_point, points_on_circle, \
+    get_contour, calculate_angle_between_vectors
 
 """
 All functions assume axis ordering is x = axial, y = coronal, z = sagittal.
@@ -203,12 +203,54 @@ def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side:
 
     hip_layer, hip_start, hip_end = get_proximal_reference_line(hip_mask, side=side,
                                                                 segmentation_label=segmentation_label, x_ratio=x_ratio, isotropic=isotropic)
-    proximal_line = (hip_end - hip_start) if side == 'left' else (hip_start - hip_end)
-    knee_layer, knee_start, knee_end = get_knee_reference_line(knee_mask, bone='femur')
+    # proximal_line = (hip_end - hip_start) if side == 'left' else (hip_start - hip_end)  # for the left image side, hip_start is to the right of hip_end; vice versa for right image side
+    # -> need to distinguish between image sides
+    proximal_line = hip_end - hip_start
+    x = np.array([0, 0, -1]) if side == 'left' else np.array([0, 0, 1])  # need to distinguish between left and right image side
+    proximal_angle = calculate_angle_between_vectors(proximal_line, x)
+    proximal_orientation = hip_end[1] - hip_start[1]  # positive if hip_end is posterior to hip_start
+    if proximal_orientation < 0:  # if hip_end is anterior to hip_start, the angle is negative
+        proximal_angle = -proximal_angle
+
+    knee_layer, knee_start, knee_end = get_knee_reference_line(knee_mask, bone='femur')  # for both image sides, knee_start is to the right of knee_end
     distal_line = knee_end - knee_start
+    x = np.array([0, 0, -1])  # because end is always left of start
+    distal_angle = calculate_angle_between_vectors(distal_line, x)
+    distal_orientation = knee_end[1] - knee_start[1]  # positive if knee_end is posterior to knee_start
+    if side == 'left':
+        if distal_orientation < 0:  # lateral condyle is anterior to medial condyle
+            distal_angle = -distal_angle
+    else:
+        if distal_orientation > 0:  # lateral condyle is anterior to medial condyle
+            distal_angle = -distal_angle
+
+    angle = proximal_angle - distal_angle
 
     # calculate angle between the two reference lines
-    angle = np.degrees(angle_between(proximal_line, distal_line))
+    """
+    if side == 'left':
+        if proximal_orientation < 0:  # hip_end is anterior to hip_start
+            if distal_orientation < 0:  # lateral condyle is anterior to medial condyle
+                angle = proximal_angle - distal_angle
+            else:
+                angle = proximal_angle + distal_angle
+        else:  # hip_end is posterior to hip_start
+            if distal_orientation < 0:  # lateral condyle is anterior to medial condyle
+                angle = proximal_angle + distal_angle
+            else:
+                angle = proximal_angle - distal_angle
+    else:  # need to switch order for right image side because knee_start is to the right of knee_end
+        if proximal_orientation < 0:
+            if distal_orientation < 0:  # lateral condyle is posterior to medial condyle
+                angle = proximal_angle + distal_angle
+            else:
+                angle = proximal_angle - distal_angle
+        else:
+            if distal_orientation < 0:  # lateral condyle is anterior to medial condyle
+                angle = proximal_angle - distal_angle
+            else:
+                angle = proximal_angle + distal_angle
+    """
 
     if plot:
         fig, ax = plt.subplots(1, 2)
@@ -216,6 +258,6 @@ def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side:
         ax[0].plot([hip_start[2], hip_end[2]], [hip_start[1], hip_end[1]], 'r')
         ax[1].imshow(knee_mask[knee_layer])
         ax[1].plot([knee_start[2], knee_end[2]], [knee_start[1], knee_end[1]], 'r')
-        return angle if angle < 90 else 180 - angle, fig
+        return angle, fig
 
-    return angle if angle < 90 else 180 - angle
+    return angle

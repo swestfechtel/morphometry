@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Tuple
 from scipy.ndimage import center_of_mass
-from morphometry.utils import angle_between
+from morphometry.utils import calculate_angle_between_vectors
 
 
 def get_plafond_reference_line(tibia_mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -57,5 +57,5 @@ def calculate_pma_angle(segmentation_mask: np.ndarray, tibia_label: int = 1, fib
     plafond_line = plafond_end - plafond_start
     malleoli_line = malleoli_end - malleoli_start
 
-    return np.degrees(angle_between(plafond_line, malleoli_line))
+    return calculate_angle_between_vectors(plafond_line, malleoli_line)
 

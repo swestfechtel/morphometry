@@ -46,26 +46,61 @@ if __name__ == '__main__':
     right_ankle = ankle_mask[:, :, ankle_mask.shape[2] // 2:]
 
     if args.plot:
-        femoral_torsion_left, fig = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=args.plot)
-        fig.savefig(f'{args.output}/ft_right.png')  # patient side <-> image side
-        plt.close(fig)
-        femoral_torsion_right, fig = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio, plot=args.plot)
-        fig.savefig(f'{args.output}/ft_left.png')
-        plt.close(fig)
+        try:
+            femoral_torsion_left, fig = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=args.plot)
+            fig.savefig(f'{args.output}/ft_right.png')  # patient side <-> image side
+            plt.close(fig)
+        except (RuntimeError, AssertionError, ValueError) as e:
+            print(f'Failed to calculate femoral torsion for the left side.', e)
+            femoral_torsion_left = None
 
-        tibial_torsion_left, fig = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left', plot=args.plot)
-        fig.savefig(f'{args.output}/tt_right.png')
-        plt.close(fig)
-        tibial_torsion_right, fig = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right', plot=args.plot)
-        fig.savefig(f'{args.output}/tt_left.png')
-        plt.close(fig)
+        try:
+            femoral_torsion_right, fig = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio, plot=args.plot)
+            fig.savefig(f'{args.output}/ft_left.png')
+            plt.close(fig)
+        except (RuntimeError, AssertionError, ValueError) as e:
+            print(f'Failed to calculate femoral torsion for the right side.', e)
+            femoral_torsion_right = None
+
+        try:
+            tibial_torsion_left, fig = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left', plot=args.plot)
+            fig.savefig(f'{args.output}/tt_right.png')
+            plt.close(fig)
+        except (RuntimeError, AssertionError, ValueError) as e:
+            print(f'Failed to calculate tibial torsion for the left side.', e)
+            tibial_torsion_left = None
+
+        try:
+            tibial_torsion_right, fig = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right', plot=args.plot)
+            fig.savefig(f'{args.output}/tt_left.png')
+            plt.close(fig)
+        except (RuntimeError, AssertionError, ValueError) as e:
+            print(f'Failed to calculate tibial torsion for the right side.', e)
+            tibial_torsion_right = None
     else:
-        femoral_torsion_left = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=args.plot)
-        femoral_torsion_right = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio, plot=args.plot)
+        try:
+            femoral_torsion_left = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=args.plot)
+        except (RuntimeError, AssertionError, ValueError) as e:
+            print(f'Failed to calculate femoral torsion for the left side.', e)
+            femoral_torsion_left = None
 
-        tibial_torsion_left = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left', plot=args.plot)
-        tibial_torsion_right = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right', plot=args.plot)
+        try:
+            femoral_torsion_right = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio, plot=args.plot)
+        except (RuntimeError, AssertionError, ValueError) as e:
+            print(f'Failed to calculate femoral torsion for the right side.', e)
+            femoral_torsion_right = None
 
+        try:
+            tibial_torsion_left = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left', plot=args.plot)
+        except (RuntimeError, AssertionError, ValueError) as e:
+            print(f'Failed to calculate tibial torsion for the left side.', e)
+            tibial_torsion_left = None
+
+        try:
+            tibial_torsion_right = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right', plot=args.plot)
+        except (RuntimeError, AssertionError, ValueError) as e:
+            print(f'Failed to calculate tibial torsion for the right side.', e)
+            tibial_torsion_right = None
 
     print(f'Femoral torsion (right patient side): {femoral_torsion_left:.2f}°')
     print(f'Femoral torsion (left patient side): {femoral_torsion_right:.2f}°')

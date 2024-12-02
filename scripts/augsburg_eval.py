@@ -19,9 +19,8 @@ if __name__ == '__main__':
     df = pd.read_excel('/home/simon/Downloads/Augsburg Messungen 1.xlsx', index_col=[0, 1], header=1)
     df = df.dropna(axis=1)
 
-    df['AT (Lee)'] = df['AT (Lee)'].apply(lambda x: abs(x))
-
     devs = pd.DataFrame(columns=['CCD', 'AT', 'TT', 'KRA'], index=df.index)
+    vals = devs.copy()
     r = re.compile(r'PA\d+')
     for file in Path('/home/simon/Downloads/Augsburg/labels/huefte').iterdir():
         patient = r.search(file.name)[0]
@@ -109,6 +108,15 @@ if __name__ == '__main__':
         devs.loc[patient_nr, 'links']['CCD'] = round(abs(row.loc['links']['CCD'] - ccd_right[1]), 1)
         devs.loc[patient_nr, 'rechts']['KRA'] = round(abs(row.loc['rechts']['Knee Rotation'] - kra_left), 1)
         devs.loc[patient_nr, 'links']['KRA'] = round(abs(row.loc['links']['Knee Rotation'] - kra_right), 1)
+        vals.loc[patient_nr, 'rechts']['AT'] = femoral_torsion_left
+        vals.loc[patient_nr, 'links']['AT'] = femoral_torsion_right
+        vals.loc[patient_nr, 'rechts']['TT'] = tibial_torsion_left
+        vals.loc[patient_nr, 'links']['TT'] = tibial_torsion_right
+        vals.loc[patient_nr, 'rechts']['CCD'] = ccd_left[1]
+        vals.loc[patient_nr, 'links']['CCD'] = ccd_right[1]
+        vals.loc[patient_nr, 'rechts']['KRA'] = kra_left
+        vals.loc[patient_nr, 'links']['KRA'] = kra_right
 
     print(devs)
     devs.to_excel('/home/simon/Downloads/Augsburg/Augsburg_devs_2.xlsx')
+    vals.to_excel('/home/simon/Downloads/Augsburg/Augsburg_vals_2.xlsx')

@@ -2,7 +2,7 @@ import numpy as np
 from scipy.ndimage import center_of_mass
 from morphometry.utils import get_layer_with_biggest_convex_area, find_notch, get_contour_points, \
     rotate_mask_vec_parallel, rotate_mask_dorsal_points, transform_point, rotate_point, num_mask_points_on_line, \
-    get_dorsal_mask_point, shrink_points_to_mask, angle_between
+    get_dorsal_mask_point, shrink_points_to_mask, calculate_angle_between_vectors
 from typing import Tuple
 from matplotlib import pyplot as plt
 
@@ -166,7 +166,7 @@ def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: in
     distal_layer, tibia_start, tibia_end = get_knee_reference_line(tibia_mask, 'tibia')
     distal_line = tibia_end - tibia_start
 
-    angle = np.degrees(angle_between(proximal_line, distal_line))
+    angle = calculate_angle_between_vectors(proximal_line, distal_line)
 
     if plot:
         fig, ax = plt.subplots(1, 2)
