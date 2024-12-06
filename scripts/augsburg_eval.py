@@ -14,13 +14,13 @@ from matplotlib import pyplot as plt
 
 
 if __name__ == '__main__':
-    plot = False
+    plot = True
 
     df = pd.read_excel('/home/simon/Downloads/Augsburg Messungen 1.xlsx', index_col=[0, 1], header=1)
     df = df.dropna(axis=1)
 
     devs = pd.DataFrame(columns=['CCD', 'AT', 'TT', 'KRA'], index=df.index)
-    vals = devs.copy()
+    vals = pd.DataFrame(columns=['CCD', 'AT', 'AT (Murphy)', 'AT (Tomczak)', 'TT', 'KRA'], index=df.index)
     r = re.compile(r'PA\d+')
     for file in Path('/home/simon/Downloads/Augsburg/labels/huefte').iterdir():
         patient = r.search(file.name)[0]
@@ -54,10 +54,22 @@ if __name__ == '__main__':
                 femoral_torsion_left, fig = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=plot)
                 fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_left.png')
                 plt.close(fig)
+                femoral_torsion_left_murphy, fig = calculate_femoral_torsion(left_hip, left_knee, side='left', method='murphy', x_ratio=x_ratio, plot=plot, hip_image=hip)
+                fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_left_murphy.png')
+                plt.close(fig)
+                femoral_torsion_left_tomczak, fig = calculate_femoral_torsion(left_hip, left_knee, side='left', method='tomczak', x_ratio=x_ratio, plot=plot, hip_image=hip)
+                fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_left_tomczak.png')
+                plt.close(fig)
 
                 femoral_torsion_right, fig = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio,
                                                                   plot=plot)
                 fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_right.png')
+                plt.close(fig)
+                femoral_torsion_right_murphy, fig = calculate_femoral_torsion(right_hip, right_knee, side='right', method='murphy', x_ratio=x_ratio, plot=plot, hip_image=hip)
+                fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_right_murphy.png')
+                plt.close(fig)
+                femoral_torsion_right_tomczak, fig = calculate_femoral_torsion(right_hip, right_knee, side='right', method='tomczak', x_ratio=x_ratio, plot=plot, hip_image=hip)
+                fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_right_tomczak.png')
                 plt.close(fig)
 
                 tibial_torsion_left, fig = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1,
@@ -72,8 +84,13 @@ if __name__ == '__main__':
             else:
                 femoral_torsion_left = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio,
                                                                  plot=plot)
+                femoral_torsion_left_murphy = calculate_femoral_torsion(left_hip, left_knee, side='left', method='murphy', x_ratio=x_ratio, plot=plot)
+                femoral_torsion_left_tomczak = calculate_femoral_torsion(left_hip, left_knee, side='left', method='tomczak', x_ratio=x_ratio, plot=plot)
+
                 femoral_torsion_right = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio,
                                                                   plot=plot)
+                femoral_torsion_right_murphy = calculate_femoral_torsion(right_hip, right_knee, side='right', method='murphy', x_ratio=x_ratio, plot=plot)
+                femoral_torsion_right_tomczak = calculate_femoral_torsion(right_hip, right_knee, side='right', method='tomczak', x_ratio=x_ratio, plot=plot)
 
                 tibial_torsion_left = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2,
                                                                tibia_label_ankle=1,
@@ -110,6 +127,10 @@ if __name__ == '__main__':
         devs.loc[patient_nr, 'links']['KRA'] = round(abs(row.loc['links']['Knee Rotation'] - kra_right), 1)
         vals.loc[patient_nr, 'rechts']['AT'] = femoral_torsion_left
         vals.loc[patient_nr, 'links']['AT'] = femoral_torsion_right
+        vals.loc[patient_nr, 'rechts']['AT (Murphy)'] = femoral_torsion_left_murphy
+        vals.loc[patient_nr, 'links']['AT (Murphy)'] = femoral_torsion_right_murphy
+        vals.loc[patient_nr, 'rechts']['AT (Tomczak)'] = femoral_torsion_left_tomczak
+        vals.loc[patient_nr, 'links']['AT (Tomczak)'] = femoral_torsion_right_tomczak
         vals.loc[patient_nr, 'rechts']['TT'] = tibial_torsion_left
         vals.loc[patient_nr, 'links']['TT'] = tibial_torsion_right
         vals.loc[patient_nr, 'rechts']['CCD'] = ccd_left[1]

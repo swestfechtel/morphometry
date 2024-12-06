@@ -6,6 +6,7 @@ import SimpleITK as sitk
 from typing import Tuple, Optional
 from scipy.ndimage import binary_erosion
 from scipy.spatial import KDTree
+from scipy import optimize
 from skimage.transform import rotate
 from skimage.measure import regionprops, label
 from morphometry.bresenham import bresenhamline
@@ -48,6 +49,32 @@ def calculate_min_distance_between_point_clouds(pc1: np.ndarray, pc2: np.ndarray
     min_distance = np.min(distances)
 
     return min_distance
+
+
+def circle_fit(mask: np.array) -> Tuple[np.array, float]:
+    """Fit a circle to an arbitrary 2D point cloud.
+
+    :param mask: A 2D Segmentation mask.
+    :return: The center and radius of the fitted circle.
+    """
+    point_cloud = np.argwhere(mask != 0)
+    y = point_cloud[:, 0]
+    x = point_cloud[:, 1]
+
+    y_m = np.mean(y)
+    x_m = np.mean(x)
+
+    def calc_r(xc, yc):
+        return np.sqrt((x - xc) ** 2 + (y - yc) ** 2)
+
+    def f_2(c):
+        ri = calc_r(*c)
+        return ri - ri.mean()
+
+    center_estimate = y_m, x_m
+    center, _ = optimize.leastsq(f_2, center_estimate)
+    radius = calc_r(*center).mean()
+    return np.flip(center), radius
 
 
 def correct_axis_ordering(image: sitk.Image) -> sitk.Image:
@@ -163,10 +190,58 @@ def determine_min_y(mask: np.ndarray, percentage: float = 0.5) -> int:
     return sorted_y[-num_points]
 
 
+def draw_circle(mask: np.ndarray, layer: int, r: float, center: np.ndarray, color_label=5) -> np.ndarray:
+    """
+    Draw a circle on a segmentation mask.
+    :param mask: A 3D segmentation mask.
+    :param layer: The mask layer to draw the circle on.
+    :param r: The radius of the circle.
+    :param center: The centre of the circle.
+    :param color_label: The label to draw the circle with.
+    :return: A copy of the input mask with the circle drawn on it.
+    """
+    mask = mask.copy()
+    for x in range(center[1] - int(r) - 2,
+                   center[1] + int(r) + 2):  # all relevant x coordinates
+        if r**2 - (x - center[1])**2 >= 0:
+            y = int(round(math.sqrt(r**2 - (x - center[1])**2)))
+            if y < mask.shape[1]:
+                mask[layer, center[0] + y, x] = color_label
+                mask[layer, center[0] - y, x] = color_label
+
+    for y in range(center[0] - int(r) - 2,
+                   center[0] + int(r) + 2):  # all relevant y coordinates
+        if r**2 - (y - center[0])**2 >= 0:
+            x = int(round(math.sqrt(r**2 - (y - center[0])**2)))
+            if x < mask.shape[2]:
+                mask[layer, y, center[1] + x] = color_label
+                mask[layer, y, center[1] - x] = color_label
+
+    return mask
+
+
+def draw_line(mask: np.ndarray, layer: int, start: np.ndarray, end: np.ndarray, color_label: int = 5) -> np.ndarray:
+    """
+    Draw a line on a segmentation mask.
+    :param mask: A 3D segmentation mask.
+    :param layer: The mask layer to draw the line on.
+    :param start: Start coordinates of the line.
+    :param end: End coordinates of the line.
+    :param color_label: The label to draw the line with.
+    :return: A copy of the input mask with the line drawn on it.
+    """
+    mask = mask.copy()
+    line = bresenhamline(start[1:], end[1:], -1)
+    for u in line:
+        mask[layer, int(line[u, 0]), int(line[u, 1])] = color_label
+
+    return mask
+
+
 def find_notch(mask: np.ndarray, min_y: int = None, percentage: float = 0.5, thresh: float = 0, break_after_first: bool = False) -> np.ndarray:
     """
     Find a notch by decreasing the y (i.e. coronal) value (up to the value of min_y)
-    -> moving to ventral to find the notch.
+    -> moving to ventral/anterior to find the notch.
     :param mask: The 2D mask.
     :param min_y: The minimum y value.
     :param percentage: The percentage of the dorsal part to consider.
