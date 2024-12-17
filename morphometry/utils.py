@@ -77,6 +77,16 @@ def circle_fit(mask: np.array) -> Tuple[np.array, float]:
     return np.flip(center), radius
 
 
+def combine_masks(mask1: np.ndarray, mask2: np.ndarray) -> np.ndarray:
+    """
+    Combine two masks.
+    :param mask1: The first mask.
+    :param mask2: The second mask.
+    :return: The combined mask.
+    """
+    return np.concatenate((mask1, mask2), 2)
+
+
 def correct_axis_ordering(image: sitk.Image) -> sitk.Image:
     """
     Transform SimpleITK image to comply with code expectations.
@@ -201,21 +211,21 @@ def draw_circle(mask: np.ndarray, layer: int, r: float, center: np.ndarray, colo
     :return: A copy of the input mask with the circle drawn on it.
     """
     mask = mask.copy()
-    for x in range(center[1] - int(r) - 2,
-                   center[1] + int(r) + 2):  # all relevant x coordinates
-        if r**2 - (x - center[1])**2 >= 0:
-            y = int(round(math.sqrt(r**2 - (x - center[1])**2)))
+    for x in range(center[2] - int(r) - 2,
+                   center[2] + int(r) + 2):  # all relevant x coordinates
+        if r**2 - (x - center[2])**2 >= 0:
+            y = int(round(math.sqrt(r**2 - (x - center[2])**2)))
             if y < mask.shape[1]:
-                mask[layer, center[0] + y, x] = color_label
-                mask[layer, center[0] - y, x] = color_label
+                mask[layer, center[1] + y, x] = color_label
+                mask[layer, center[1] - y, x] = color_label
 
-    for y in range(center[0] - int(r) - 2,
-                   center[0] + int(r) + 2):  # all relevant y coordinates
-        if r**2 - (y - center[0])**2 >= 0:
-            x = int(round(math.sqrt(r**2 - (y - center[0])**2)))
+    for y in range(center[1] - int(r) - 2,
+                   center[1] + int(r) + 2):  # all relevant y coordinates
+        if r**2 - (y - center[1])**2 >= 0:
+            x = int(round(math.sqrt(r**2 - (y - center[1])**2)))
             if x < mask.shape[2]:
-                mask[layer, y, center[1] + x] = color_label
-                mask[layer, y, center[1] - x] = color_label
+                mask[layer, y, center[2] + x] = color_label
+                mask[layer, y, center[2] - x] = color_label
 
     return mask
 
@@ -231,9 +241,9 @@ def draw_line(mask: np.ndarray, layer: int, start: np.ndarray, end: np.ndarray, 
     :return: A copy of the input mask with the line drawn on it.
     """
     mask = mask.copy()
-    line = bresenhamline(start[1:], end[1:], -1)
+    line = bresenhamline([start[1:]], [end[1:]], -1)
     for u in line:
-        mask[layer, int(line[u, 0]), int(line[u, 1])] = color_label
+        mask[layer, u[0], u[1]] = color_label
 
     return mask
 
@@ -680,3 +690,15 @@ def translate_image_coord_to_world_coord(image_coord: np.ndarray, reference_imag
 
     world_coordinates = D @ S2 @ image_coord.T + O
     return np.array(list(reversed(world_coordinates)))
+
+
+def write_mask(mask: np.ndarray, ref_image: sitk.Image, filename: str) -> None:
+    """
+    Write a numpy segmentation mask to a SimpleITK image file.
+    :param mask: A numpy segmentation mask.
+    :param ref_image: The reference image from which the segmentation mask was derived.
+    :param filename: The filename to write the mask to.
+    """
+    mask = sitk.GetImageFromArray(mask)
+    mask.CopyInformation(ref_image)
+    sitk.WriteImage(mask, filename)

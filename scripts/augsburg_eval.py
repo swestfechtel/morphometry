@@ -9,7 +9,7 @@ from morphometry.knee import calculate_knee_rotation_angle
 from morphometry.whole_leg import calculate_mikulicz_deviation
 from morphometry.ankle import calculate_pma_angle
 from morphometry.hip import calculate_ccd
-from morphometry.utils import correct_axis_ordering
+from morphometry.utils import correct_axis_ordering, write_mask, combine_masks
 from matplotlib import pyplot as plt
 
 
@@ -24,6 +24,7 @@ if __name__ == '__main__':
     r = re.compile(r'PA\d+')
     for file in Path('/home/simon/Downloads/Augsburg/labels/huefte').iterdir():
         patient = r.search(file.name)[0]
+        print(f'Processing patient {patient}...')
         try:
             hip = sitk.ReadImage(f'/home/simon/Downloads/Augsburg/labels/huefte/t1_tse_tra_Huften_bds_{patient}.nii.gz')
             knee = sitk.ReadImage(f'/home/simon/Downloads/Augsburg/labels/knie/t1_tse_tra_Knie_{patient}.nii.gz')
@@ -51,27 +52,56 @@ if __name__ == '__main__':
 
         try:
             if plot:
-                femoral_torsion_left, fig = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=plot)
+                # lee
+                tmp_l = left_hip.copy()
+                tmp_r = right_hip.copy()
+                femoral_torsion_left, fig, tmp_l, _ = calculate_femoral_torsion(tmp_l, left_knee, side='left', x_ratio=x_ratio, plot=plot, mark_mask=True)
                 fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_left.png')
                 plt.close(fig)
-                femoral_torsion_left_murphy, fig = calculate_femoral_torsion(left_hip, left_knee, side='left', method='murphy', x_ratio=x_ratio, plot=plot, hip_image=hip)
+
+                femoral_torsion_right, fig, tmp_r, _ = calculate_femoral_torsion(tmp_r, right_knee, side='right',
+                                                                       x_ratio=x_ratio,
+                                                                       plot=plot, mark_mask=True)
+                fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_right.png')
+                plt.close(fig)
+
+                comb = combine_masks(tmp_l, tmp_r)
+                write_mask(comb, hip, f'/home/simon/Downloads/Augsburg/marked_masks/{patient}_at_lee.nii.gz')
+
+                # murphy
+                tmp_l = left_hip.copy()
+                tmp_r = right_hip.copy()
+                print('Murphy - left image side')
+                femoral_torsion_left_murphy, fig, tmp_l, _ = calculate_femoral_torsion(tmp_l, left_knee, side='left', method='murphy', x_ratio=x_ratio, plot=plot, hip_image=hip, mark_mask=True)
                 fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_left_murphy.png')
                 plt.close(fig)
-                femoral_torsion_left_tomczak, fig = calculate_femoral_torsion(left_hip, left_knee, side='left', method='tomczak', x_ratio=x_ratio, plot=plot, hip_image=hip)
+
+                print('Murphy - right image side')
+                femoral_torsion_right_murphy, fig, tmp_r, _ = calculate_femoral_torsion(tmp_r, right_knee, side='right',
+                                                                              method='murphy', x_ratio=x_ratio,
+                                                                              plot=plot, hip_image=hip, mark_mask=True)
+                fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_right_murphy.png')
+                plt.close(fig)
+
+                comb = combine_masks(tmp_l, tmp_r)
+                write_mask(comb, hip, f'/home/simon/Downloads/Augsburg/marked_masks/{patient}_at_murphy.nii.gz')
+
+                # tomczak
+                """
+                tmp_l = left_hip.copy()
+                tmp_r = right_hip.copy()
+                femoral_torsion_left_tomczak, fig, tmp_l, _ = calculate_femoral_torsion(tmp_l, left_knee, side='left', method='tomczak', x_ratio=x_ratio, plot=plot, hip_image=hip, mark_mask=True)
                 fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_left_tomczak.png')
                 plt.close(fig)
 
-                femoral_torsion_right, fig = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio,
-                                                                  plot=plot)
-                fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_right.png')
-                plt.close(fig)
-                femoral_torsion_right_murphy, fig = calculate_femoral_torsion(right_hip, right_knee, side='right', method='murphy', x_ratio=x_ratio, plot=plot, hip_image=hip)
-                fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_right_murphy.png')
-                plt.close(fig)
-                femoral_torsion_right_tomczak, fig = calculate_femoral_torsion(right_hip, right_knee, side='right', method='tomczak', x_ratio=x_ratio, plot=plot, hip_image=hip)
+                femoral_torsion_right_tomczak, fig, tmp_r, _ = calculate_femoral_torsion(tmp_r, right_knee, side='right', method='tomczak', x_ratio=x_ratio, plot=plot, hip_image=hip, mark_mask=True)
                 fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_right_tomczak.png')
                 plt.close(fig)
 
+                comb = combine_masks(tmp_l, tmp_r)
+                write_mask(comb, hip, f'/home/simon/Downloads/Augsburg/marked_masks/{patient}_at_tomczak.nii.gz')
+                """
+                # tibia
                 tibial_torsion_left, fig = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1,
                                                                fibula_label=2, side='left', plot=plot)
                 fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_tt_left.png')
@@ -103,7 +133,7 @@ if __name__ == '__main__':
 
             kra_left = calculate_knee_rotation_angle(left_knee, 1, 2, False)
             kra_right = calculate_knee_rotation_angle(right_knee, 1, 2, False)
-        except (ValueError, IndexError, RuntimeError) as e:
+        except (ValueError,  RuntimeError) as e:
             print(f'Patient {patient} could not be processed.', e)
             continue
 
@@ -129,8 +159,8 @@ if __name__ == '__main__':
         vals.loc[patient_nr, 'links']['AT'] = femoral_torsion_right
         vals.loc[patient_nr, 'rechts']['AT (Murphy)'] = femoral_torsion_left_murphy
         vals.loc[patient_nr, 'links']['AT (Murphy)'] = femoral_torsion_right_murphy
-        vals.loc[patient_nr, 'rechts']['AT (Tomczak)'] = femoral_torsion_left_tomczak
-        vals.loc[patient_nr, 'links']['AT (Tomczak)'] = femoral_torsion_right_tomczak
+        # vals.loc[patient_nr, 'rechts']['AT (Tomczak)'] = femoral_torsion_left_tomczak
+        # vals.loc[patient_nr, 'links']['AT (Tomczak)'] = femoral_torsion_right_tomczak
         vals.loc[patient_nr, 'rechts']['TT'] = tibial_torsion_left
         vals.loc[patient_nr, 'links']['TT'] = tibial_torsion_right
         vals.loc[patient_nr, 'rechts']['CCD'] = ccd_left[1]
