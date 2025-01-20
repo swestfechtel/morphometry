@@ -444,14 +444,22 @@ def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side:
     proximal_line = hip_end - hip_start
     x = np.array([0, 0, -1]) if side == 'left' else np.array([0, 0, 1])  # need to distinguish between left and right image side
     proximal_angle = calculate_angle_between_vectors(proximal_line, x)
+
     proximal_orientation = hip_end[1] - hip_start[1]  # positive if hip_end is posterior to hip_start
     if proximal_orientation < 0:  # if hip_end is anterior to hip_start, the angle is negative
         proximal_angle = -proximal_angle
 
     knee_layer, knee_start, knee_end = get_knee_reference_line(knee_mask, bone='femur')  # for both image sides, knee_start is to the right of knee_end
+    if knee_start[2] < knee_end[2]:  # if this is somehow not the case, swap the points
+        tmp = knee_start
+        knee_start = knee_end
+        knee_end = tmp
+
     distal_line = knee_end - knee_start
+
     x = np.array([0, 0, -1])  # because end is always left of start
     distal_angle = calculate_angle_between_vectors(distal_line, x)
+
     distal_orientation = knee_end[1] - knee_start[1]  # positive if knee_end is posterior to knee_start
     if side == 'left':
         if distal_orientation < 0:  # lateral condyle is anterior to medial condyle
