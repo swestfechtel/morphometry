@@ -241,7 +241,7 @@ def draw_line(mask: np.ndarray, layer: int, start: np.ndarray, end: np.ndarray, 
     :return: A copy of the input mask with the line drawn on it.
     """
     mask = mask.copy()
-    line = bresenhamline([start[1:]], [end[1:]], -1)
+    line = bresenhamline([start[1:]], [end[1:]], -1).astype(np.uint16)
     for u in line:
         mask[layer, u[0], u[1]] = color_label
 

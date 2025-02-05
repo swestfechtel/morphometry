@@ -6,6 +6,7 @@ from scipy.ndimage import center_of_mass
 from skimage.measure import regionprops, label
 from typing import Tuple
 from matplotlib import pyplot as plt
+from morphometry.utils import draw_line
 
 
 def get_layer_with_largest_diameter(segmentation_mask: np.ndarray) -> int:
@@ -65,7 +66,7 @@ def get_distal_reference_line(segmentation_mask: np.ndarray, tibia_label: int, f
     return layer_index, com_tibia, com_fibula
 
 
-def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibia_label_knee: int, tibia_label_ankle: int, fibula_label: int, side: str = 'left', plot: bool = False) -> float | Tuple[float, plt.Figure]:
+def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibia_label_knee: int, tibia_label_ankle: int, fibula_label: int, side: str = 'left', plot: bool = False, mark_mask: bool = False) -> float | Tuple[float, plt.Figure] | Tuple[float, np.ndarray, np.ndarray] | Tuple[float, plt.Figure, np.ndarray, np.ndarray]:
     """
     Calculate the tibial torsion angle.
 
@@ -79,6 +80,7 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
     :param fibula_label: The segmentation label of the fibula.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param plot: If True, plot the distal reference line and the line connecting the center of mass points.
+    :param mark_mask: Whether to mark landmarks and reference lines on the segmentation masks.
     :return: The tibial torsion angle in degrees.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
@@ -143,6 +145,8 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
             else:
                 angle = proximal_angle + distal_angle
     """
+    if not mark_mask and not plot:
+        return angle
 
     if plot:
         fig, ax = plt.subplots(1, 2)
@@ -150,6 +154,14 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
         ax[0].plot([knee_start[2], knee_end[2]], [knee_start[1], knee_end[1]], color='red')
         ax[1].imshow(ankle_mask[ankle_layer])
         ax[1].plot([ankle_start[2], ankle_end[2]], [ankle_start[1], ankle_end[1]], color='red')
-        return angle, fig
+        if not mark_mask:
+            return angle, fig
 
-    return angle
+    if mark_mask:
+        ankle_mask = draw_line(ankle_mask, ankle_layer, ankle_start, ankle_end)
+        knee_mask = draw_line(knee_mask, knee_layer, knee_start, knee_end)
+
+        if not plot:
+            return angle, ankle_mask, knee_mask
+
+    return angle, fig, ankle_mask, knee_mask
