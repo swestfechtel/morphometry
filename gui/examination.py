@@ -1,8 +1,8 @@
 import pydicom
 import ruptures
 import torch
-import subprocess
 import base64
+import pickle
 import SimpleITK as sitk
 import numpy as np
 from pathlib import Path
@@ -12,9 +12,15 @@ from batchgenerators.utilities.file_and_folder_operations import join
 from morphometry.femur import calculate_femoral_torsion
 from morphometry.tibia import calculate_tibial_torsion
 from morphometry.utils import correct_axis_ordering
-from typing import Union
+from typing import Union, Tuple
 from io import BytesIO
 from matplotlib.figure import Figure
+from matplotlib import colors, cm
+from multiprocessing import Pool
+from functools import partial
+
+
+masking_value = -1
 
 
 class Examination:
@@ -23,6 +29,7 @@ class Examination:
     """
     def __init__(self):
         self.image = None
+        self.corrected_image = None
         self.metadata = None
         self.morphometry = None
         self.hip = None
@@ -31,12 +38,13 @@ class Examination:
         self.hip_mask = None
         self.knee_mask = None
         self.ankle_mask = None
+        self.marked_masks = None
         self.femoral_torsion_left = None
         self.femoral_torsion_right = None
         self.tibial_torsion_left = None
         self.tibial_torsion_right = None
+        self.image_stack = None
         self.marked_stack = None
-
 
     def read_dicom_series(self, directory: str):
         """
@@ -48,6 +56,8 @@ class Examination:
         dicom_names = reader.GetGDCMSeriesFileNames(directory)
         reader.SetFileNames(dicom_names)
         self.image = reader.Execute()
+        self.corrected_image = correct_axis_ordering(self.image)
+        self.image_stack = sitk.GetArrayFromImage(self.corrected_image)
 
     def read_dicom_metadata(self, directory: str):
         """
@@ -176,44 +186,72 @@ class Examination:
             ankle_mask_right, distal_knee_mask_right = right_ankle, right_knee
             exceptions.append(e)
 
-        # Combine masks
-        num_layers = self.hip_mask.shape[0] + self.knee_mask.shape[0] + self.ankle_mask.shape[0]
-        l_r_split = self.hip_mask.shape[2] // 2
-        hip_ends = self.hip_mask.shape[0]
-        knee_ends = hip_ends + self.knee_mask.shape[0]
-        combined_mask_marked = np.zeros((num_layers, self.hip_mask.shape[1], self.hip_mask.shape[2]), dtype=np.uint8)
-        combined_mask_marked[0:hip_ends, :, :l_r_split] = hip_mask_left
-        combined_mask_marked[0:hip_ends, :, l_r_split:] = hip_mask_right
-        combined_mask_marked[hip_ends:knee_ends, :, :l_r_split] = proximal_knee_mask_left
-        combined_mask_marked[hip_ends:knee_ends, :, l_r_split:] = proximal_knee_mask_right
-        # combined_mask_marked[self.hip_mask.shape[0]:self.knee_mask.shape[0], :, :l_r_split] += np.where(distal_knee_mask_left < 1, 0, distal_knee_mask_left)
-        # combined_mask_marked[self.hip_mask.shape[0]:self.knee_mask.shape[0], :, l_r_split:] += np.where(distal_knee_mask_right < 1, 0, distal_knee_mask_right)
-        combined_mask_marked[knee_ends:, :, :l_r_split] = ankle_mask_left
-        combined_mask_marked[knee_ends:, :, l_r_split:] = ankle_mask_right
-
-        self.marked_stack = combined_mask_marked
+        knee_mask_left = proximal_knee_mask_left + distal_knee_mask_left
+        knee_mask_right = proximal_knee_mask_right + distal_knee_mask_right
+        self.marked_masks = {'hip': {'left': hip_mask_left, 'right': hip_mask_right}, 'knee': {'left': knee_mask_left, 'right': knee_mask_right}, 'ankle': {'left': ankle_mask_left, 'right': ankle_mask_right}}
 
         if len(exceptions) > 0:
             return exceptions
 
         return None
 
-    def to_base64(self) -> bytes:
+    def combine_masks(self):
         """
-        Convert the marked stack to a base64 encoded string.
-        :return: The base64 encoded string.
+        Combine the marked masks into a single stack.
+        :return:
         """
-        layers = [] * self.marked_stack.shape[0]
-        for i, layer in enumerate(self.marked_stack):
-            fig = Figure(figsize=(20, 20))
-            ax = fig.subplots()
-            ax.imshow(layer, cmap='gray')
-            ax.axis('off')
-            buffer = BytesIO()
-            fig.savefig(buffer, format='png', bbox_inches='tight')
-            layers[i] = base64.b64encode(buffer.getbuffer()).decode('ascii')
+        l_r_split = self.hip_mask.shape[2] // 2
+        hip_ends = self.hip_mask.shape[0]
+        knee_ends = hip_ends + self.knee_mask.shape[0]
+        num_layers = self.hip_mask.shape[0] + self.knee_mask.shape[0] + self.ankle_mask.shape[0]
+        combined_mask_marked = np.zeros((num_layers, self.hip_mask.shape[1], self.hip_mask.shape[2]), dtype=np.uint8)
 
-        return layers
+        hip_mask_left = self.marked_masks['hip']['left']
+        hip_mask_right = self.marked_masks['hip']['right']
+        knee_mask_left = self.marked_masks['knee']['left']
+        knee_mask_right = self.marked_masks['knee']['right']
+        ankle_mask_left = self.marked_masks['ankle']['left']
+        ankle_mask_right = self.marked_masks['ankle']['right']
+        print('Unique values:')
+        print(np.unique(hip_mask_left), np.unique(hip_mask_right), np.unique(knee_mask_left), np.unique(knee_mask_right), np.unique(ankle_mask_left), np.unique(ankle_mask_right))
+
+        # need to shift segmentation labels...
+        hip_mask_left = np.where(hip_mask_left == 5, 4, hip_mask_left)
+        hip_mask_right = np.where(hip_mask_right == 5, 4, hip_mask_right)
+
+        knee_mask_left = np.where(knee_mask_left == 5, 4, knee_mask_left)
+        knee_mask_right = np.where(knee_mask_right == 5, 4, knee_mask_right)
+
+        ankle_mask_left = np.where(ankle_mask_left == 5, 4, ankle_mask_left)
+        ankle_mask_right = np.where(ankle_mask_right == 5, 4, ankle_mask_right)
+        ankle_mask_left = np.where(ankle_mask_left == 2, 3, ankle_mask_left)
+        ankle_mask_right = np.where(ankle_mask_right == 2, 3, ankle_mask_right)
+        ankle_mask_left = np.where(ankle_mask_left == 1, 2, ankle_mask_left)
+        ankle_mask_right = np.where(ankle_mask_right == 1, 2, ankle_mask_right)
+
+        combined_mask_marked[0:hip_ends, :, :l_r_split] = hip_mask_left
+        combined_mask_marked[0:hip_ends, :, l_r_split:] = hip_mask_right
+
+        combined_mask_marked[hip_ends:knee_ends, :, :l_r_split] = knee_mask_left
+        combined_mask_marked[hip_ends:knee_ends, :, l_r_split:] = knee_mask_right
+
+        combined_mask_marked[knee_ends:, :, :l_r_split] = ankle_mask_left
+        combined_mask_marked[knee_ends:, :, l_r_split:] = ankle_mask_right
+
+        # combined_mask_marked = np.where(combined_mask_marked == 0, masking_value, combined_mask_marked)
+        self.marked_stack = combined_mask_marked
+
+    def to_base64(self) -> Tuple[list, list]:
+        """
+        Convert the image and marked stacks to base64 encoded strings.
+        :return:
+        """
+        with Pool() as pool:
+            image_layers = pool.map(encode_figure, self.image_stack)
+            func = partial(encode_figure, segmentation=True)
+            mask_layers = pool.map(func, self.marked_stack)
+
+        return image_layers, mask_layers
 
     def get_torsion_values(self) -> dict:
         """
@@ -260,3 +298,32 @@ class Examination:
         img = sitk.ReadImage(filename)
         mask = sitk.GetArrayFromImage(img)
         setattr(self, attribute, mask)
+
+    def save_to_pickle(self, filename: str):
+        """
+        Save the examination to a pickle file.
+        :param filename: The filename to save to.
+        :return:
+        """
+        with open(filename, 'wb') as f:
+            pickle.dump(self, f)
+
+
+def encode_figure(layer: np.ndarray, segmentation: bool = False) -> str:
+    fig = Figure(figsize=(20, 20))
+    ax = fig.subplots()
+    if segmentation:
+        print(np.unique(layer))
+        layer = np.ma.masked_where(layer < 4, layer)
+        cmap = colors.ListedColormap(['yellow', 'purple', 'lightblue', 'red'])
+        # cmap.set_under('k', alpha=0)
+        bounds = [1, 2, 3, 4, 5]
+        norm = colors.BoundaryNorm(bounds, cmap.N)
+        ax.imshow(layer, cmap='viridis')
+    else:
+        ax.imshow(layer, cmap='gray')
+
+    ax.axis('off')
+    buffer = BytesIO()
+    fig.savefig(buffer, format='png', transparent=True, bbox_inches='tight')
+    return base64.b64encode(buffer.getbuffer()).decode('ascii')

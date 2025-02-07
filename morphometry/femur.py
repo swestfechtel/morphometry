@@ -449,6 +449,7 @@ def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side:
     if proximal_orientation < 0:  # if hip_end is anterior to hip_start, the angle is negative
         proximal_angle = -proximal_angle
 
+    knee_mask = np.where(knee_mask == segmentation_label, 1, 0)
     knee_layer, knee_start, knee_end = get_knee_reference_line(knee_mask, bone='femur')  # for both image sides, knee_start is to the right of knee_end
     if knee_start[2] < knee_end[2]:  # if this is somehow not the case, swap the points
         tmp = knee_start

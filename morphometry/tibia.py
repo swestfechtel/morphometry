@@ -158,6 +158,7 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
             return angle, fig
 
     if mark_mask:
+        knee_mask = np.where(knee_mask == 1, tibia_label_knee, knee_mask)
         ankle_mask = draw_line(ankle_mask, ankle_layer, ankle_start, ankle_end)
         knee_mask = draw_line(knee_mask, knee_layer, knee_start, knee_end)
 
