@@ -267,8 +267,8 @@ def get_trochanter_minor(segmentation_mask: np.ndarray, femoral_head_centre: np.
     trochanter_major_layer = int(trochanter_major[0])
     inferior_mask = segmentation_mask.copy()
     inferior_mask[:trochanter_major_layer+2] = 0  # null everything superior to the trochanter major
-    print(f'Trochanter major located on layer {trochanter_major_layer}')
-    print(f'Spacing: {spacing}')
+    # print(f'Trochanter major located on layer {trochanter_major_layer}')
+    # print(f'Spacing: {spacing}')
 
     medial_extents = np.zeros(len(inferior_mask))
     for i in range(len(inferior_mask)):
@@ -285,32 +285,32 @@ def get_trochanter_minor(segmentation_mask: np.ndarray, femoral_head_centre: np.
         """
         tm = (int(trochanter_minor_layer), int(trochanter_minor[0]), int(trochanter_minor[1]))
         fh = (int(femoral_head_centre[0]), int(femoral_head_centre[1]), int(femoral_head_centre[2]))
-        print(f'Trochanter minor: {tm}, Femoral head: {fh}')
+        # print(f'Trochanter minor: {tm}, Femoral head: {fh}')
         tm_world = (int(trochanter_minor[1]), int(trochanter_minor[0]), int(trochanter_minor_layer))
         fh_world = (int(femoral_head_centre[2]), int(femoral_head_centre[1]), int(femoral_head_centre[0]))
         tm_world = hip_image.TransformContinuousIndexToPhysicalPoint(tm_world)
         fh_world = hip_image.TransformContinuousIndexToPhysicalPoint(fh_world)
         tm_world = np.array([tm_world[0], tm_world[2]])
         fh_world = np.array([fh_world[0], fh_world[2]])
-        print(f'Trochanter minor (world): {tm_world}, Femoral head (world): {fh_world}')
+        # print(f'Trochanter minor (world): {tm_world}, Femoral head (world): {fh_world}')
         distance_world = np.linalg.norm(np.array(tm_world) - np.array(fh_world))
         tm = np.array(tm) * spacing
         fh = np.array(fh) * spacing
         tm = np.array([tm[0], tm[2]])
         fh = np.array([fh[0], fh[2]])
-        print(f'Trochanter minor (adj): {tm}, Femoral head (adj): {fh}')
+        # print(f'Trochanter minor (adj): {tm}, Femoral head (adj): {fh}')
         distance_spacing = np.linalg.norm(np.array(tm) - np.array(fh))
-        print(f'Distance between trochanter minor and femoral head: {distance_world} (world), {distance_spacing} (spacing)')
-        if distance_world < 430:
+        # print(f'Distance between trochanter minor and femoral head: {distance_world} (world), {distance_spacing} (spacing)')
+        # if distance_world < 430:
         # if distance_spacing < 43:
-            print(f'Distance between trochanter minor and femoral head not plausible: {distance_world}')
+            # print(f'Distance between trochanter minor and femoral head not plausible: {distance_world}')
 
         # return True if (380 < distance < 480) else False
         return True if distance_world > 43 else False
         # return True if distance_spacing > 43 else False
 
     trochanter_minor_layer = np.argmax(medial_extents)
-    print(f'Layer with max medial extent: {trochanter_minor_layer}')
+    # print(f'Layer with max medial extent: {trochanter_minor_layer}')
     while True:
         # on that layer, get the most medial point, which should be the trochanter minor
         try:
@@ -407,7 +407,7 @@ def get_proximal_reference_line(segmentation_mask: np.ndarray, hip_image: sitk.I
         end[2] = end[2] + (segmentation_mask.shape[2] // 2 - end[2]) * 2  # flip z coordinate
         center[2] = center[2] - (center[2] - segmentation_mask.shape[2] // 2) * 2  # flip z coordinate
 
-    start: np.ndarray = np.array([layer_selected, center[1], center[2]])
+    start: np.ndarray = np.array([center[0], center[1], center[2]])
     return (start, end, r_fh, r_tm) if method == 'tomczak' else (start, end, r_fh)
 
 
@@ -433,7 +433,9 @@ def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side:
     landmarks = get_proximal_reference_line(hip_mask, hip_image=hip_image, side=side, method=method,
                                                                 segmentation_label=segmentation_label, x_ratio=x_ratio, isotropic=isotropic)
     hip_start = landmarks[0]
+    fhc_layer = hip_start[0]
     hip_end = landmarks[1]
+    hip_start[0] = hip_end[0]
     r_fh = landmarks[2]
     if method == 'tomczak':
         r_tm = landmarks[3]
@@ -501,7 +503,11 @@ def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side:
 
     if plot:
         fig, ax = plt.subplots(1, 2)
-        ax[0].imshow(hip_mask[hip_layer])
+        ax[0].imshow(np.where(hip_mask[hip_layer] == 0, np.nan, hip_mask[hip_layer]))
+        if method == 'murphy':
+            tmp = hip_mask[fhc_layer].copy()
+            tmp = np.where(tmp == 0, np.nan, tmp)
+            ax[0].imshow(tmp, alpha=.5)
         ax[0].plot([hip_start[2], hip_end[2]], [hip_start[1], hip_end[1]], 'r')
         ax[1].imshow(knee_mask[knee_layer])
         ax[1].plot([knee_start[2], knee_end[2]], [knee_start[1], knee_end[1]], 'r')
@@ -509,7 +515,6 @@ def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side:
             return angle, fig
 
     if mark_mask:
-        print(f'Marking landmarks on segmentation masks. hip_start = {hip_start} hip_end = {hip_end}')
         hip_mask = draw_line(hip_mask, hip_layer, hip_start, hip_end)
         hip_mask = draw_circle(hip_mask, hip_layer, r_fh, hip_start)
         if method == 'tomczak':
