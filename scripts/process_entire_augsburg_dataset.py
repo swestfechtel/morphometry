@@ -121,7 +121,7 @@ if __name__ == '__main__':
     with Pool() as pool:
         res = pool.map(process_patient, patients)
 
-    index = pd.MultiIndex.from_product([patients, ['right', 'left']], names=['patient', 'side'])
+    index = pd.MultiIndex.from_product([patients, ['right', 'left']], names=['Patient', 'Side'])
     df = pd.DataFrame(columns=['CCD (actual)', 'CCD (projected)', 'AT (Lee)', 'AT (Murphy)', 'TT', 'KRA'], index=index)
 
     for r in tqdm(res):
