@@ -1,10 +1,12 @@
 import numpy as np
 import SimpleITK as sitk
+from numpy import floating
+
 from morphometry.hip import get_femoral_head_center
 from morphometry.knee import get_knee_center
 from morphometry.utils import get_minimum_distance_between_line_and_point, get_point_orientation_to_vertical_line, \
     get_minimum_distance_between_line_and_point_
-from typing import Tuple
+from typing import Tuple, Any
 from scipy.ndimage import center_of_mass
 
 def get_mikulicz_line(hip_mask: np.ndarray, ankle_mask: np.ndarray, side: str = 'left', x_ratio: float = 1., isotropic: bool = False) -> Tuple[np.ndarray, np.ndarray]:
@@ -82,3 +84,27 @@ def calculate_mikulicz_deviation(hip_mask: np.ndarray, knee_mask: np.ndarray, an
     print(f'Knee center is to the {orientation} image side of the Mikulicz line.')
 
     return get_minimum_distance_between_line_and_point(fhc_world_2d, ac_world_2d, kc_world_2d)
+
+
+def calculate_leg_length(hip_image: sitk.Image, ankle_image: sitk.Image, hip_mask: np.ndarray, ankle_mask: np.ndarray) -> floating[Any]:
+    """
+    Calculate the length of the leg.
+    :param hip_image: Reference image of the hip.
+    :param ankle_image: Reference image of the ankle.
+    :param hip_mask: Segmentation mask of the hip.
+    :param ankle_mask: Segmentation mask of the ankle.
+    :return: The length of the leg.
+    """
+    hip_most_proximal_layer = np.min(np.argwhere(hip_mask == 1)[:, 0])
+    ankle_most_distal_layer = np.max(np.argwhere(ankle_mask == 1)[:, 0])
+
+    hip_com = center_of_mass(hip_mask[hip_most_proximal_layer])
+    hip_com = (hip_com[0], hip_com[1], float(hip_most_proximal_layer))  # cast to float because sitk cries otherwise...
+
+    ankle_com = center_of_mass(ankle_mask[ankle_most_distal_layer])  # remember that sitk and numpy ordering for coordinates are reversed
+    ankle_com = (ankle_com[0], ankle_com[1], float(ankle_most_distal_layer))
+
+    proximal_world = hip_image.TransformContinuousIndexToPhysicalPoint(hip_com)
+    distal_world = ankle_image.TransformContinuousIndexToPhysicalPoint(ankle_com)
+
+    return np.linalg.norm(np.array(proximal_world) - np.array(distal_world))

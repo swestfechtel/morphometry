@@ -8,7 +8,7 @@ from pathlib import Path
 from morphometry.femur import calculate_femoral_torsion
 from morphometry.tibia import calculate_tibial_torsion
 from morphometry.knee import calculate_knee_rotation_angle
-from morphometry.whole_leg import calculate_mikulicz_deviation
+from morphometry.whole_leg import calculate_mikulicz_deviation, calculate_leg_length
 from morphometry.ankle import calculate_pma_angle
 from morphometry.hip import calculate_ccd
 from morphometry.utils import correct_axis_ordering
@@ -111,7 +111,17 @@ def process_patient(patient):
     except (ValueError, IndexError, RuntimeError):
         kra_right = np.nan
 
-    return {'patient': patient, 'at_lee_left': at_lee_left, 'at_lee_right': at_lee_right, 'at_murphy_left': at_murphy_left, 'at_murphy_right': at_murphy_right, 'tt_left': tt_left, 'tt_right': tt_right, 'ccd_left': ccd_left, 'ccd_right': ccd_right, 'kra_left': kra_left, 'kra_right': kra_right}
+    try:
+        ll_left = calculate_leg_length(hip, ankle, left_hip, left_ankle)
+    except (ValueError, IndexError, RuntimeError):
+        ll_left = np.nan
+
+    try:
+        ll_right = calculate_leg_length(hip, ankle, right_hip, right_ankle)
+    except (ValueError, IndexError, RuntimeError):
+        ll_right = np.nan
+
+    return {'patient': patient, 'at_lee_left': at_lee_left, 'at_lee_right': at_lee_right, 'at_murphy_left': at_murphy_left, 'at_murphy_right': at_murphy_right, 'tt_left': tt_left, 'tt_right': tt_right, 'ccd_left': ccd_left, 'ccd_right': ccd_right, 'kra_left': kra_left, 'kra_right': kra_right, 'll_left': ll_left, 'll_right': ll_right}
 
 
 if __name__ == '__main__':
@@ -122,7 +132,7 @@ if __name__ == '__main__':
         res = pool.map(process_patient, patients)
 
     index = pd.MultiIndex.from_product([patients, ['right', 'left']], names=['Patient', 'Side'])
-    df = pd.DataFrame(columns=['CCD (actual)', 'CCD (projected)', 'AT (Lee)', 'AT (Murphy)', 'TT', 'KRA'], index=index)
+    df = pd.DataFrame(columns=['CCD (actual)', 'CCD (projected)', 'AT (Lee)', 'AT (Murphy)', 'TT', 'KRA', 'LL'], index=index)
 
     for r in tqdm(res):
         patient = r['patient']
@@ -141,6 +151,8 @@ if __name__ == '__main__':
         df.loc[(patient, 'right'), 'TT'] = r['tt_left']
         df.loc[(patient, 'left'), 'KRA'] = r['kra_right']
         df.loc[(patient, 'right'), 'KRA'] = r['kra_left']
+        df.loc[(patient, 'left'), 'LL'] = r['ll_right']
+        df.loc[(patient, 'right'), 'LL'] = r['ll_left']
 
     df = df.apply(lambda x: np.round(x, 1))
     df.to_excel('/home/simon/Data/Augsburg_large/results.xlsx')
