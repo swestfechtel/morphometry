@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from morphometry.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, calculate_alpha_angle, calculate_acetabular_depth, calculate_center_edge_angle, calculate_cartilage_thickness_knn
-from morphometry.utils import correct_axis_ordering
+from morphometry.utils import correct_axis_ordering, read_nifti
 from tqdm import tqdm
 
 
@@ -16,13 +16,15 @@ if __name__ == '__main__':
     df = pd.DataFrame(columns=['CCD', 'FAT', 'AA', 'AAV', 'AD', 'CT'], index=index)
     for patient in tqdm(patients):
         try:
-            mask = sitk.ReadImage(f'/home/simon/Downloads/Hamburg/simon/{patient}/Segmentation.seg.nrrd')
+            # mask = sitk.ReadImage(f'/home/simon/Downloads/Hamburg/simon/{patient}/Segmentation.seg.nrrd')
+            mask = read_nifti(f'/home/simon/Downloads/Hamburg/simon/{patient}/Segmentation.seg.nrrd')
         except RuntimeError as e:
             print(f'Patient {patient} could not be found.', e)
             continue
 
         try:
-            mask = correct_axis_ordering(mask)
+            # mask = correct_axis_ordering(mask)
+            pass
         except RuntimeError as e:
             print(f'Patient {patient} could not be corrected.', e)
             continue

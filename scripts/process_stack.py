@@ -1,9 +1,11 @@
 import sys
 sys.path.append('/home/simon/Work/morpohmetry')
 import SimpleITK as sitk
+import nibabel as nib
 from morphometry.femur import calculate_femoral_torsion
 from morphometry.tibia import calculate_tibial_torsion
 from morphometry.utils import correct_axis_ordering
+from morphometry.image_io import Image
 from argparse import ArgumentParser
 from matplotlib import pyplot as plt
 
@@ -13,12 +15,12 @@ if __name__ == '__main__':
     parser.add_argument('--hip_mask', type=str, help='Path to the hip segmentation mask.')
     parser.add_argument('--knee_mask', type=str, help='Path to the knee segmentation mask.')
     parser.add_argument('--ankle_mask', type=str, help='Path to the ankle segmentation mask.')
-    parser.add_argument('--flip_x', action='store_true', help='Whether the x-axis needs to be flipped.')
     parser.add_argument('-p', '--plot', action='store_true', help='Whether to plot the results.')
     parser.add_argument('-o', '--output', type=str, help='Path to save the results to.')
 
     args = parser.parse_args()
 
+    """
     hip = sitk.ReadImage(args.hip_mask)
     knee = sitk.ReadImage(args.knee_mask)
     ankle = sitk.ReadImage(args.ankle_mask)
@@ -26,17 +28,22 @@ if __name__ == '__main__':
     hip = correct_axis_ordering(hip)
     knee = correct_axis_ordering(knee)
     ankle = correct_axis_ordering(ankle)
+    """
+    hip = Image('nibabel')
+    hip.read_image(args.hip_mask)
+    hip.transform_coordinate_system()
+    knee = Image('nibabel')
+    knee.read_image(args.knee_mask)
+    knee.transform_coordinate_system()
+    ankle = Image('nibabel')
+    ankle.read_image(args.ankle_mask)
+    ankle.transform_coordinate_system()
 
-    x_ratio = abs(hip.GetSpacing()[2]) / 2 * abs(hip.GetSpacing()[0])
+    x_ratio = abs(hip.get_spacing()[0]) / 2 * abs(hip.get_spacing()[2])
 
-    hip_mask = sitk.GetArrayFromImage(hip)
-    knee_mask = sitk.GetArrayFromImage(knee)
-    ankle_mask = sitk.GetArrayFromImage(ankle)
-
-    if args.flip_x:
-        hip_mask = hip_mask[::-1]
-        knee_mask = knee_mask[::-1]
-        ankle_mask = ankle_mask[::-1]
+    hip_mask = hip.get_array()
+    knee_mask = knee.get_array()
+    ankle_mask = ankle.get_array()
 
     left_hip = hip_mask[:, :, :hip_mask.shape[2] // 2]
     right_hip = hip_mask[:, :, hip_mask.shape[2] // 2:]
@@ -44,6 +51,11 @@ if __name__ == '__main__':
     right_knee = knee_mask[:, :, knee_mask.shape[2] // 2:]
     left_ankle = ankle_mask[:, :, :ankle_mask.shape[2] // 2]
     right_ankle = ankle_mask[:, :, ankle_mask.shape[2] // 2:]
+
+    left_hip = nib.Nifti1Image(left_hip, hip.get_affine(), hip.get_header())
+    left_hip = Image(left_hip)
+    right_hip = nib.Nifti1Image(right_hip, hip.get_affine(), hip.get_header())
+    right_hip = Image(right_hip)
 
     if args.plot:
         try:

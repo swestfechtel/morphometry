@@ -1,15 +1,18 @@
 import math
 
 import numpy as np
-import SimpleITK as sitk
+import nibabel as nib
+import nibabel.orientations as nio
 
 from typing import Tuple, Optional
-from scipy.ndimage import binary_erosion
+from scipy.ndimage import binary_erosion, center_of_mass
+from scipy.ndimage import label as scipy_label
 from scipy.spatial import KDTree
 from scipy import optimize
 from skimage.transform import rotate
 from skimage.measure import regionprops, label
 from morphometry.bresenham import bresenhamline
+from tempfile import NamedTemporaryFile
 
 
 def calculate_angle_between_vectors(v1: np.ndarray, v2: np.ndarray) -> float:
@@ -87,9 +90,9 @@ def combine_masks(mask1: np.ndarray, mask2: np.ndarray) -> np.ndarray:
     return np.concatenate((mask1, mask2), 2)
 
 
-def correct_axis_ordering(image: sitk.Image) -> sitk.Image:
+def correct_axis_ordering(image: nib.Nifti1Image) -> nib.Nifti1Image:
     """
-    Transform SimpleITK image to comply with code expectations.
+    Transform nibabel image to comply with code expectations.
 
     The returned Image with axes [x, y, z] follows the following conventions:
         - the x-axis is the sagittal view, the y axis is the coronal view and the z axis is the axial view
@@ -97,92 +100,21 @@ def correct_axis_ordering(image: sitk.Image) -> sitk.Image:
         - the y-axis is ordered anterior to posterior, i.e. slice 0 of the coronal view is the most anterior slice
         - the z-axis is ordered from superior to inferior, i.e. slice 0 of the axial view is the most superior slice
 
-    :param image: A SimpleITK 3D image.
-    :return: A SimpleITK image conforming to code expectations.
+    :param image: A nibabel 3D image.
+    :return: A nibabel image conforming to code expectations.
     """
-    direction = list(image.GetDirection())
-    direction = [round(x) for x in direction]
-    x_row = direction[:3]
-    y_row = direction[3:6]
-    z_row = direction[6:]
+    data = image.get_fdata()
+    # data = np.swapaxes(data, 0, 2)
+    affine = image.affine
+    orientation = nib.orientations.io_orientation(affine)
+    std_orientation = nib.orientations.axcodes2ornt(('I', 'P', 'R'))
 
-    # figure out how axes are ordered. For details see Notion
-    if abs(x_row[0]) == 1:
-        sagittal_axis = 0
-        assert abs(x_row[1]) == 0 and abs(x_row[2]) == 0, f'Bad direction matrix: {direction}'
+    transform = nib.orientations.ornt_transform(orientation, std_orientation)
+    reoriented_data = nib.orientations.apply_orientation(data, transform)
+    new_affine = affine @ nib.orientations.inv_ornt_aff(transform, data.shape)
+    new_image = nib.Nifti1Image(reoriented_data, new_affine)
 
-    elif abs(y_row[0]) == 1:
-        sagittal_axis = 1
-        assert abs(y_row[1]) == 0 and abs(y_row[2]) == 0, f'Bad direction matrix: {direction}'
-
-    elif abs(z_row[0]) == 1:
-        sagittal_axis = 2
-        assert abs(z_row[1]) == 1 and abs(z_row[2]) == 1, f'Bad direction matrix: {direction}'
-
-    else:
-        raise RuntimeError(f'Bad direction matrix: {direction}')
-
-    if abs(x_row[1]) == 1:
-        coronal_axis = 0
-        assert abs(x_row[0]) == 0 and abs(x_row[2]) == 0, f'Bad direction matrix: {direction}'
-
-    elif abs(y_row[1]) == 1:
-        coronal_axis = 1
-        assert abs(y_row[0]) == 0 and abs(y_row[2]) == 0, f'Bad direction matrix: {direction}'
-
-    elif abs(z_row[1]) == 1:
-        coronal_axis = 2
-        assert abs(z_row[0]) == 0 and abs(z_row[2]) == 0, f'Bad direction matrix: {direction}'
-
-    else:
-        raise RuntimeError(f'Bad direction matrix: {direction}')
-
-    if abs(x_row[2]) == 1:
-        axial_axis = 0
-        assert abs(x_row[0]) == 0 and abs(x_row[1]) == 0, f'Bad direction matrix: {direction}'
-
-    elif abs(y_row[2]) == 1:
-        axial_axis = 1
-        assert abs(y_row[0]) == 0 and abs(y_row[1]) == 0, f'Bad direction matrix: {direction}'
-
-    elif abs(z_row[2]) == 1:
-        axial_axis = 2
-        assert abs(z_row[0]) == 0 and abs(z_row[1]) == 0, f'Bad direction matrix: {direction}'
-
-    else:
-        raise RuntimeError(f'Bad direction matrix: {direction}')
-
-    # reorder axes to sagittal, coronal, axial
-    image = sitk.PermuteAxes(image, [sagittal_axis, coronal_axis, axial_axis])
-
-    # sagittal_axis
-    zero_index_coordinate = image.TransformIndexToPhysicalPoint((0, 0, 0))[0]  # ordering of this function's output is always sagittal, coronal, axial
-    final_index_coordinate = image.TransformIndexToPhysicalPoint((image.GetSize()[0], 0, 0))[0]
-    if zero_index_coordinate > final_index_coordinate:  # if slice order is ascending from right to left, flip
-        sagittal_flip = True
-    else:
-        sagittal_flip = False
-
-    # coronal axis
-    zero_index_coordinate = image.TransformIndexToPhysicalPoint((0, 0, 0))[
-        1]  # ordering of this function's output is always sagittal, coronal, axial
-    final_index_coordinate = image.TransformIndexToPhysicalPoint((0, image.GetSize()[1], 0))[1]
-    if zero_index_coordinate > final_index_coordinate:  # if slice order is ascending from posterior to anterior, flip
-        coronal_flip = True
-    else:
-        coronal_flip = False
-
-    # axial axis
-    zero_index_coordinate = image.TransformIndexToPhysicalPoint((0, 0, 0))[
-        2]  # ordering of this function's output is always sagittal, coronal, axial
-    final_index_coordinate = image.TransformIndexToPhysicalPoint((0, 0, image.GetSize()[2]))[2]
-    if zero_index_coordinate < final_index_coordinate:  # if slice order is ascending from inferior to superior, flip
-        axial_flip = True
-    else:
-        axial_flip = False
-
-    image = sitk.Flip(image, [sagittal_flip, coronal_flip, axial_flip])
-    return image
+    return new_image
 
 
 def determine_min_y(mask: np.ndarray, percentage: float = 0.5) -> int:
@@ -651,6 +583,45 @@ def sphere_fit(point_cloud: np.ndarray) -> Tuple[float, np.ndarray]:
     return radius, np.array([C[0], C[1], C[2]]).T[0]  # not sure why this is necessary, returns a column vector otherwise
 
 
+def split_masks(segmentation_mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Split a segmentation mask into two separate masks, one for the left and one for the right bone.
+    :param segmentation_mask: A 3D segmentation mask.
+    :return:
+    """
+    # Step 1: Label connected components
+    labels, num_features = scipy_label(segmentation_mask)
+
+    # Step 2: Compute properties of each component
+    components = []
+    for i in range(1, num_features + 1):
+        # Compute volume
+        volume = np.sum(labels == i)
+        # Compute centroid
+        centroid = center_of_mass(segmentation_mask, labels, i)
+        components.append({'label': i, 'volume': volume, 'centroid': centroid})
+
+    # Step 3: Identify the two largest components
+    components.sort(key=lambda x: x['volume'], reverse=True)
+    bone_1 = components[0]
+    bone_2 = components[1]
+
+    # Step 4: Determine which bone is left and which is right
+    # Adjust the index [2] if the left-right axis is not the first axis
+    if bone_1['centroid'][2] < bone_2['centroid'][2]:
+        left_label = bone_1['label']
+        right_label = bone_2['label']
+    else:
+        left_label = bone_2['label']
+        right_label = bone_1['label']
+
+    # Step 5: Create separate masks
+    left_mask = (labels == left_label)
+    right_mask = (labels == right_label)
+
+    return left_mask.astype(np.uint8), right_mask.astype(np.uint8)
+
+
 def transform_point(point: np.ndarray, origin: np.ndarray, angle: float, offset: np.ndarray = None) -> np.ndarray:
     """
     Transform a point on a layer (2D) into the rotated mask.
@@ -666,39 +637,3 @@ def transform_point(point: np.ndarray, origin: np.ndarray, angle: float, offset:
         new_point = new_point + offset
 
     return new_point
-
-
-def translate_image_coord_to_world_coord(image_coord: np.ndarray, reference_image: sitk.Image) -> np.ndarray:
-    """
-    Transform image coordinates to world coordinates.
-    Can also be achieved with reference_image.TransformIndexToPhysicalPoint(image_coord).
-    https://itk.org/pipermail/insight-users/2010-June/037400.html
-    :param image_coord: A point in image coordinates to transform.
-    :param reference_image: A reference SimpleITK image.
-    :return: The transformed coordinates.
-    """
-    image_coord = np.array(list(reversed(image_coord)))  # because sitk and numpy ordering is flipped
-    D_ = reference_image.GetDirection()
-    D = np.empty((3,3))
-    D[0] = np.array(D_[0:3])
-    D[1] = np.array(D_[3:6])
-    D[2] = np.array(D_[6:])
-    S = reference_image.GetSpacing()
-    O = reference_image.GetOrigin()
-    S2 = np.zeros((3,3))
-    np.fill_diagonal(S2, S)
-
-    world_coordinates = D @ S2 @ image_coord.T + O
-    return np.array(list(reversed(world_coordinates)))
-
-
-def write_mask(mask: np.ndarray, ref_image: sitk.Image, filename: str) -> None:
-    """
-    Write a numpy segmentation mask to a SimpleITK image file.
-    :param mask: A numpy segmentation mask.
-    :param ref_image: The reference image from which the segmentation mask was derived.
-    :param filename: The filename to write the mask to.
-    """
-    mask = sitk.GetImageFromArray(mask)
-    mask.CopyInformation(ref_image)
-    sitk.WriteImage(mask, filename)

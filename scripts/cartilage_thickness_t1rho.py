@@ -1,4 +1,5 @@
 from morphometry.cartilage import knee
+from morphometry.utils import read_nifti
 from matplotlib import pyplot as plt
 from pathlib import Path
 from tqdm import tqdm
@@ -89,23 +90,32 @@ if __name__ == '__main__':
         if str(path.name).__contains__('.csv'):
             continue
 
-        unloaded = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/{path.name}/1Relaxed/1Relaxed.nii.gz')
-        med_to_lat = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/{path.name}/2MedToLat/2MedToLat.nii.gz')
-        lat_to_med = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/{path.name}/3LatToMed/3LatToMed.nii.gz')
+        # unloaded = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/{path.name}/1Relaxed/1Relaxed.nii.gz')
+        # med_to_lat = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/{path.name}/2MedToLat/2MedToLat.nii.gz')
+        # lat_to_med = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/{path.name}/3LatToMed/3LatToMed.nii.gz')
+        unloaded = read_nifti(f'{data_path}/Duesseldorf/T1rho/{path.name}/1Relaxed/1Relaxed.nii.gz')
+        med_to_lat = read_nifti(f'{data_path}/Duesseldorf/T1rho/{path.name}/2MedToLat/2MedToLat.nii.gz')
+        lat_to_med = read_nifti(f'{data_path}/Duesseldorf/T1rho/{path.name}/3LatToMed/3LatToMed.nii.gz')
 
         unloaded_df, med_to_lat_df, lat_to_med_df = process_patient(path.name, unloaded, med_to_lat, lat_to_med, unloaded_df, med_to_lat_df, lat_to_med_df)
 
         if str(path.name) == 'P04':
-            lat_to_med_new = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/P04/3LatToMed/3LatToMednew.nii.gz')
-            med_to_lat_new = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/P04/2MedToLat/2MedToLatnew.nii.gz')
-            unloaded_new = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/P04/1Relaxed/1Relaxednew.nii.gz')
+            # lat_to_med_new = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/P04/3LatToMed/3LatToMednew.nii.gz')
+            # med_to_lat_new = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/P04/2MedToLat/2MedToLatnew.nii.gz')
+            # unloaded_new = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/P04/1Relaxed/1Relaxednew.nii.gz')
+            lat_to_med_new = read_nifti(f'{data_path}/Duesseldorf/T1rho/P04/3LatToMed/3LatToMednew.nii.gz')
+            med_to_lat_new = read_nifti(f'{data_path}/Duesseldorf/T1rho/P04/2MedToLat/2MedToLatnew.nii.gz')
+            unloaded_new = read_nifti(f'{data_path}/Duesseldorf/T1rho/P04/1Relaxed/1Relaxednew.nii.gz')
 
             unloaded_df, med_to_lat_df, lat_to_med_df = process_patient('P04_new', unloaded_new, med_to_lat_new, lat_to_med_new, unloaded_df, med_to_lat_df, lat_to_med_df)
 
         if str(path.name) == 'P10':
-            lat_to_med_new = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/P10/3LatToMed/3LatToMedNEW.nii.gz')
-            med_to_lat_new = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/P10/2MedToLat/2MedToLatNEW.nii.gz')
-            unloaded_new = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/P10/1Relaxed/1RelaxedNEW.nii.gz')
+            # lat_to_med_new = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/P10/3LatToMed/3LatToMedNEW.nii.gz')
+            # med_to_lat_new = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/P10/2MedToLat/2MedToLatNEW.nii.gz')
+            # unloaded_new = sitk.ReadImage(f'{data_path}/Duesseldorf/T1rho/P10/1Relaxed/1RelaxedNEW.nii.gz')
+            lat_to_med_new = read_nifti(f'{data_path}/Duesseldorf/T1rho/P10/3LatToMed/3LatToMedNEW.nii.gz')
+            med_to_lat_new = read_nifti(f'{data_path}/Duesseldorf/T1rho/P10/2MedToLat/2MedToLatNEW.nii.gz')
+            unloaded_new = read_nifti(f'{data_path}/Duesseldorf/T1rho/P10/1Relaxed/1RelaxedNEW.nii.gz')
 
             unloaded_df, med_to_lat_df, lat_to_med_df = process_patient('P10_new', unloaded_new, med_to_lat_new,
                                                                         lat_to_med_new, unloaded_df, med_to_lat_df,

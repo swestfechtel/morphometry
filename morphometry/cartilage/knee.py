@@ -1,14 +1,14 @@
-import SimpleITK as sitk
 import pandas as pd
 import pyvista as pv
 import numpy as np
 from typing import Tuple
 from scipy.spatial import KDTree
 from sklearn.cluster import KMeans
+from morphometry.image_io import Image
 
 
 class Tibia:
-    def __init__(self, image: sitk.Image, cartilage_label: int):
+    def __init__(self, image: Image, cartilage_label: int):
         self.image = image
         self.cartilage_label = cartilage_label
         self.left_landmarks, self.right_landmarks = None, None

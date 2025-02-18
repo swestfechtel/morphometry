@@ -4,6 +4,7 @@ sys.path.append('/home/simon/Work/morpohmetry')
 import SimpleITK as sitk
 import pandas as pd
 import numpy as np
+import nibabel as nib
 from pathlib import Path
 from morphometry.femur import calculate_femoral_torsion
 from morphometry.tibia import calculate_tibial_torsion
@@ -12,6 +13,7 @@ from morphometry.whole_leg import calculate_mikulicz_deviation, calculate_leg_le
 from morphometry.ankle import calculate_pma_angle
 from morphometry.hip import calculate_ccd
 from morphometry.utils import correct_axis_ordering
+from morphometry.image_io import Image
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 from multiprocessing import Pool
@@ -19,26 +21,25 @@ from multiprocessing import Pool
 
 def process_patient(patient):
     try:
-        hip = sitk.ReadImage(f'/home/simon/Data/Augsburg_large/preprocessed/{patient}/hip_seg.nii.gz')
-        knee = sitk.ReadImage(f'/home/simon/Data/Augsburg_large/preprocessed/{patient}/knee_seg.nii.gz')
-        ankle = sitk.ReadImage(f'/home/simon/Data/Augsburg_large/preprocessed/{patient}/ankle_seg.nii.gz')
-    except RuntimeError as e:
+        hip = Image('nibabel')
+        hip.read_image(f'/home/simon/Data/Augsburg_large/preprocessed/{patient}/hip_seg.nii.gz')
+        knee = Image('nibabel')
+        knee.read_image(f'/home/simon/Data/Augsburg_large/preprocessed/{patient}/knee_seg.nii.gz')
+        ankle = Image('nibabel')
+        ankle.read_image(f'/home/simon/Data/Augsburg_large/preprocessed/{patient}/ankle_seg.nii.gz')
+    except FileNotFoundError as e:
         print(f'Patient {patient} could not be found.')
         return {'patient': patient}
 
-    try:
-        hip = correct_axis_ordering(hip)
-        knee = correct_axis_ordering(knee)
-        ankle = correct_axis_ordering(ankle)
-    except (RuntimeError, AssertionError) as e:
-        print(f'Patient {patient} could not be processed.', e)
-        return {'patient': patient}
+    hip.transform_coordinate_system()
+    knee.transform_coordinate_system()
+    ankle.transform_coordinate_system()
 
-    x_ratio = abs(hip.GetSpacing()[2]) / 2 * abs(hip.GetSpacing()[0])
+    x_ratio = abs(hip.get_spacing()[0]) / 2 * abs(hip.get_spacing()[2])
 
-    hip_mask = sitk.GetArrayFromImage(hip)
-    knee_mask = sitk.GetArrayFromImage(knee)
-    ankle_mask = sitk.GetArrayFromImage(ankle)
+    hip_mask = hip.get_array()
+    knee_mask = knee.get_array()
+    ankle_mask = ankle.get_array()
 
     left_hip = hip_mask[:, :, :hip_mask.shape[2] // 2]
     right_hip = hip_mask[:, :, hip_mask.shape[2] // 2:]
@@ -47,79 +48,94 @@ def process_patient(patient):
     left_ankle = ankle_mask[:, :, :ankle_mask.shape[2] // 2]
     right_ankle = ankle_mask[:, :, ankle_mask.shape[2] // 2:]
 
+    left_hip = nib.Nifti1Image(left_hip, hip.get_affine(), hip.get_header())
+    left_hip = Image(left_hip)
+    right_hip = nib.Nifti1Image(right_hip, hip.get_affine(), hip.get_header())
+    right_hip = Image(right_hip)
+    left_knee = nib.Nifti1Image(left_knee, knee.get_affine(), knee.get_header())
+    left_knee = Image(left_knee)
+    right_knee = nib.Nifti1Image(right_knee, knee.get_affine(), knee.get_header())
+    right_knee = Image(right_knee)
+    left_ankle = nib.Nifti1Image(left_ankle, ankle.get_affine(), ankle.get_header())
+    left_ankle = Image(left_ankle)
+    right_ankle = nib.Nifti1Image(right_ankle, ankle.get_affine(), ankle.get_header())
+    right_ankle = Image(right_ankle)
+
     try:
-        at_lee_left, fig = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=True)
+        at_lee_left, fig = calculate_femoral_torsion(left_hip, left_knee.get_array(), side='left', x_ratio=x_ratio, plot=True)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/{patient}_lee_left.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError):
         at_lee_left = np.nan
 
     try:
-        at_lee_right, fig = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio, plot=True)
+        at_lee_right, fig = calculate_femoral_torsion(right_hip, right_knee.get_array(), side='right', x_ratio=x_ratio, plot=True)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/{patient}_lee_right.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError):
         at_lee_right = np.nan
 
     try:
-        at_murphy_left, fig = calculate_femoral_torsion(left_hip, left_knee, 'left', 'murphy', x_ratio=x_ratio,
-                                                   hip_image=hip, plot=True)
+        at_murphy_left, fig = calculate_femoral_torsion(left_hip, left_knee.get_array(), 'left', 'murphy', x_ratio=x_ratio,
+                                                 plot=True)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/{patient}_murphy_left.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError):
         at_murphy_left = np.nan
 
     try:
-        at_murphy_right, fig = calculate_femoral_torsion(right_hip, right_knee, 'right', 'murphy', x_ratio=x_ratio,
-                                                    hip_image=hip, plot=True)
+        at_murphy_right, fig = calculate_femoral_torsion(right_hip, right_knee.get_array(), 'right', 'murphy', x_ratio=x_ratio,
+                                                    plot=True)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/{patient}_murphy_right.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError):
         at_murphy_right = np.nan
 
     try:
-        tt_left = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2,
+        tt_left = calculate_tibial_torsion(left_knee.get_array(), left_ankle.get_array(), tibia_label_knee=2,
                                            tibia_label_ankle=1,
                                            fibula_label=2, side='left', plot=False)
     except (ValueError, IndexError, RuntimeError):
         tt_left = np.nan
 
     try:
-        tt_right = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2,
+        tt_right = calculate_tibial_torsion(right_knee.get_array(), right_ankle.get_array(), tibia_label_knee=2,
                                             tibia_label_ankle=1, fibula_label=2, side='right',
                                             plot=False)
     except (ValueError, IndexError, RuntimeError):
         tt_right = np.nan
 
     try:
-        ccd_left = calculate_ccd(left_hip, 'left', 1, False, x_ratio)
+        ccd_left = calculate_ccd(left_hip.get_array(), 'left', 1, False, x_ratio)
     except (ValueError, IndexError, RuntimeError):
         ccd_left = (np.nan, np.nan)
 
     try:
-        ccd_right = calculate_ccd(right_hip, 'right', 1, False, x_ratio)
+        ccd_right = calculate_ccd(right_hip.get_array(), 'right', 1, False, x_ratio)
     except (ValueError, IndexError, RuntimeError):
         ccd_right = (np.nan, np.nan)
 
     try:
-        kra_left = calculate_knee_rotation_angle(left_knee, 1, 2, False)
+        kra_left = calculate_knee_rotation_angle(left_knee.get_array(), 1, 2, False)
     except (ValueError, IndexError, RuntimeError):
         kra_left = np.nan
 
     try:
-        kra_right = calculate_knee_rotation_angle(right_knee, 1, 2, False)
+        kra_right = calculate_knee_rotation_angle(right_knee.get_array(), 1, 2, False)
     except (ValueError, IndexError, RuntimeError):
         kra_right = np.nan
 
     try:
-        ll_left = calculate_leg_length(hip, ankle, left_hip, left_ankle)
-    except (ValueError, IndexError, RuntimeError):
+        ll_left = calculate_leg_length(left_hip, left_ankle)
+    except (ValueError, IndexError, RuntimeError) as e:
         ll_left = np.nan
+        print(e)
 
     try:
-        ll_right = calculate_leg_length(hip, ankle, right_hip, right_ankle)
-    except (ValueError, IndexError, RuntimeError):
+        ll_right = calculate_leg_length(right_hip, right_ankle)
+    except (ValueError, IndexError, RuntimeError) as e:
         ll_right = np.nan
+        print(e)
 
     return {'patient': patient, 'at_lee_left': at_lee_left, 'at_lee_right': at_lee_right, 'at_murphy_left': at_murphy_left, 'at_murphy_right': at_murphy_right, 'tt_left': tt_left, 'tt_right': tt_right, 'ccd_left': ccd_left, 'ccd_right': ccd_right, 'kra_left': kra_left, 'kra_right': kra_right, 'll_left': ll_left, 'll_right': ll_right}
 
@@ -155,5 +171,5 @@ if __name__ == '__main__':
         df.loc[(patient, 'right'), 'LL'] = r['ll_left']
 
     df = df.apply(lambda x: np.round(x, 1))
-    df.to_excel('/home/simon/Data/Augsburg_large/results.xlsx')
+    df.to_excel('/home/simon/Data/Augsburg_large/results_.xlsx')
     print(f'{df.shape[0] - df.dropna().shape[0]} patients have missing values.')

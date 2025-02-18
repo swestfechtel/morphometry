@@ -11,13 +11,14 @@ from nnunetv2.paths import nnUNet_results
 from batchgenerators.utilities.file_and_folder_operations import join
 from morphometry.femur import calculate_femoral_torsion
 from morphometry.tibia import calculate_tibial_torsion
-from morphometry.utils import correct_axis_ordering
+from morphometry.utils import correct_axis_ordering, read_nifti
 from typing import Union, Tuple
 from io import BytesIO
 from matplotlib.figure import Figure
 from matplotlib import colors, cm
 from multiprocessing import Pool
 from functools import partial
+from tempfile import NamedTemporaryFile
 
 
 masking_value = -1
@@ -56,7 +57,11 @@ class Examination:
         dicom_names = reader.GetGDCMSeriesFileNames(directory)
         reader.SetFileNames(dicom_names)
         self.image = reader.Execute()
-        self.corrected_image = correct_axis_ordering(self.image)
+        with NamedTemporaryFile(suffix='.nii') as f:
+            sitk.WriteImage(self.image, f.name)
+            self.corrected_image = read_nifti(f.name)
+
+        # self.corrected_image = correct_axis_ordering(self.image)
         self.image_stack = sitk.GetArrayFromImage(self.corrected_image)
 
     def read_dicom_metadata(self, directory: str):
@@ -86,17 +91,20 @@ class Examination:
         :return:
         """
         cpd = ruptures.KernelCPD()
-        image_array = sitk.GetArrayFromImage(self.image)
+        image_array = sitk.GetArrayFromImage(self.corrected_image)
         image_array = np.where(image_array < 50, 0, image_array)
         num_pixels = np.array([np.count_nonzero(x) for x in image_array])
         breakpoints = cpd.fit_predict(num_pixels, 2)  # two breakpoints: ankle-knee, knee-hip
-        self.ankle = self.image[:, :, :breakpoints[0]]
-        self.knee = self.image[:, :, breakpoints[0]:breakpoints[1]]
-        self.hip = self.image[:, :, breakpoints[1]:]
+        # self.ankle = self.corrected_image[:, :, :breakpoints[0]]
+        # self.knee = self.corrected_image[:, :, breakpoints[0]:breakpoints[1]]
+        # self.hip = self.corrected_image[:, :, breakpoints[1]:]
+        self.hip = self.corrected_image[:, :, :breakpoints[0]]
+        self.knee = self.corrected_image[:, :, breakpoints[0]:breakpoints[1]]
+        self.ankle = self.corrected_image[:, :, breakpoints[1]:]
 
-        self.hip = correct_axis_ordering(self.hip)  # get all axes into expected ordering
-        self.knee = correct_axis_ordering(self.knee)
-        self.ankle = correct_axis_ordering(self.ankle)
+        # self.hip = correct_axis_ordering(self.hip)  # get all axes into expected ordering
+        # self.knee = correct_axis_ordering(self.knee)
+        # self.ankle = correct_axis_ordering(self.ankle)
 
     def compute_segmentations(self):
         """
@@ -295,8 +303,9 @@ class Examination:
         """
         attribute = f'{part}_mask'
         assert hasattr(self, attribute), f'Part {part} does not exist.'
-        img = sitk.ReadImage(filename)
-        mask = sitk.GetArrayFromImage(img)
+        # img = sitk.ReadImage(filename)
+        image = read_nifti(filename)
+        mask = sitk.GetArrayFromImage(image)
         setattr(self, attribute, mask)
 
     def save_to_pickle(self, filename: str):

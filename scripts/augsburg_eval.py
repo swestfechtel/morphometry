@@ -9,7 +9,7 @@ from morphometry.knee import calculate_knee_rotation_angle
 from morphometry.whole_leg import calculate_mikulicz_deviation
 from morphometry.ankle import calculate_pma_angle
 from morphometry.hip import calculate_ccd
-from morphometry.utils import correct_axis_ordering, write_mask, combine_masks
+from morphometry.utils import correct_axis_ordering, write_mask, combine_masks, read_nifti
 from matplotlib import pyplot as plt
 
 
@@ -26,16 +26,19 @@ if __name__ == '__main__':
         patient = r.search(file.name)[0]
         print(f'Processing patient {patient}...')
         try:
-            hip = sitk.ReadImage(f'/home/simon/Downloads/Augsburg/labels/huefte/t1_tse_tra_Huften_bds_{patient}.nii.gz')
-            knee = sitk.ReadImage(f'/home/simon/Downloads/Augsburg/labels/knie/t1_tse_tra_Knie_{patient}.nii.gz')
-            ankle = sitk.ReadImage(f'/home/simon/Downloads/Augsburg/labels/osg/t1_tse_tra_OSG_{patient}.nii.gz')
+            # hip = sitk.ReadImage(f'/home/simon/Downloads/Augsburg/labels/huefte/t1_tse_tra_Huften_bds_{patient}.nii.gz')
+            # knee = sitk.ReadImage(f'/home/simon/Downloads/Augsburg/labels/knie/t1_tse_tra_Knie_{patient}.nii.gz')
+            # ankle = sitk.ReadImage(f'/home/simon/Downloads/Augsburg/labels/osg/t1_tse_tra_OSG_{patient}.nii.gz')
+            hip = read_nifti(f'/home/simon/Downloads/Augsburg/labels/huefte/t1_tse_tra_Huften_bds_{patient}.nii.gz')
+            knee = read_nifti(f'/home/simon/Downloads/Augsburg/labels/knie/t1_tse_tra_Knie_{patient}.nii.gz')
+            ankle = read_nifti(f'/home/simon/Downloads/Augsburg/labels/osg/t1_tse_tra_OSG_{patient}.nii.gz')
         except RuntimeError as e:
             print(f'Patient {patient} could not be found.', e)
             continue
 
-        hip = correct_axis_ordering(hip)
-        knee = correct_axis_ordering(knee)
-        ankle = correct_axis_ordering(ankle)
+        # hip = correct_axis_ordering(hip)
+        # knee = correct_axis_ordering(knee)
+        # ankle = correct_axis_ordering(ankle)
 
         x_ratio = abs(hip.GetSpacing()[2]) / 2 * abs(hip.GetSpacing()[0])
 

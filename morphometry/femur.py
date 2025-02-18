@@ -1,17 +1,16 @@
 import math
-from typing import Tuple
-
 import numpy as np
-import SimpleITK as sitk
+import nibabel as nib
 from matplotlib import pyplot as plt
 from scipy.ndimage import center_of_mass
 from scipy.optimize import curve_fit
 from skimage.measure import find_contours
-from morphometry.bresenham import bresenhamline
 from morphometry.hip import get_femoral_head_center
 from morphometry.knee import get_knee_reference_line
 from morphometry.utils import rotate_mask_dorsal_points, find_notch, transform_point, points_on_circle, \
     get_contour, calculate_angle_between_vectors, circle_fit, draw_circle, draw_line
+from morphometry.image_io import Image
+from typing import Tuple
 
 """
 All functions assume axis ordering is x = axial, y = coronal, z = sagittal.
@@ -19,7 +18,7 @@ All functions assume axis ordering is x = axial, y = coronal, z = sagittal.
 
 
 def contour_femoral_neck(mask: np.ndarray, contour: np.ndarray, layer_selected: int, center: np.ndarray, r: float) -> \
-Tuple[np.ndarray, np.ndarray, float, float]:
+        Tuple[np.ndarray, np.ndarray, float, float]:
     """
     Get the contour of the femoral neck.
     :param mask: 3d segmentation mask
@@ -183,7 +182,8 @@ def get_femoral_neck_base_(segmentation_mask: np.ndarray) -> np.ndarray:
         if np.count_nonzero(segmentation_mask[i]) == 0:
             continue
 
-        medial_extent = np.argwhere(segmentation_mask[i])[:, 1].max()  # get the maximum x coordinate, i.e. most medial extent of this slice
+        medial_extent = np.argwhere(segmentation_mask[i])[:,
+                        1].max()  # get the maximum x coordinate, i.e. most medial extent of this slice
         if medial_extent < max_medial_extent:  # if medial extent of this slice is smaller than the previous one, medial extent is now decreasing
             decreasing = True
             max_medial_extent = medial_extent
@@ -200,20 +200,19 @@ def get_femoral_neck_base_(segmentation_mask: np.ndarray) -> np.ndarray:
     return center
 
 
-def get_trochanter_major(segmentation_mask: np.ndarray, femoral_head_centre: np.ndarray, hip_image: sitk.Image) -> np.ndarray:
+def get_trochanter_major(hip_image: Image, femoral_head_centre: np.ndarray) -> np.ndarray:
     """
     Find the trochanter major.
 
-    :param segmentation_mask: A 3D segmentation mask of the femur.
+    :param hip_image: An Image object of the hip segmentation mask.
     :param femoral_head_centre: The centre of the femoral head.
-    :param hip_image: SimpleITK reference image of the hip.
     :return: The coordinates of the trochanter major.
     """
-    lateral_extents = np.zeros(len(segmentation_mask))
+    lateral_extents = np.zeros(hip_image.get_size()[0])
     # iterate from superior to inferior and get the maximum lateral extent of each layer
-    for i in range(len(segmentation_mask)):
-        if np.count_nonzero(segmentation_mask[i]):
-            lateral_extents[i] = np.argwhere(segmentation_mask[i])[:, 1].min()
+    for i in range(hip_image.get_size()[0]):
+        if np.count_nonzero(hip_image.get_array()[i]):
+            lateral_extents[i] = np.argwhere(hip_image.get_array()[i])[:, 1].min()
         else:
             lateral_extents[i] = 1000
 
@@ -226,8 +225,8 @@ def get_trochanter_major(segmentation_mask: np.ndarray, femoral_head_centre: np.
         return True
         tm = (int(trochanter_major_layer), int(trochanter_major[0]), int(trochanter_major[1]))
         fh = (int(femoral_head_centre[0]), int(femoral_head_centre[1]), int(femoral_head_centre[2]))
-        tm_world = hip_image.TransformIndexToPhysicalPoint(tm)
-        fh_world = hip_image.TransformIndexToPhysicalPoint(fh)
+        tm_world = hip_image.transform_index_to_physical_point(tm)
+        fh_world = hip_image.transform_index_to_physical_point(fh)
         distance = np.linalg.norm(np.array(tm_world) - np.array(fh_world))
 
         return True if (425 < distance < 515) else False
@@ -237,8 +236,10 @@ def get_trochanter_major(segmentation_mask: np.ndarray, femoral_head_centre: np.
     while True:
         # on that layer, get the most lateral point, which should be the trochanter major
         try:
-            trochanter_major_z = np.argwhere(segmentation_mask[trochanter_major_layer])[:, 1].min()  # get the minimum z coordinate, i.e. most lateral extent of this slice
-            trochanter_major_y = np.median(np.argwhere(segmentation_mask[trochanter_major_layer, :, trochanter_major_z]))  # select all points with the same x coordinate and get the median y coordinate
+            trochanter_major_z = np.argwhere(hip_image.get_array()[trochanter_major_layer])[:,
+                                 1].min()  # get the minimum z coordinate, i.e. most lateral extent of this slice
+            trochanter_major_y = np.median(np.argwhere(hip_image.get_array()[trochanter_major_layer, :,
+                                                       trochanter_major_z]))  # select all points with the same x coordinate and get the median y coordinate
             trochanter_major = np.array([trochanter_major_y, trochanter_major_z])
         except IndexError:
             raise RuntimeError('Could not find a plausible trochanter major.')
@@ -252,21 +253,19 @@ def get_trochanter_major(segmentation_mask: np.ndarray, femoral_head_centre: np.
     return np.array([trochanter_major_layer, trochanter_major[0], trochanter_major[1]])
 
 
-def get_trochanter_minor(segmentation_mask: np.ndarray, femoral_head_centre: np.ndarray, hip_image: sitk.Image) -> np.ndarray:
+def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray) -> np.ndarray:
     """
     Find the trochanter minor.
 
-    :param segmentation_mask: A 3D segmentation mask of the femur.
+    :param hip_image: An Image object of the hip segmentation mask.
     :param femoral_head_centre: The centre of the femoral head.
-    :param hip_image: SimpleITK reference image of the hip.
     :return: The coordinates of the trochanter minor.
     """
-    spacing = hip_image.GetSpacing()
-    spacing = np.array([spacing[2], spacing[1], spacing[0]])
-    trochanter_major = get_trochanter_major(segmentation_mask, femoral_head_centre, hip_image)
+    spacing = hip_image.get_spacing()
+    trochanter_major = get_trochanter_major(hip_image, femoral_head_centre)
     trochanter_major_layer = int(trochanter_major[0])
-    inferior_mask = segmentation_mask.copy()
-    inferior_mask[:trochanter_major_layer+2] = 0  # null everything superior to the trochanter major
+    inferior_mask = hip_image.get_array().copy()
+    inferior_mask[:trochanter_major_layer + 2] = 0  # null everything superior to the trochanter major
     # print(f'Trochanter major located on layer {trochanter_major_layer}')
     # print(f'Spacing: {spacing}')
 
@@ -286,10 +285,8 @@ def get_trochanter_minor(segmentation_mask: np.ndarray, femoral_head_centre: np.
         tm = (int(trochanter_minor_layer), int(trochanter_minor[0]), int(trochanter_minor[1]))
         fh = (int(femoral_head_centre[0]), int(femoral_head_centre[1]), int(femoral_head_centre[2]))
         # print(f'Trochanter minor: {tm}, Femoral head: {fh}')
-        tm_world = (int(trochanter_minor[1]), int(trochanter_minor[0]), int(trochanter_minor_layer))
-        fh_world = (int(femoral_head_centre[2]), int(femoral_head_centre[1]), int(femoral_head_centre[0]))
-        tm_world = hip_image.TransformContinuousIndexToPhysicalPoint(tm_world)
-        fh_world = hip_image.TransformContinuousIndexToPhysicalPoint(fh_world)
+        tm_world = hip_image.transform_index_to_physical_point(tm)
+        fh_world = hip_image.transform_index_to_physical_point(fh)
         tm_world = np.array([tm_world[0], tm_world[2]])
         fh_world = np.array([fh_world[0], fh_world[2]])
         # print(f'Trochanter minor (world): {tm_world}, Femoral head (world): {fh_world}')
@@ -303,7 +300,7 @@ def get_trochanter_minor(segmentation_mask: np.ndarray, femoral_head_centre: np.
         # print(f'Distance between trochanter minor and femoral head: {distance_world} (world), {distance_spacing} (spacing)')
         # if distance_world < 430:
         # if distance_spacing < 43:
-            # print(f'Distance between trochanter minor and femoral head not plausible: {distance_world}')
+        # print(f'Distance between trochanter minor and femoral head not plausible: {distance_world}')
 
         # return True if (380 < distance < 480) else False
         return True if distance_world > 43 else False
@@ -314,8 +311,10 @@ def get_trochanter_minor(segmentation_mask: np.ndarray, femoral_head_centre: np.
     while True:
         # on that layer, get the most medial point, which should be the trochanter minor
         try:
-            trochanter_minor_z = np.argwhere(inferior_mask[trochanter_minor_layer])[:, 1].max()  # get the maximum z coordinate, i.e. most medial extent of this slice
-            trochanter_minor_y = np.median(np.argwhere(inferior_mask[trochanter_minor_layer, :, trochanter_minor_z]))  # select all points with the same x coordinate and get the median y coordinate
+            trochanter_minor_z = np.argwhere(inferior_mask[trochanter_minor_layer])[:,
+                                 1].max()  # get the maximum z coordinate, i.e. most medial extent of this slice
+            trochanter_minor_y = np.median(np.argwhere(inferior_mask[trochanter_minor_layer, :,
+                                                       trochanter_minor_z]))  # select all points with the same x coordinate and get the median y coordinate
             trochanter_minor = np.array([trochanter_minor_y, trochanter_minor_z])
         except IndexError:
             raise RuntimeError('Could not find a plausible trochanter minor.')
@@ -329,51 +328,51 @@ def get_trochanter_minor(segmentation_mask: np.ndarray, femoral_head_centre: np.
     return np.array([trochanter_minor_layer, trochanter_minor[0], trochanter_minor[1]])
 
 
-def get_femoral_neck_base(segmentation_mask: np.ndarray, femoral_head_centre: np.ndarray, hip_image: sitk.Image) -> np.ndarray:
+def get_femoral_neck_base(hip_image: Image, femoral_head_centre: np.ndarray) -> np.ndarray:
     """
     Get the centre of the base of the femoral neck as described by Murphy et al.
 
     Alternative implementation where search space is restricted to all slices inferior to torchanter major.
-    :param segmentation_mask: A 3D segmentation mask of the femur.
+    :param hip_image: An Image object of the hip segmentation mask.
     :param femoral_head_centre: The centre of the femoral head.
-    :param hip_image: SimpleITK reference image of the hip.
     :return: The centre of the base of the femoral neck.
     """
-    trochanter_minor = get_trochanter_minor(segmentation_mask, femoral_head_centre, hip_image)
+    trochanter_minor = get_trochanter_minor(hip_image, femoral_head_centre)
     trochanter_minor_layer = int(trochanter_minor[0])
-    center = np.array(center_of_mass(segmentation_mask[trochanter_minor_layer])).astype(np.int16)
+    center = np.array(center_of_mass(hip_image.get_array()[trochanter_minor_layer])).astype(np.int16)
     center = np.array([trochanter_minor_layer, center[0], center[1]])
     return center
 
 
-def get_trochanter_major_center(segmentation_mask: np.ndarray, femoral_head_centre: np.ndarray, hip_image: sitk.Image) -> Tuple[np.ndarray, float]:
+def get_trochanter_major_center(hip_image: Image, femoral_head_centre: np.ndarray) -> Tuple[np.ndarray, float]:
     """
     Get the centre of the trochanter major at neck base level as described by Tomczak et al.
-    :param segmentation_mask: A 3D segmentation mask of the femur.
+    :param hip_image: An Image object of the hip segmentation mask.
     :param femoral_head_centre: The centre of the femoral head.
-    :param hip_image: SimpleITK reference image of the hip.
     :return: The centre and radius of the trochanter major at neck base level.
     """
-    trochanter_major = get_trochanter_major(segmentation_mask, femoral_head_centre, hip_image)
+    trochanter_major = get_trochanter_major(hip_image, femoral_head_centre)
     trochanter_major_layer = int(trochanter_major[0])
 
-    lateral_mask_point = np.argwhere(segmentation_mask[trochanter_major_layer])[:, 1].min()
-    medial_mask_point = np.argwhere(segmentation_mask[trochanter_major_layer])[:, 1].max()
+    lateral_mask_point = np.argwhere(hip_image.get_array()[trochanter_major_layer])[:, 1].min()
+    medial_mask_point = np.argwhere(hip_image.get_array()[trochanter_major_layer])[:, 1].max()
 
     split_point = (lateral_mask_point + medial_mask_point) // 2
-    lateral_mask = segmentation_mask[trochanter_major_layer].copy()
+    lateral_mask = hip_image.get_array()[trochanter_major_layer].copy()
     lateral_mask[:, split_point:] = 0  # null everything medial to the split point
     center, radius = circle_fit(lateral_mask)
     center = np.array([trochanter_major_layer, center[0], center[1]]).astype(np.int16)
     return center, radius
 
 
-def get_proximal_reference_line(segmentation_mask: np.ndarray, hip_image: sitk.Image = None, side: str = 'left', method: str = 'lee', segmentation_label: int = 1,
-                                x_ratio: float = 1., isotropic: bool = False) -> Tuple[np.ndarray, np.ndarray, float, float] | Tuple[np.ndarray, np.ndarray, float]:
+def get_proximal_reference_line(hip_image: Image, side: str = 'left',
+                                method: str = 'lee', segmentation_label: int = 1,
+                                x_ratio: float = 1., isotropic: bool = False) -> Tuple[
+                                                                                     np.ndarray, np.ndarray, float, float] | \
+                                                                                 Tuple[np.ndarray, np.ndarray, float]:
     """
     Get the proximal reference line of a segmentation mask for calculating the femoral torsion.
-    :param segmentation_mask: A segmentation mask of the proximal femur.
-    :param hip_image: SimpleITK reference image of the hip.
+    :param hip_image: An Image object of the hip segmentation mask.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param method: The method to use for determining the reference line.
     :param segmentation_label: The label of the segmentation mask.
@@ -382,40 +381,51 @@ def get_proximal_reference_line(segmentation_mask: np.ndarray, hip_image: sitk.I
     :return: The start and end points of the reference line, the radius of the femoral head centre and the radius of the trochanter major if method is tomczak.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
-    assert method in ['lee', 'murphy', 'tomczak'], 'Currently, only "lee", "murphy" and "tomczak" are supported as methods.'
+    assert method in ['lee', 'murphy',
+                      'tomczak'], 'Currently, only "lee", "murphy" and "tomczak" are supported as methods.'
 
-    r_fh, center, layer_high, layer_low = get_femoral_head_center(segmentation_mask, side=side,
-                                                               segmentation_label=segmentation_label,
-                                                               return_layers=True, x_ratio=x_ratio, isotropic=isotropic)
+    r_fh, center, layer_high, layer_low = get_femoral_head_center(hip_image.get_array(), side=side,
+                                                                  segmentation_label=segmentation_label,
+                                                                  return_layers=True, x_ratio=x_ratio,
+                                                                  isotropic=isotropic)
     center = center.astype(np.int16)
 
     if side == 'right':  # flip z axis to make this 'left-sided'
-        segmentation_mask = segmentation_mask[:, :, ::-1]
+        segmentation_mask = hip_image.get_array()[:, :, ::-1]
         center[2] = center[2] + (segmentation_mask.shape[2] // 2 - center[2]) * 2  # flip z coordinate
+        tmp = nib.Nifti1Image(segmentation_mask, hip_image.get_affine(), hip_image.get_header())
+        hip_image = Image(tmp)
 
     if method == 'lee':
-        end = get_femoral_neck_center_lee(segmentation_mask, center, r_fh)
+        end = get_femoral_neck_center_lee(hip_image.get_array(), center, r_fh)
     elif method == 'murphy':
         # return np.array([0, 0, 0]), np.array([0, 0, 1]), 1
-        end = get_femoral_neck_base(segmentation_mask, center, hip_image)
+        end = get_femoral_neck_base(hip_image, center)
     elif method == 'tomczak':
-        end, r_tm = get_trochanter_major_center(segmentation_mask, center, hip_image)
+        end, r_tm = get_trochanter_major_center(hip_image, center)
 
     layer_selected = end[0]
 
     if side == 'right':
-        end[2] = end[2] + (segmentation_mask.shape[2] // 2 - end[2]) * 2  # flip z coordinate
-        center[2] = center[2] - (center[2] - segmentation_mask.shape[2] // 2) * 2  # flip z coordinate
+        end[2] = end[2] + (hip_image.get_array().shape[2] // 2 - end[2]) * 2  # flip z coordinate
+        center[2] = center[2] - (center[2] - hip_image.get_array().shape[2] // 2) * 2  # flip z coordinate
 
     start: np.ndarray = np.array([center[0], center[1], center[2]])
     return (start, end, r_fh, r_tm) if method == 'tomczak' else (start, end, r_fh)
 
 
-def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side: str = 'left', method: str = 'lee',
-                              segmentation_label: int = 1, x_ratio: float = 1., plot: bool = False, isotropic: bool = False, hip_image: sitk.Image = None, mark_mask: bool = False) -> float | Tuple[float, plt.Figure] | Tuple[float, np.ndarray, np.ndarray] | Tuple[float, plt.Figure, np.ndarray, np.ndarray]:
+def calculate_femoral_torsion(hip_image: Image, knee_mask: np.ndarray, side: str = 'left', method: str = 'lee',
+                              segmentation_label: int = 1, x_ratio: float = 1., plot: bool = False,
+                              isotropic: bool = False, mark_mask: bool = False) -> float | \
+                                                                                                                 Tuple[
+                                                                                                                     float, plt.Figure] | \
+                                                                                                                 Tuple[
+                                                                                                                     float, np.ndarray, np.ndarray] | \
+                                                                                                                 Tuple[
+                                                                                                                     float, plt.Figure, np.ndarray, np.ndarray]:
     """
     Calculate the femoral torsion from a segmentation mask.
-    :param hip_mask: A segmentation mask of the proximal femur.
+    :param hip_image: An Image object of the hip segmentation mask.
     :param knee_mask: A segmentation mask of the distal femur.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param method: The method to use for determining the proximal reference line.
@@ -423,15 +433,15 @@ def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side:
     :param x_ratio: Correction factor for slice thickness.
     :param plot: Whether to plot the reference lines or not.
     :param isotropic: Whether the image has isotropic voxels.
-    :param hip_image: SimpleITk image of the hip for distance measures.
     :param mark_mask: Whether to mark landmarks and reference lines on the segmentation masks.
     :return: The femoral torsion in degrees and optionally a matplotlib figure of the reference lines.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
-    assert method in ['lee', 'murphy', 'tomczak'], 'Currently, only "lee", "murphy" and "tomczak" are supported as methods.'
+    assert method in ['lee', 'murphy',
+                      'tomczak'], 'Currently, only "lee", "murphy" and "tomczak" are supported as methods.'
 
-    landmarks = get_proximal_reference_line(hip_mask, hip_image=hip_image, side=side, method=method,
-                                                                segmentation_label=segmentation_label, x_ratio=x_ratio, isotropic=isotropic)
+    landmarks = get_proximal_reference_line(hip_image, side=side, method=method,
+                                            segmentation_label=segmentation_label, x_ratio=x_ratio, isotropic=isotropic)
     hip_start = landmarks[0]
     fhc_layer = hip_start[0]
     hip_end = landmarks[1]
@@ -444,7 +454,8 @@ def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side:
     # proximal_line = (hip_end - hip_start) if side == 'left' else (hip_start - hip_end)  # for the left image side, hip_start is to the right of hip_end; vice versa for right image side
     # -> need to distinguish between image sides
     proximal_line = hip_end - hip_start
-    x = np.array([0, 0, -1]) if side == 'left' else np.array([0, 0, 1])  # need to distinguish between left and right image side
+    x = np.array([0, 0, -1]) if side == 'left' else np.array(
+        [0, 0, 1])  # need to distinguish between left and right image side
     proximal_angle = calculate_angle_between_vectors(proximal_line, x)
 
     proximal_orientation = hip_end[1] - hip_start[1]  # positive if hip_end is posterior to hip_start
@@ -452,7 +463,8 @@ def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side:
         proximal_angle = -proximal_angle
 
     knee_mask = np.where(knee_mask == segmentation_label, 1, 0)
-    knee_layer, knee_start, knee_end = get_knee_reference_line(knee_mask, bone='femur')  # for both image sides, knee_start is to the right of knee_end
+    knee_layer, knee_start, knee_end = get_knee_reference_line(knee_mask,
+                                                               bone='femur')  # for both image sides, knee_start is to the right of knee_end
     if knee_start[2] < knee_end[2]:  # if this is somehow not the case, swap the points
         tmp = knee_start
         knee_start = knee_end
@@ -473,39 +485,14 @@ def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side:
 
     angle = proximal_angle - distal_angle
 
-    # calculate angle between the two reference lines
-    """
-    if side == 'left':
-        if proximal_orientation < 0:  # hip_end is anterior to hip_start
-            if distal_orientation < 0:  # lateral condyle is anterior to medial condyle
-                angle = proximal_angle - distal_angle
-            else:
-                angle = proximal_angle + distal_angle
-        else:  # hip_end is posterior to hip_start
-            if distal_orientation < 0:  # lateral condyle is anterior to medial condyle
-                angle = proximal_angle + distal_angle
-            else:
-                angle = proximal_angle - distal_angle
-    else:  # need to switch order for right image side because knee_start is to the right of knee_end
-        if proximal_orientation < 0:
-            if distal_orientation < 0:  # lateral condyle is posterior to medial condyle
-                angle = proximal_angle + distal_angle
-            else:
-                angle = proximal_angle - distal_angle
-        else:
-            if distal_orientation < 0:  # lateral condyle is anterior to medial condyle
-                angle = proximal_angle - distal_angle
-            else:
-                angle = proximal_angle + distal_angle
-    """
     if not mark_mask and not plot:
         return angle
 
     if plot:
         fig, ax = plt.subplots(1, 2)
-        ax[0].imshow(np.where(hip_mask[hip_layer] == 0, np.nan, hip_mask[hip_layer]))
+        ax[0].imshow(np.where(hip_image.get_array()[hip_layer] == 0, np.nan, hip_image.get_array()[hip_layer]))
         if method == 'murphy':
-            tmp = hip_mask[fhc_layer].copy()
+            tmp = hip_image.get_array()[fhc_layer].copy()
             tmp = np.where(tmp == 0, np.nan, tmp)
             ax[0].imshow(tmp, alpha=.5)
         ax[0].plot([hip_start[2], hip_end[2]], [hip_start[1], hip_end[1]], 'r')
@@ -515,7 +502,7 @@ def calculate_femoral_torsion(hip_mask: np.ndarray, knee_mask: np.ndarray, side:
             return angle, fig
 
     if mark_mask:
-        hip_mask = draw_line(hip_mask, hip_layer, hip_start, hip_end)
+        hip_mask = draw_line(hip_image.get_array(), hip_layer, hip_start, hip_end)
         hip_mask = draw_circle(hip_mask, hip_layer, r_fh, hip_start)
         if method == 'tomczak':
             hip_mask = draw_circle(hip_mask, hip_layer, r_tm, hip_end)
