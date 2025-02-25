@@ -1,9 +1,10 @@
 import vtk
 import argparse
+import SimpleITK as sitk
 from typing import Tuple
 
 
-def read_nrrd(filename: str) -> Tuple[vtk.vtkImageData:, vtk.vtkInformation]:
+def read_nrrd(filename: str) -> Tuple[vtk.vtkImageData, vtk.vtkInformation]:
     """
     Read image in nrrd format.
 
@@ -34,10 +35,12 @@ def write_nifti(image: vtk.vtkImageData,filename: str, info: vtk.vtkInformation)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Convert a nrrd image to nifti format.')
-    parser.add_argument('--i', type=str, help='Path to the nrrd file.')
-    parser.add_argument('--o', type=str, help='Path to write the nifti file to.')
+    parser.add_argument('-i', type=str, help='Path to the nrrd file.')
+    parser.add_argument('-o', type=str, help='Path to write the nifti file to.')
     args = parser.parse_args()
     input_path = args.i
     output_path = args.o
-    image, info = read_nrrd(input_path)
-    write_nifti(image, output_path, info)
+    # image, info = read_nrrd(input_path) this fucks up the header information
+    # write_nifti(image, output_path, info)
+    image = sitk.ReadImage(input_path)
+    sitk.WriteImage(image, output_path)

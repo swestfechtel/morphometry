@@ -168,6 +168,10 @@ def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: in
 
     angle = calculate_angle_between_vectors(proximal_line, distal_line)
 
+    if angle == 180:
+        angle = 0
+        print('KRA is 180, correcting to 0.')
+
     if plot:
         fig, ax = plt.subplots(1, 2)
         ax[0].imshow(segmentation_mask[proximal_layer])

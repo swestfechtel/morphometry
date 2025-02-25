@@ -158,7 +158,7 @@ def get_femoral_shaft_axis(segmentation_mask: np.ndarray, segmentation_label: in
     point_cloud = np.argwhere(segmentation_mask)
 
     offset = 20 if isotropic else 5
-    layer_low = np.max(point_cloud[:, 0]) - 1  # get the most distal layer with a mask point
+    layer_low = np.max(point_cloud[:, 0]) - offset  # get the most distal layer with a mask point
     layer_high = layer_low - offset  # get a layer superior to that with some distance, distance depends on the resolution of the image
 
     com_low = center_of_mass(segmentation_mask[layer_low])

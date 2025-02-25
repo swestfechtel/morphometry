@@ -40,21 +40,32 @@
 	\emergencystretch 3em
 	\maketitle
 
+	\section{Preface}
+	\label{sec:preface}
+	This document describes the methods used to calculate morphometric parameters from three-dimensional medical images.
+	Since there exist more than 20 different coordinate systems for three-dimensional medical images, we will define a consistent coordinate system for the following calculations.
+	Using the established lettering system 'L/R', 'I/S', and 'A/P' for the image sides, we define the coordinate system as 'IPR', i.e.
+	\begin{itemize}
+		\item the x-axis is the transversal axis, with indices increasing from superior to inferior,
+		\item the y-axis is the coronal axis, with indices increasing from anterior to posterior, and
+		\item the z-axis is the sagittal axis, with indices increasing from left to right.
+	\end{itemize}
+
 	\section{3D CCD}
 	\label{sec:ccd}
 	The CCD angle is originally defined on radiographic images, i.e. is measured as a projected angle on a two-dimensional image.
 	In clinical practice, this is also transferred to three-dimensional imaging modalities, i.e. CT and MRI, where the CCD angle is measured on a single two-dimensional
 	image slice.
-	However, high-resolution three-dimensional imaging offers the opportunity to measure the CCD angle not as a projected angle but
+	However, high-resolution three-dimensional imaging offers the opportunity to measure the CCD angle "as is", i.e. how the femur is oriented in three-dimensional space.
 
 	\subheading{Axes Definition}
 
 	\noindent The CCD angle is defined as the angle between the femoral neck axis and the femoral shaft axis.
 	In a three-dimensional image, we may define these as follows.
 
-	\paragraph{Neck axis}
-	The neck axis is an axis from the centre of the femoral head through the femoral neck.
-	Algorithm \ref{alg:fhc} can be used to find the centre of the femoral head.
+	\paragraph{The Neck Axis}
+	is an axis from the centre of the femoral head through the centre of the femoral neck.
+	\textbf{Algorithm \ref{alg:fhc}} can be used to find the centre of the femoral head.
 
 	\begin{algorithm}
 		\caption{Femoral Head Centre Definition}
@@ -65,28 +76,28 @@
 			\State $P \gets \{\emptyset\}$
 			\State $mpl \gets \underset{x}\min \{(x, y, z) \in \Z \: | \: M[x,y,z] = 1\}$
 			\State $c \gets centroid(M[mpl])$
+			\State $i \gets mpl$
 			\Repeat
-				\State $P \gets P \cup contour\_points(M[mpl])$
-				\State $mpl \gets mpl + 1$
+				\State $P \gets P \cup contour\_points(M[i])$
+				\State $i \gets i + 1$
 			\Until
-				$M[mpl, c_y, c_z] = 0$
+				$M[i, c_y, c_z] = 0$
 			\State $r,\: c \gets sphere\_fit(P)$
 			\State \Return $r,\: c$
 			\EndProcedure
 		\end{algorithmic}
 	\end{algorithm}
 
-	Basis of the algorithm is a 3D segmentation mask of the femur.
-	The algorithm starts by finding the most proximal layer of the femur, which is the layer with the smallest x-coordinate.
-	The centroid of this layer, which is the most superior point of the femoral head, is calculated and used as a reference point for finding the most inferior point of the femoral head.
-	The algorithm then iterates through the layers of the femur, starting from the most proximal layer, and collects all contour points of the femoral head.
-	The algorithm stops when the most inferior point of the femoral head is reached, i.e. when a layer is found where the point with the same y and z coordinates as the aforementioned centroid is not segmented.
-	In other words, the algorithm continues until it can find no more segmented point directly underneath the centroid of the most proximal layer.
-	A sphere is then fitted to the collected contour points with a least-squares approach to approximate the femoral head.
-	The centre of this sphere is the approximate centre of the femoral head.
-
+	\noindent Basis of the algorithm is a 3D segmentation mask of the femur, $M$.
+	The algorithm starts by finding the most proximal layer of the femur $mpl$, i.e. finding the minimum of $x$ of all segmented voxels with coordinates $(x, y, z)$.
+	The centroid of this layer, $c$, which is the most superior point of the femoral head, is calculated and used as a reference point for finding the most inferior point of the femoral head.
+	The algorithm then iterates through the layers of the femur, starting from the most proximal layer $mpl$, and collects all contour voxels of the femoral head ($P$).
+	The algorithm stops when the most inferior voxel of the femoral head is reached, i.e. when a layer $i$ is found where the voxel $(i, c_y, c_z)$ with the same y and z coordinates as the aforementioned centroid $c$ is not segmented.
+	In other words, the algorithm continues until it can find no more segmented voxel directly inferior to the centroid $c$ of the most proximal layer.
+	A sphere with radius $r$ and centre $c$ is then fitted to the collected contour points $P$ with a least-squares approach to approximate the femoral head.
+	The centre $c$ of this sphere is the approximate centre of the femoral head.
 	Centre and radius of the fitted sphere can then be used to find the centre of the femoral neck.
-	Algorithm \ref{alg:fnc} can be used for this purpose.
+	\textbf{Algorithm \ref{alg:fnc}} can be used for this purpose.\bigskip
 
 	\begin{algorithm}
 		\caption{Femoral Neck Centre Definition}
@@ -95,25 +106,51 @@
 			\Procedure{FindFemoralNeckCentre}{M}
 			\State $M \gets \text{A 3D Segmentation Mask of the Femur}$
 			\State $r,\: c \gets FindFemoralHeadCentre(M)$
-			\State $P \gets \{(x, y, z) \in \Z \: | \: M[x, y, z] = 1\}$
+			\State $F \gets \{(x, y, z) \in \Z \: | \: M[x, y, z] = 1\}$
 			\State $S \gets \{(x, y, z) \in \Z \: | \: dist((x, y, z), c) \geq r \land dist((x, y, z), c) \leq 1.2 \cdot r\}$
 			\State $S \gets \{s \in S \: | \: s_z < c_z \land s_x > c_x\}$
-			\State $N \gets P \cap S$
+			\State $N \gets F \cap S$
 			\State $nc \gets centroid(N)$
 			\State \Return $nc$
 			\EndProcedure
 		\end{algorithmic}
 	\end{algorithm}
 
-	On the basis of the femoral head centre, a hollow sphere is defined around the femoral head with a radius of 1.2 times the radius of the fitted sphere.
-	The points of the hollow sphere are filtered to exclude everything superior and medial to the femoral head centre.
-	The intersection of those points and the femur are an approximation of the femoral neck, and the centroid of the femoral neck is calculated.
+	\noindent On the basis of the femoral head centre with centre $c$ and radius $r$, a hollow sphere is defined around the femoral head with an inner radius of $1.1 \cdot r$ and outer radius of $1.2 \cdot r$.
+	A hollow sphere is a type of solid sphere (think, e.g., a cannonball) with an inner and outer radius; its voxels lie between the inner and outer radius, i.e. it's hollow (like an apricot with its seed removed, see \textbf{Figure \ref{fig:apricot}}).
+	
+	\begin{figure}[]
+		\centering
+		\includegraphics[scale=0.5]{figures/aprikose}
+		\caption{An apricot with (solid) and without its seed (hollow).}
+		\label{fig:apricot}
+	\end{figure}
+	
+	\noindent The points $S$ of the hollow sphere are filtered to exclude everything superior and medial to the femoral head centre (\textbf{Figure \ref{fig:neck_candidaes}}).
+	
+	\begin{figure}
+		\centering
+		\includegraphics[scale=0.25]{figures/femoral_neck_candidates}
+		\caption{Candidates for the points comprising the femoral neck, i.e. all points of the hollow sphere inferior and lateral to the femoral head centre.}
+		\label{fig:neck_candidaes}
+	\end{figure}
+	
+	\noindent The intersection $N$ of those points and the femur ($S \cap F$) are an approximation of the voxels comprising the femoral neck.
+	From these voxels $N$, the centre of the femoral neck can be calculated as the centroid $nc$.
+	The femoral neck axis is then defined as the line from the femoral head centre to the femoral neck centre (\textbf{Figure \ref{fig:neck_axis}}).
 
-	The femoral neck axis is then defined as the line from the femoral head centre to the femoral neck centre: \[fnc = c - nc\]
+	\begin{figure}
+		\centering
+		\includegraphics[scale=0.2]{figures/neck_axis}
+		\caption{The femoral neck axis (yellow) is defined as the line from the femoral head centre to the femoral neck centre (femoral neck points in red, their centroid in green).}
+		\label{fig:neck_axis}
+	\end{figure}
 
-	\paragraph{Shaft axis}
-	The shaft axis is an axis through the centre of the femoral shaft.
-	Algorithm \ref{alg:fsa} can be used to get the femoral shaft axis.
+	\noindent Since both reference points are represented in vector format, the reference line is simply the vector connecting the two points: \[fna = c - nc\]
+
+	\paragraph{The Shaft Axis}
+	is an axis through the centre of the femoral shaft.
+	\textbf{Algorithm \ref{alg:fsa}} can be used to get the femoral shaft axis.
 	\begin{algorithm}
 		\caption{Femoral Shaft Axis Definition}
 		\label{alg:fsa}
@@ -130,15 +167,33 @@
 		\end{algorithmic}
 	\end{algorithm}
 
-	The algorithm starts by finding the most distal layer of the femur, which is the layer with the largest x-coordinate.
-	The first reference point is the centroid of this layer.
-	A second layer of the femoral shaft is defined $k$ layers proximal to the most distal layer, where $k$ depends on the transversal spacing of the image.
-	The centroid of this second layer is the second reference point.
-	The femoral shaft axis is then defined as the line from the first to the second reference point: \[fsa = c_1 - c_2\]
+	The algorithm starts by finding the most distal layer $mdl$ of the femur analogously to algorithm \ref{alg:fhc}.
+	A layer $n$ layers superior to the most distal layer, where $n$ is dependent on the voxel spacing, is selected for the starting point of the femoral shaft axis.
+	This is done to improve robustness against segmentation errors.
+	The first starting point of the axis is therefore the centroid $c_1$ of the $(mdl - n)$th slice.
+	A second layer of the femoral shaft is defined $k$ layers superior to this slice, where $k$ again depends on the transversal spacing of the image.
+	The centroid $c_2$ of this second layer serves as the second reference point.
+	The femoral shaft axis is then defined as the line from the first through the second reference point (\textbf{Figure \ref{fig:shaft_axis}}): \[fsa = c_1 - c_2\]
+
+	\begin{figure}
+		\centering
+		\includegraphics[scale=0.2]{figures/shaft_axis}
+		\caption{The femoral shaft axis (yellow).}
+		\label{fig:shaft_axis}
+	\end{figure}
 
 	\subheading{Angle Calculation}
 
-	\noindent With both axes defined, the calculation of the CCD angle is trivial: \[CCD = \arccos\left(\frac{fnc \cdot fsa}{\|fnc\| \cdot \|fsa\|}\right)\]
+	\noindent With both axes defined, the calculation of the CCD angle is trivial, i.e. the angle between both axes (\textbf{Figure \ref{fig:ccd}}).
+	As mentioned earlier, both axes are in vector form.
+	Therefore, we can simply calculate the angle between these two vectors: \[CCD = \arccos\left(\frac{fna \cdot fsa}{\|fna\| \cdot \|fsa\|}\right)\]
+
+	\begin{figure}
+		\centering
+		\includegraphics[scale=0.2]{figures/ccd}
+		\caption{The CCD angle is defined as the angle between the femoral neck axis (yellow) and the femoral shaft axis (green).}
+		\label{fig:ccd}
+	\end{figure}
 
 	\section{3D Alpha Angle}
 	\label{sec:alpha}
@@ -219,7 +274,7 @@
 		\end{algorithmic}
 	\end{algorithm}
 
-	The algorithm starts by finding the femoral head centres of both femurs and the transversal plane between both centres, $l$.
+	\noindent The algorithm starts by finding the femoral head centres of both femurs and the transversal plane between both centres, $l$.
 	Afterwards, a vector $c$ connecting both femoral head centres is determined.
 	For one image side, the anterior and posterior acetabular rims are found.
 	Both of these reference points are defined on the transversal plane $l$.

@@ -22,8 +22,7 @@ class Tibia:
         """
         Get the points of the superior and inferior surfaces of the tibia.
         """
-        image_array = sitk.GetArrayFromImage(self.image)
-        image_array = np.swapaxes(image_array, 0, 1)  # assuming original ordering is sagittal, axial, coronal
+        image_array = self.image.get_array()
         cartilage = np.where(image_array == self.cartilage_label, 1, 0)
         cartilage = np.argwhere(cartilage)
         self.point_cloud = cartilage.astype(float)
@@ -36,8 +35,8 @@ class Tibia:
         cluster = KMeans(n_clusters=1).fit(self.point_cloud)
         self.center = cluster.cluster_centers_[0]
 
-        left_plate = self.point_cloud[self.point_cloud[:, 1] > self.center[1]]  # left side = left patient side, i.e. right side of image
-        right_plate = self.point_cloud[self.point_cloud[:, 1] <= self.center[1]]  # right side = right patient side, i.e. left side of image
+        left_plate = self.point_cloud[self.point_cloud[:, 2] > self.center[2]]  # left side = left patient side, i.e. right side of image
+        right_plate = self.point_cloud[self.point_cloud[:, 2] <= self.center[2]]  # right side = right patient side, i.e. left side of image
 
         left_plate_center = KMeans(n_clusters=1).fit(left_plate).cluster_centers_[0]
         right_plate_center = KMeans(n_clusters=1).fit(right_plate).cluster_centers_[0]
@@ -53,13 +52,13 @@ class Tibia:
         self.left_landmarks = {'center': left_plate_center, 'ellipse': left_ellipse, 'corners': left_plate_corners}
         self.right_landmarks = {'center': right_plate_center, 'ellipse': right_ellipse, 'corners': right_plate_corners}
 
-    def classify_point(self, point) -> str:
+    def classify_point(self, point: np.ndarray) -> str:
         """
         Classify a point as belonging to a specific region of the tibia.
         :param point: A 1x3 point.
         :return: The label of the region the point belongs to.
         """
-        if point[1] < self.center[1]:  # left side of the image, i.e. right patient side
+        if point[2] < self.center[2]:  # left side of the image, i.e. right patient side
             if np.linalg.norm(point - self.right_landmarks['center']) < self.right_landmarks['ellipse']:
                 return 'cRT'
 
@@ -156,7 +155,7 @@ class Tibia:
         self.art = np.array(art)
         self.prt = np.array(prt)
 
-    def mesh_method(self, superior_surface, inferior_surface) -> dict:
+    def mesh_method(self, superior_surface: np.ndarray, inferior_surface: np.ndarray) -> dict:
         """
         Calculate the thickness of a cartilage using a mesh-based ray tracing method.
 
@@ -175,13 +174,19 @@ class Tibia:
             v0 = point - vec
             v1 = point + vec
             iv, ic = inferior_mesh.ray_trace(v0, v1, first_point=True)
-            dist = np.linalg.norm(iv - point) * self.image.GetSpacing()[
-                1]  # spacing[1] because image orientation is still sagittal, axial, coronal
+            # dist = np.linalg.norm(iv - point) * self.image.get_spacing()[0]
+            if len(iv) == 0:
+                thicknesses[(point[1], point[2])] = np.nan
+                continue
+
+            iv_world = self.image.transform_index_to_physical_point(iv)
+            point_world = self.image.transform_index_to_physical_point(point)
+            dist = np.linalg.norm(iv_world - point_world)
             thicknesses[(point[1], point[2])] = dist  # discard axial coordinate
 
         return thicknesses
 
-    def knn_method(self, superior_surface, inferior_surface) -> dict:
+    def knn_method(self, superior_surface: np.ndarray, inferior_surface: np.ndarray) -> dict:
         """
         Calculate the thickness of a cartilage using a k-nearest neighbour method.
 
@@ -190,11 +195,17 @@ class Tibia:
         :return: A dictionary where keys are coordinates and values are the thicknesses.
         """
         thicknesses = dict()
-        superior_tree = KDTree(superior_surface)
-        distances, indices = superior_tree.query(inferior_surface, k=1)
+        f = lambda x: self.image.transform_index_to_physical_point(x)
+        ss_world = list(superior_surface)
+        ss_world = list(map(f, ss_world))
+        ss_world = np.array(ss_world)
+        is_world = list(inferior_surface)
+        is_world = list(map(f, is_world))
+        is_world = np.array(is_world)
+        superior_tree = KDTree(ss_world)
+        distances, indices = superior_tree.query(is_world, k=1)
         for i, distance in enumerate(distances):
-            thicknesses[(inferior_surface[i][1], inferior_surface[i][2])] = distance * self.image.GetSpacing()[
-                1]  # spacing[1] because image orientation is still sagittal, axial, coronal
+            thicknesses[(inferior_surface[i][1], inferior_surface[i][2])] = distance
 
         return thicknesses
 
@@ -224,15 +235,14 @@ class Tibia:
 
 
 class Femur:
-    def __init__(self, image: sitk.Image, cartilage_label: int):
+    def __init__(self, image: Image, cartilage_label: int):
         self.image = image
         self.cartilage_label = cartilage_label
         self.left_cwbz, self.right_cwbz = None, None
         self.left_anterior_zone, self.right_anterior_zone = None, None
         self.left_posterior_zone, self.right_posterior_zone = None, None
 
-        image_array = sitk.GetArrayFromImage(self.image)
-        image_array = np.swapaxes(image_array, 0, 1)  # assuming original ordering is sagittal, axial, coronal
+        image_array = self.image.get_array()
         cartilage = np.where(image_array == self.cartilage_label, 1, 0)
         cartilage = np.argwhere(cartilage)
         self.point_cloud = cartilage.astype(float)
@@ -254,22 +264,22 @@ class Femur:
 
         central_tibia = np.array(central_tibia)
         internal_external_tibia = np.array(internal_external_tibia)
-        max_anterior = central_tibia[:, 2].min()  # min because anterior - posterior is low to high
-        max_posterior = central_tibia[:, 2].max()
-        max_left = internal_external_tibia[:, 1].min()  # refers to image side
-        max_right = internal_external_tibia[:, 1].max()
+        max_anterior = central_tibia[:, 1].min()  # min because anterior - posterior is low to high
+        max_posterior = central_tibia[:, 1].max()
+        max_left = internal_external_tibia[:, 2].min()  # refers to image side
+        max_right = internal_external_tibia[:, 2].max()
 
-        central_weightbearing_zone = self.point_cloud[self.point_cloud[:, 1] >= max_left]
-        central_weightbearing_zone = central_weightbearing_zone[central_weightbearing_zone[:, 1] <= max_right]
-        central_weightbearing_zone = central_weightbearing_zone[central_weightbearing_zone[:, 2] >= max_anterior]
-        central_weightbearing_zone = central_weightbearing_zone[central_weightbearing_zone[:, 2] <= max_posterior]
+        central_weightbearing_zone = self.point_cloud[self.point_cloud[:, 2] >= max_left]
+        central_weightbearing_zone = central_weightbearing_zone[central_weightbearing_zone[:, 2] <= max_right]
+        central_weightbearing_zone = central_weightbearing_zone[central_weightbearing_zone[:, 1] >= max_anterior]
+        central_weightbearing_zone = central_weightbearing_zone[central_weightbearing_zone[:, 1] <= max_posterior]
 
         if side == 'left':
             self.left_cwbz = central_weightbearing_zone
         else:
             self.right_cwbz = central_weightbearing_zone
 
-    def get_femoral_thirds(self, side: str = 'left') -> [int, int]:
+    def get_femoral_thirds(self, side: str = 'left') -> Tuple[int, int]:
         """
         Divide the central weight-bearing zone of the femoral cartilage into three subregions along the sagittal axis,
         each comprising 33% of the total volume.
@@ -278,11 +288,11 @@ class Femur:
         :return: The sagittal coordinates of the split points.
         """
         plate = self.left_cwbz if side == 'left' else self.right_cwbz
-        ymin = np.min(plate[:, 1])
-        ymax = np.max(plate[:, 1])
-        yrange = ymax - ymin
-        first_split = ymin + int(yrange / 3)
-        second_split = ymin + 2 * int(yrange / 3)
+        lr_min = np.min(plate[:, 2])
+        lr_max = np.max(plate[:, 2])
+        lr_range = lr_max - lr_min
+        first_split = lr_min + int(lr_range / 3)
+        second_split = lr_min + 2 * int(lr_range / 3)
 
         points_in_first_third = list()
         points_in_second_third = list()
@@ -294,7 +304,7 @@ class Femur:
 
             points_in_first_third = list()
             for point in plate:
-                if point[1] < first_split:
+                if point[2] < first_split:
                     points_in_first_third.append(point)
 
             if len(points_in_first_third) / len(plate) > 0.33:
@@ -312,7 +322,7 @@ class Femur:
 
             points_in_second_third = list()
             for point in plate:
-                if first_split <= point[1] < second_split:
+                if first_split <= point[2] < second_split:
                     points_in_second_third.append(point)
 
             if len(points_in_second_third) / len(plate) > 0.33:
@@ -329,25 +339,25 @@ class Femur:
         Extract the anterior and posterior zones of the cartilage.
         :param side: The side (patient) of the cartilage.
         """
-        split_axis = np.median(self.point_cloud[:, 1])
-        cartilage = self.point_cloud[self.point_cloud[:, 1] < split_axis] if side == 'right' else self.point_cloud[self.point_cloud[:, 1] > split_axis]
+        split_axis = np.median(self.point_cloud[:, 2])
+        cartilage = self.point_cloud[self.point_cloud[:, 2] < split_axis] if side == 'right' else self.point_cloud[self.point_cloud[:, 2] > split_axis]
         cwbz = self.left_cwbz if side == 'left' else self.right_cwbz
-        cwbz_most_anterior = cwbz[:, 2].min()
-        cwbz_most_posterior = cwbz[:, 2].max()
+        cwbz_most_anterior = cwbz[:, 1].min()
+        cwbz_most_posterior = cwbz[:, 1].max()
 
         if side == 'left':
-            self.left_anterior_zone = cartilage[cartilage[:, 2] < cwbz_most_anterior]
-            self.left_posterior_zone = cartilage[cartilage[:, 2] > cwbz_most_posterior]
+            self.left_anterior_zone = cartilage[cartilage[:, 1] < cwbz_most_anterior]
+            self.left_posterior_zone = cartilage[cartilage[:, 1] > cwbz_most_posterior]
         else:
-            self.right_anterior_zone = cartilage[cartilage[:, 2] < cwbz_most_anterior]
-            self.right_posterior_zone = cartilage[cartilage[:, 2] > cwbz_most_posterior]
+            self.right_anterior_zone = cartilage[cartilage[:, 1] < cwbz_most_anterior]
+            self.right_posterior_zone = cartilage[cartilage[:, 1] > cwbz_most_posterior]
 
-    def mesh_method(self, superior_surface: np.array, inferior_surface: np.array) -> dict:
+    def mesh_method(self, superior_surface: np.ndarray, inferior_surface: np.ndarray) -> dict:
         """
-        Calculate the thickness of a zone using a mesh-based ray tracing method.
+        Calculate the thickness of a cartilage using a mesh-based ray tracing method.
+
         :param superior_surface: The superior surface of the zone.
         :param inferior_surface: The inferior surface of the zone.
-
         :return: A dictionary where keys are coordinates and values are the thicknesses.
         """
         superior_mesh, inferior_mesh = build_cartilage_meshes(superior_surface, inferior_surface)
@@ -361,19 +371,49 @@ class Femur:
             v0 = point - vec
             v1 = point + vec
             iv, ic = inferior_mesh.ray_trace(v0, v1, first_point=True)
-            dist = np.linalg.norm(iv - point) * self.image.GetSpacing()[
-                1]  # spacing[1] because image orientation is still sagittal, axial, coronal
+            if len(iv) == 0:
+                thicknesses[(point[1], point[2])] = np.nan
+                continue
+            # dist = np.linalg.norm(iv - point) * self.image.get_spacing()[0]
+            iv_world = self.image.transform_index_to_physical_point(iv)
+            point_world = self.image.transform_index_to_physical_point(point)
+            dist = np.linalg.norm(iv_world - point_world)
             thicknesses[(point[1], point[2])] = dist  # discard axial coordinate
 
         return thicknesses
 
-    def calculate_thickness(self, tibia: Tibia) -> dict:
+    def knn_method(self, superior_surface: np.ndarray, inferior_surface: np.ndarray) -> dict:
+        """
+        Calculate the thickness of a cartilage using a k-nearest neighbour method.
+
+        :param superior_surface: The superior surface of the zone.
+        :param inferior_surface: The inferior surface of the zone.
+        :return: A dictionary where keys are coordinates and values are the thicknesses.
+        """
+        thicknesses = dict()
+        f = lambda x: self.image.transform_index_to_physical_point(x)
+        ss_world = list(superior_surface)
+        ss_world = list(map(f, ss_world))
+        ss_world = np.array(ss_world)
+        is_world = list(inferior_surface)
+        is_world = list(map(f, is_world))
+        is_world = np.array(is_world)
+        superior_tree = KDTree(ss_world)
+        distances, indices = superior_tree.query(is_world, k=1)
+        for i, distance in enumerate(distances):
+            thicknesses[(inferior_surface[i][1], inferior_surface[i][2])] = distance
+
+        return thicknesses
+
+    def calculate_thickness(self, tibia: Tibia, method: str = 'mesh') -> dict:
         """
         Calculate the cartilage thickness for all zones (subregions).
 
         :param tibia: A Tibia object.
+        :param method: The method used for thickness calculation. Can be either 'mesh' or 'knn'.
         :return: A dictionary where keys are zone labels and values are dictionaries, where keys are coordinates and values are thicknesses.
         """
+        assert method in ['mesh', 'knn'], 'Method must be either "mesh" or "knn".'
         self.extract_central_weightbearing_zone(tibia, side='left')
         self.extract_central_weightbearing_zone(tibia, side='right')
         self.extract_anterior_posterior_zones(side='left')
@@ -383,48 +423,61 @@ class Femur:
         for zone in ['left_cwbz', 'right_cwbz', 'left_posterior_zone', 'right_posterior_zone', 'left_anterior_zone', 'right_anterior_zone']:
             if zone in ['left_posterior_zone', 'right_posterior_zone']:
                 tmp = getattr(self, zone).copy()
-                tmp[:, 2], tmp[:, 0] = tmp[:, 0], tmp[:, 2].copy()  # rotate to allow extraction of anterior and posterior surface
+                tmp[:, 1], tmp[:, 0] = tmp[:, 0], tmp[:, 1].copy()  # rotate to allow extraction of anterior and posterior surface
                 superior_surface, inferior_surface = get_superior_and_inferior_surface_points(tmp)
-                superior_surface[:, 2], superior_surface[:, 0] = superior_surface[:, 0], superior_surface[:, 2].copy()  # rotate back
-                inferior_surface[:, 2], inferior_surface[:, 0] = inferior_surface[:, 0], inferior_surface[:, 2].copy()
+                superior_surface[:, 1], superior_surface[:, 0] = superior_surface[:, 0], superior_surface[:, 1].copy()  # rotate back
+                inferior_surface[:, 1], inferior_surface[:, 0] = inferior_surface[:, 0], inferior_surface[:, 1].copy()
             else:
                 superior_surface, inferior_surface = get_superior_and_inferior_surface_points(getattr(self, zone))
 
             if zone == 'left_cwbz':  # remember: left & right = patient side
                 first_split, second_split = self.get_femoral_thirds(side='left')
-                iclf_superior = superior_surface[superior_surface[:, 1] < first_split]
-                iclf_inferior = inferior_surface[inferior_surface[:, 1] < first_split]
-                cclf_superior = superior_surface[superior_surface[:, 1] >= first_split]
-                cclf_superior = cclf_superior[cclf_superior[:, 1] < second_split]
-                cclf_inferior = inferior_surface[inferior_surface[:, 1] >= first_split]
-                cclf_inferior = cclf_inferior[cclf_inferior[:, 1] < second_split]
-                eclf_superior = superior_surface[superior_surface[:, 1] >= second_split]
-                eclf_inferior = inferior_surface[inferior_surface[:, 1] >= second_split]
+                iclf_superior = superior_surface[superior_surface[:, 2] < first_split]
+                iclf_inferior = inferior_surface[inferior_surface[:, 2] < first_split]
+                cclf_superior = superior_surface[superior_surface[:, 2] >= first_split]
+                cclf_superior = cclf_superior[cclf_superior[:, 2] < second_split]
+                cclf_inferior = inferior_surface[inferior_surface[:, 2] >= first_split]
+                cclf_inferior = cclf_inferior[cclf_inferior[:, 2] < second_split]
+                eclf_superior = superior_surface[superior_surface[:, 2] >= second_split]
+                eclf_inferior = inferior_surface[inferior_surface[:, 2] >= second_split]
 
-                thicknesses['iclf'] = self.mesh_method(iclf_superior, iclf_inferior)
-                thicknesses['cclf'] = self.mesh_method(cclf_superior, cclf_inferior)
-                thicknesses['eclf'] = self.mesh_method(eclf_superior, eclf_inferior)
+                if method == 'mesh':
+                    thicknesses['iclf'] = self.mesh_method(iclf_superior, iclf_inferior)
+                    thicknesses['cclf'] = self.mesh_method(cclf_superior, cclf_inferior)
+                    thicknesses['eclf'] = self.mesh_method(eclf_superior, eclf_inferior)
+                else:
+                    thicknesses['iclf'] = self.knn_method(iclf_superior, iclf_inferior)
+                    thicknesses['cclf'] = self.knn_method(cclf_superior, cclf_inferior)
+                    thicknesses['eclf'] = self.knn_method(eclf_superior, eclf_inferior)
             elif zone == 'right_cwbz':
                 first_split, second_split = self.get_femoral_thirds(side='right')
-                icrf_superior = superior_surface[superior_surface[:, 1] >= second_split]
-                icrf_inferior = inferior_surface[inferior_surface[:, 1] >= second_split]
-                ccrf_superior = superior_surface[superior_surface[:, 1] >= first_split]
-                ccrf_superior = ccrf_superior[ccrf_superior[:, 1] < second_split]
-                ccrf_inferior = inferior_surface[inferior_surface[:, 1] >= first_split]
-                ccrf_inferior = ccrf_inferior[ccrf_inferior[:, 1] < second_split]
-                ecrf_superior = superior_surface[superior_surface[:, 1] < first_split]
-                ecrf_inferior = inferior_surface[inferior_surface[:, 1] < first_split]
+                icrf_superior = superior_surface[superior_surface[:, 2] >= second_split]
+                icrf_inferior = inferior_surface[inferior_surface[:, 2] >= second_split]
+                ccrf_superior = superior_surface[superior_surface[:, 2] >= first_split]
+                ccrf_superior = ccrf_superior[ccrf_superior[:, 2] < second_split]
+                ccrf_inferior = inferior_surface[inferior_surface[:, 2] >= first_split]
+                ccrf_inferior = ccrf_inferior[ccrf_inferior[:, 2] < second_split]
+                ecrf_superior = superior_surface[superior_surface[:, 2] < first_split]
+                ecrf_inferior = inferior_surface[inferior_surface[:, 2] < first_split]
 
-                thicknesses['icrf'] = self.mesh_method(icrf_superior, icrf_inferior)
-                thicknesses['ccrf'] = self.mesh_method(ccrf_superior, ccrf_inferior)
-                thicknesses['ecrf'] = self.mesh_method(ecrf_superior, ecrf_inferior)
+                if method == 'mesh':
+                    thicknesses['icrf'] = self.mesh_method(icrf_superior, icrf_inferior)
+                    thicknesses['ccrf'] = self.mesh_method(ccrf_superior, ccrf_inferior)
+                    thicknesses['ecrf'] = self.mesh_method(ecrf_superior, ecrf_inferior)
+                else:
+                    thicknesses['icrf'] = self.knn_method(icrf_superior, icrf_inferior)
+                    thicknesses['ccrf'] = self.knn_method(ccrf_superior, ccrf_inferior)
+                    thicknesses['ecrf'] = self.knn_method(ecrf_superior, ecrf_inferior)
             else:
-                thicknesses[zone] = self.mesh_method(superior_surface, inferior_surface)
+                if method == 'mesh':
+                    thicknesses[zone] = self.mesh_method(superior_surface, inferior_surface)
+                else:
+                    thicknesses[zone] = self.knn_method(superior_surface, inferior_surface)
 
         return thicknesses
 
 
-def build_cartilage_meshes(superior_points: np.array, inferior_points: np.array) -> Tuple[pv.PolyData, pv.PolyData]:
+def build_cartilage_meshes(superior_points: np.ndarray, inferior_points: np.ndarray) -> Tuple[pv.PolyData, pv.PolyData]:
     """
     Build superior and inferior cartilage surface meshes from superior and inferior surface points.
     Points (x, y, z) are expected to be x = axial, y = sagittal, z = coronal.
@@ -442,7 +495,7 @@ def build_cartilage_meshes(superior_points: np.array, inferior_points: np.array)
     return superior_mesh, inferior_mesh
 
 
-def get_superior_and_inferior_surface_points(cartilage: np.array) -> Tuple[np.array, np.array]:
+def get_superior_and_inferior_surface_points(cartilage: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Get the superior and inferior surface points of a cartilage. Points (x, y, z) are expected to be
     x = axial, y = sagittal, z = coronal.
@@ -451,16 +504,16 @@ def get_superior_and_inferior_surface_points(cartilage: np.array) -> Tuple[np.ar
     coordinate, the second component the sagittal coordinate, and the third component the coronal coordinate.
     :return: Two point clouds of the superior and inferior surface points.
     """
-    df = pd.DataFrame(cartilage, columns=['axial', 'sagittal', 'coronal'])
-    superior_points = df.groupby(['sagittal', 'coronal']).min().reset_index()  # remember: min is superior
-    superior_points = superior_points[['axial', 'sagittal', 'coronal']]  # need to re-order the columns
-    inferior_points = df.groupby(['sagittal', 'coronal']).max().reset_index()
-    inferior_points = inferior_points[['axial', 'sagittal', 'coronal']]
+    df = pd.DataFrame(cartilage, columns=['axial', 'coronal', 'sagittal'])
+    superior_points = df.groupby(['coronal', 'sagittal']).min().reset_index()  # remember: min is superior
+    superior_points = superior_points[['axial', 'coronal', 'sagittal']]  # need to re-order the columns
+    inferior_points = df.groupby(['coronal', 'sagittal']).max().reset_index()
+    inferior_points = inferior_points[['axial', 'coronal', 'sagittal']]
 
     return superior_points.to_numpy(), inferior_points.to_numpy()
 
 
-def calculate_ellipse(points, center) -> float:
+def calculate_ellipse(points: np.ndarray, center: float) -> float:
     """
     Calculate an ellipse around a center point that covers ~20% of the points.
 
@@ -488,7 +541,7 @@ def calculate_ellipse(points, center) -> float:
     return r
 
 
-def get_plate_corners(points) -> Tuple[np.array, np.array, np.array, np.array]:
+def get_plate_corners(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.array, np.ndarray]:
     """
     Get the corners (2D) of a plate defined by a point cloud.
 
@@ -496,14 +549,14 @@ def get_plate_corners(points) -> Tuple[np.array, np.array, np.array, np.array]:
     :return: The corners (image orientation: axial view; left image side = right patient side,
     upper image half = posterior) of the plate.
     """
-    min_sagittal = points[:, 1].min()  # right patient side
-    max_sagittal = points[:, 1].max()  # left patient side
-    min_coronal = points[:, 2].min()  # posterior
-    max_coronal = points[:, 2].max()  # anterior
+    min_sagittal = points[:, 2].min()  # right patient side
+    max_sagittal = points[:, 2].max()  # left patient side
+    min_coronal = points[:, 1].min()  # anterior
+    max_coronal = points[:, 1].max()  # posterior
 
-    upper_right = np.array([max_sagittal, max_coronal])  # upper right image corner, i.e. left patient side, posterior
-    lower_right = np.array([max_sagittal, min_coronal])  # lower right image corner, i.e. left patient side, anterior
-    upper_left = np.array([min_sagittal, max_coronal])  # upper left image corner, i.e. right patient side, posterior
-    lower_left = np.array([min_sagittal, min_coronal])  # lower left image corner, i.e. right patient side, anterior
+    upper_right = np.array([max_coronal, max_sagittal])  # upper right image corner, i.e. left patient side, posterior
+    lower_right = np.array([min_coronal, max_sagittal])  # lower right image corner, i.e. left patient side, anterior
+    upper_left = np.array([max_coronal, min_sagittal])  # upper left image corner, i.e. right patient side, posterior
+    lower_left = np.array([min_coronal, min_sagittal])  # lower left image corner, i.e. right patient side, anterior
 
     return upper_right, lower_right, upper_left, lower_left
