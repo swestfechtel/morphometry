@@ -131,8 +131,8 @@ if __name__ == '__main__':
                 tibial_torsion_right = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2,
                                                                 tibia_label_ankle=1, fibula_label=2, side='right',
                                                                 plot=plot)
-            ccd_left = calculate_ccd(left_hip, 'left', 1, False, x_ratio)
-            ccd_right = calculate_ccd(right_hip, 'right', 1, False, x_ratio)
+            ccd_left = calculate_ccd(left_hip, None,'left', 1, False, x_ratio)
+            ccd_right = calculate_ccd(right_hip, None,'right', 1, False, x_ratio)
 
             kra_left = calculate_knee_rotation_angle(left_knee, 1, 2, False)
             kra_right = calculate_knee_rotation_angle(right_knee, 1, 2, False)

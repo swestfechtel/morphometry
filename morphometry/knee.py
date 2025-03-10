@@ -146,7 +146,7 @@ def get_knee_center(segmentation_mask: np.ndarray) -> np.ndarray:
     return np.array(center_of_mass(segmentation_mask))
 
 
-def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: int, tibia_label: int, plot: bool = False) -> float:
+def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: int, tibia_label: int, side: str = 'left', plot: bool = False) -> float:
     """
     Calculate the knee rotation angle.
 
@@ -155,18 +155,49 @@ def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: in
     :param segmentation_mask: A 3D segmentation mask of the knee.
     :param femur_label: The segmentation label of the femur.
     :param tibia_label: The segmentation label of the tibia.
+    :param side: The side of the image (not patient!), either 'left' or 'right'.
     :param plot: Whether to plot the reference lines.
     :return: The knee rotation angle.
     """
     femur_mask = np.where(segmentation_mask == femur_label, 1, 0)
     proximal_layer, femur_start, femur_end = get_knee_reference_line(femur_mask, 'femur')
+
+    if femur_start[2] < femur_end[2]:  # if this is somehow not the case, swap the points
+        tmp = femur_start
+        femur_start = femur_end
+        femur_end = tmp
+
     proximal_line = femur_end - femur_start
 
     tibia_mask = np.where(segmentation_mask == tibia_label, 1, 0)
     distal_layer, tibia_start, tibia_end = get_knee_reference_line(tibia_mask, 'tibia')
+
+    if tibia_start[2] < tibia_end[2]:
+        tmp = tibia_start
+        tibia_start = tibia_end
+        tibia_end = tmp
+
     distal_line = tibia_end - tibia_start
 
-    angle = calculate_angle_between_vectors(proximal_line, distal_line)
+    x = np.array([0, 0, -1])
+    proximal_angle = calculate_angle_between_vectors(proximal_line, x)
+    distal_angle = calculate_angle_between_vectors(distal_line, x)
+
+    proximal_orientation = femur_end[1] - femur_start[1]
+    distal_orientation = tibia_end[1] - tibia_start[1]
+
+    if side == 'left':
+        if proximal_orientation < 0:  # if the lateral condyle is more anterior than the medial one
+            proximal_angle = -proximal_angle
+        if distal_orientation < 0:
+            distal_angle = -distal_angle
+    else:
+        if proximal_orientation > 0:  # if the medial condlye is more posterior than the lateral one
+            proximal_angle = -proximal_angle
+        if distal_orientation > 0:
+            distal_angle = -distal_angle
+
+    angle = proximal_angle - distal_angle
 
     if angle == 180:
         angle = 0

@@ -2,6 +2,7 @@ import SimpleITK as sitk
 import nibabel as nib
 import numpy as np
 from typing import Union
+from scipy.ndimage import label
 
 
 class Image:
@@ -43,18 +44,19 @@ class Image:
         elif self.type == 'nibabel':
             self.image = nib.load(filepath)
 
-    def transform_coordinate_system(self):
+    def transform_coordinate_system(self, axcodes: tuple = ('I', 'P', 'R')):
         """
         Transform the image into a standard coordinate system.
         Currently, this is 'IPR', i.e. the first axis is superior-inferior, the second axis is anterior-posterior
         and the third axis is left-right.
+        :param axcodes: Axes codes to transform.
         :return:
         """
         if self.type == 'nibabel':
             data = self.image.get_fdata()
             affine = self.image.affine
             orientation = nib.orientations.io_orientation(affine)
-            std_orientation = nib.orientations.axcodes2ornt(('I', 'P', 'R'))
+            std_orientation = nib.orientations.axcodes2ornt(axcodes)
 
             transform = nib.orientations.ornt_transform(orientation, std_orientation)
             reoriented_data = nib.orientations.apply_orientation(data, transform)
@@ -156,3 +158,40 @@ class Image:
             return M.dot(index) + abc
         else:
             return self.image.TransformIndexToPhysicalPoint(index)
+
+
+class Segmentation(Image):
+    """
+    Data class for segmentation masks.
+
+    Inherits from Image and implements additional methods for segmentation masks.
+    """
+
+    def remove_outliers(self, threshold_ratio: float = 0.1):
+        """
+        Remove outliers from segmentation mask.
+        :param threshold_ratio: Threshold ratio for outlier removal. Percentage of the mask size, where all components
+        with less voxels are removed.
+        :return:
+        """
+        if self.type == 'nibabel':
+            data = self.get_array()
+            structure = np.ones((3, 3, 3), dtype=bool)
+            cleaned_data = np.zeros_like(data)
+            unique_labels = np.unique(data)
+
+            for label_value in unique_labels:
+                if label_value == 0:
+                    continue
+
+                label_mask = (data == label_value)
+                labeled_array, _ = label(label_mask, structure=structure)
+                sizes = np.bincount(labeled_array.ravel())
+                sizes[0] = 0
+                threshold = threshold_ratio * np.count_nonzero(label_mask)
+                large_components = sizes > threshold
+                cleaned_data[large_components[labeled_array]] = label_value
+
+            self.image = nib.Nifti1Image(cleaned_data, self.get_affine())
+        else:
+            raise NotImplementedError('SimpleITK not implemented yet.')

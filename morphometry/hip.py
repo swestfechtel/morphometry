@@ -5,6 +5,7 @@ import pandas as pd
 from morphometry.utils import sphere_fit, get_contour_points, calculate_angle_between_vectors, \
     calculate_min_distance_between_point_clouds, get_vector_through_point_perpendicular_to_line, \
     get_minimum_distance_between_line_and_point, get_contour_points
+from morphometry.image_io import Image
 from scipy.ndimage import center_of_mass, label
 from scipy.spatial import KDTree
 from scipy.stats import zscore
@@ -146,33 +147,46 @@ def get_femoral_neck_center(segmentation_mask: np.ndarray, femoral_head_center: 
     return neck_points, np.array([com[0], com[1], com[2]])
 
 
-def get_femoral_shaft_axis(segmentation_mask: np.ndarray, segmentation_label: int = 1, isotropic: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+def get_femoral_shaft_axis(hip_mask: np.ndarray, knee_mask: np.ndarray = None, femur_label: int = 1, isotropic: bool = False) -> Tuple[np.ndarray, np.ndarray]:
     """
     Get the femoral shaft axis from a segmentation mask.
-    :param segmentation_mask: A segmentation mask of the proximal femur where the femur is 1 and everything else 0.
-    :param segmentation_label: The label of the femur in the segmentation mask.
+    :param hip_mask: A segmentation mask of the hip.
+    :param knee_mask: A segmentation mask of the knee.
+    :param femur_label: The label of the femur in the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
     :return: Start and end point of the vector representing the femoral shaft axis.
     """
-    segmentation_mask = np.where(segmentation_mask == segmentation_label, 1, 0)
-    point_cloud = np.argwhere(segmentation_mask)
+    hip_mask = np.where(hip_mask == femur_label, 1, 0)
+
+    point_cloud_hip = np.argwhere(hip_mask)
 
     offset = 20 if isotropic else 5
-    layer_low = np.max(point_cloud[:, 0]) - offset  # get the most distal layer with a mask point
-    layer_high = layer_low - offset  # get a layer superior to that with some distance, distance depends on the resolution of the image
+    layer_low_hip = np.max(point_cloud_hip[:, 0]) - (offset if isotropic else 1)  # get the most distal layer with a mask point
+    layer_high_hip = layer_low_hip - offset  # get a layer superior to that with some distance, distance depends on the resolution of the image
 
-    com_low = center_of_mass(segmentation_mask[layer_low])
-    com_low = (layer_low, int(com_low[0]), int(com_low[1]))
-    com_high = center_of_mass(segmentation_mask[layer_high])
-    com_high = (layer_high, int(com_high[0]), int(com_high[1]))  # get centers of mass of both layers
+    com_low_hip = center_of_mass(hip_mask[layer_low_hip])
+    com_low_hip = (layer_low_hip, int(com_low_hip[0]), int(com_low_hip[1]))
+    com_high_hip = center_of_mass(hip_mask[layer_high_hip])
+    com_high_hip = (layer_high_hip, int(com_high_hip[0]), int(com_high_hip[1]))  # get centers of mass of both layers
 
-    return np.array(com_low), np.array(com_high)  # return the two points as the femoral shaft axis
+    if knee_mask is not None:
+        knee_mask = np.where(knee_mask == femur_label, 1, 0)
+        point_cloud_knee = np.argwhere(knee_mask)
+        layer_high_knee = np.min(point_cloud_knee[:, 0]) + (
+            offset if isotropic else 1)  # get the most proximal layer with a mask point
+        com_high_knee = center_of_mass(knee_mask[layer_high_knee])
+        com_high_knee = (layer_high_knee, int(com_high_knee[0]), int(com_high_knee[1]))
+
+        return np.array(com_high_knee), np.array(com_high_hip)
+
+    return np.array(com_low_hip), np.array(com_high_hip)  # return the two points as the femoral shaft axis
 
 
-def calculate_ccd(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1., debug: bool = False) -> Tuple[float, float]:
+def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1., debug: bool = False) -> Tuple[float, float]:
     """
     Calculate the CCD angle from the femoral head center, femoral neck axis and femoral shaft axis.
-    :param segmentation_mask: A segmentation mask of the proximal femur.
+    :param hip_image: A segmentation mask of the proximal femur.
+    :param knee_image: A segmentation mask of the knee.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
@@ -182,31 +196,45 @@ def calculate_ccd(segmentation_mask: np.ndarray, side: str = 'left', segmentatio
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
-    r, femoral_head_center = get_femoral_head_center(segmentation_mask, side=side, segmentation_label=segmentation_label, x_ratio=x_ratio, isotropic=isotropic)
-    femoral_neck_points, femoral_neck_center = get_femoral_neck_center(segmentation_mask, (r, femoral_head_center), side=side, segmentation_label=segmentation_label)
-    femoral_shaft_axis = get_femoral_shaft_axis(segmentation_mask, segmentation_label=segmentation_label, isotropic=isotropic)
+    hip_mask = hip_image.get_array()
+    r, femoral_head_center = get_femoral_head_center(hip_mask, side=side, segmentation_label=segmentation_label, x_ratio=x_ratio, isotropic=isotropic)
+    femoral_neck_points, femoral_neck_center = get_femoral_neck_center(hip_mask, (r, femoral_head_center), side=side, segmentation_label=segmentation_label)
+
+    knee_mask = knee_image.get_array() if knee_image else None
+
+    shaft_axis_low, shaft_axis_high = get_femoral_shaft_axis(hip_mask, knee_mask, femur_label=segmentation_label,
+                                                             isotropic=isotropic)
+
+    if knee_image is not None:
+        femoral_head_center = hip_image.transform_index_to_physical_point(femoral_head_center)  # transform to physical coordinates
+        femoral_neck_center = hip_image.transform_index_to_physical_point(femoral_neck_center)
+        shaft_axis_low = knee_image.transform_index_to_physical_point(shaft_axis_low)
+        shaft_axis_high = hip_image.transform_index_to_physical_point(shaft_axis_high)
 
     if debug:
-        print(f'Femoral head center: {femoral_head_center}, femoral neck center: {femoral_neck_center}, femoral shaft axis: {femoral_shaft_axis}')
+        print(f'Femoral head center: {femoral_head_center}, femoral neck center: {femoral_neck_center}, femoral shaft axis: {(shaft_axis_low, shaft_axis_high)}')
+
     # Calculate the angle between the femoral neck axis and the femoral shaft axis
     neck_vector = femoral_neck_center - femoral_head_center
-    shaft_vector = femoral_shaft_axis[1] - femoral_shaft_axis[0]
+    shaft_vector = shaft_axis_high - shaft_axis_low
+
     ccd = calculate_angle_between_vectors(neck_vector.astype('float32'), shaft_vector.astype('float32'))
     ccd = 180 - ccd if ccd < 90 else ccd
 
     # also calculate the projected ccd
     # https://math.stackexchange.com/questions/2305792/3d-projection-on-a-2d-plane-weak-maths-ressources
     projection_plane_index = femoral_head_center[1]
-    origin = np.array([segmentation_mask.shape[0] // 2, 0, segmentation_mask.shape[2] // 2])
+    origin = np.array([hip_mask.shape[0] // 2, 0, hip_mask.shape[2] // 2])
     projection_plane_center = np.array([origin[0], projection_plane_index, origin[2]])
     d = np.linalg.norm(projection_plane_center - origin)
     femoral_neck_center_projected = np.array([femoral_neck_center[0], femoral_neck_center[2]]) * (d / femoral_neck_center[1])
     femoral_head_center_projected = np.array([femoral_head_center[0], femoral_head_center[2]]) * (d / femoral_head_center[1])
-    femoral_shaft_axis_1_projected = np.array([femoral_shaft_axis[1][0], femoral_shaft_axis[1][2]]) * (d / femoral_shaft_axis[1][1])
-    femoral_shaft_axis_0_projected = np.array([femoral_shaft_axis[0][0], femoral_shaft_axis[0][2]]) * (d / femoral_shaft_axis[0][1])
+    femoral_shaft_axis_1_projected = np.array([shaft_axis_high[0], shaft_axis_high[2]]) * (d / shaft_axis_high[1])
+    femoral_shaft_axis_0_projected = np.array([shaft_axis_low[0], shaft_axis_low[2]]) * (d / shaft_axis_low[1])
     neck_vector_projected = femoral_neck_center_projected - femoral_head_center_projected
     shaft_vector_projected = femoral_shaft_axis_1_projected - femoral_shaft_axis_0_projected
     projected_ccd = calculate_angle_between_vectors(neck_vector_projected.astype('float32'), shaft_vector_projected.astype('float32'))
+
     projected_ccd = 180 - projected_ccd if projected_ccd < 90 else projected_ccd
 
     return ccd, projected_ccd
@@ -416,30 +444,29 @@ def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int 
         assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
         most_proximal_femur_slice = np.min(np.nonzero(fa)[0])
-        acetabulum_points = np.nonzero(aa[most_proximal_femur_slice - 10:most_proximal_femur_slice + 10])
+        tmp = aa.copy()
+        tmp[:most_proximal_femur_slice - 20] = 0
+        tmp[most_proximal_femur_slice + 10:] = 0
+        acetabulum_points = np.nonzero(tmp)
         lateral_edge = np.argmin(acetabulum_points[2]) if side == 'left' else np.argmax(acetabulum_points[2])
         lateral_edge_point = np.array(
-            [acetabulum_points[0][lateral_edge] + most_proximal_femur_slice, acetabulum_points[1][lateral_edge],
+            [acetabulum_points[0][lateral_edge], acetabulum_points[1][lateral_edge],
              acetabulum_points[2][lateral_edge]])
 
         return lateral_edge_point
-
 
     acetabulum_array = np.where(segmentation_mask == acetabulum_label, 1, 0)
     left_acetabulum = acetabulum_array[:, :, :acetabulum_array.shape[2] // 2]
     right_acetabulum = acetabulum_array[:, :, acetabulum_array.shape[2] // 2:]
 
-    u = right_fhc
-    v = G
-    p = right_fhc + np.array([-1, 0, 0])
-    s = get_vector_through_point_perpendicular_to_line(u, v,
-                                                           p)  # s is perpendicular to G and goes in proximal direction
+    d = np.array([-1, 0, 0])
+    n = G / np.linalg.norm(G)
+    d_perp = d - np.dot(d, n) * n
+    s = right_fhc_adj + d_perp  # s is perpendicular to G and goes in proximal direction
     s2 = right_fhc - get_lateral_edge_point(right_femur, right_acetabulum)
     cea_right = calculate_angle_between_vectors(np.abs(s), s2)
 
-    u = left_fhc
-    p = left_fhc + np.array([-1, 0, 0])
-    s = get_vector_through_point_perpendicular_to_line(u, v, p)
+    s = left_fhc + d_perp
     s2 = left_fhc - get_lateral_edge_point(left_femur, left_acetabulum)
     cea_left = calculate_angle_between_vectors(np.abs(s), s2)
 

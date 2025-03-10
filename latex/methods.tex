@@ -16,10 +16,11 @@
 \usepackage[noend]{algpseudocode}
 \usepackage{mdframed}
 %\usepackage{tikz}
-
 \usepackage[style=nature]{biblatex}
 \usepackage{color}
 \usepackage{algorithmicx}
+\usepackage{unicode-math}
+\usepackage{hyperref}
 %\addbibresource{sources.bib}
 
 \newcommand{\add}[1]{\textbf{\textcolor{red}{$<$TODO$>$ #1 $</>$}}}
@@ -39,12 +40,13 @@
 \begin{document}
 	\emergencystretch 3em
 	\maketitle
+	%\tableofcontents
 
-	\section{Preface}
+	\section*{Preface}
 	\label{sec:preface}
 	This document describes the methods used to calculate morphometric parameters from three-dimensional medical images.
-	Since there exist more than 20 different coordinate systems for three-dimensional medical images, we will define a consistent coordinate system for the following calculations.
-	Using the established lettering system 'L/R', 'I/S', and 'A/P' for the image sides, we define the coordinate system as 'IPR', i.e.
+	Since there exist more than 20 different coordinate systems for three-dimensional medical images, we will define a standard coordinate system for the following calculations.
+	Using the established lettering system 'L/R', 'I/S', and 'A/P' for the image axes, we define the coordinate system as 'IPR', i.e.
 	\begin{itemize}
 		\item the x-axis is the transversal axis, with indices increasing from superior to inferior,
 		\item the y-axis is the coronal axis, with indices increasing from anterior to posterior, and
@@ -53,21 +55,18 @@
 
 	\section{3D CCD}
 	\label{sec:ccd}
-	The CCD angle is originally defined on radiographic images, i.e. is measured as a projected angle on a two-dimensional image.
-	In clinical practice, this is also transferred to three-dimensional imaging modalities, i.e. CT and MRI, where the CCD angle is measured on a single two-dimensional
-	image slice.
-	However, high-resolution three-dimensional imaging offers the opportunity to measure the CCD angle "as is", i.e. how the femur is oriented in three-dimensional space.
+	In clinical practice, the CCD angle is usually measured in two-dimensional space, i.e. on X-ray images or single coronal CT/MRI slices.
+	However, high-resolution three-dimensional imaging offers the opportunity to measure the CCD angle "as is", i.e. how the femur presents in three-dimensional space.
 
 	\subheading{Axes Definition}
 
 	\noindent The CCD angle is defined as the angle between the femoral neck axis and the femoral shaft axis.
-	In a three-dimensional image, we may define these as follows.
 
 	\paragraph{The Neck Axis}
-	is an axis from the centre of the femoral head through the centre of the femoral neck.
+	is an axis that starts at the centre of the femoral head and goes through the centre of the femoral neck.
 	\textbf{Algorithm \ref{alg:fhc}} can be used to find the centre of the femoral head.
 
-	\begin{algorithm}
+	\begin{algorithm}[H]
 		\caption{Femoral Head Centre Definition}
 		\label{alg:fhc}
 		\begin{algorithmic}[1]
@@ -88,18 +87,29 @@
 		\end{algorithmic}
 	\end{algorithm}
 
-	\noindent Basis of the algorithm is a 3D segmentation mask of the femur, $M$.
-	The algorithm starts by finding the most proximal layer of the femur $mpl$, i.e. finding the minimum of $x$ of all segmented voxels with coordinates $(x, y, z)$.
-	The centroid of this layer, $c$, which is the most superior point of the femoral head, is calculated and used as a reference point for finding the most inferior point of the femoral head.
-	The algorithm then iterates through the layers of the femur, starting from the most proximal layer $mpl$, and collects all contour voxels of the femoral head ($P$).
-	The algorithm stops when the most inferior voxel of the femoral head is reached, i.e. when a layer $i$ is found where the voxel $(i, c_y, c_z)$ with the same y and z coordinates as the aforementioned centroid $c$ is not segmented.
-	In other words, the algorithm continues until it can find no more segmented voxel directly inferior to the centroid $c$ of the most proximal layer.
-	A sphere with radius $r$ and centre $c$ is then fitted to the collected contour points $P$ with a least-squares approach to approximate the femoral head.
-	The centre $c$ of this sphere is the approximate centre of the femoral head.
+	\noindent A three-dimensional segmentation masks $M$ serves as the basis for the algorithm.
+
+	\begin{enumerate}
+		\item In a first step, the most proximal image slice of the femur $mpl$ is determined by finding the segmented voxel with the smallest $x$ coordinate, i.e. the most proximal voxel of the femur.
+		\item The centroid of the most proximal layer of the femur (and as such the most proximal voxel of the femoral head), $c$, is calculated and used as a reference point for finding the most inferior point of the femoral head.
+		\item The algorithm then iterates through the layers of the femur, starting from the most proximal layer $mpl$, and collects all contour voxels of the femoral head ($P$).
+		\item The algorithm stops when the most inferior voxel of the femoral head is reached, i.e. when a layer $i$ is found where the voxel $(i, c_y, c_z)$ with the same y and z coordinates as the aforementioned centroid $c$ is not segmented.
+		In other words, the algorithm continues until it can find no more segmented voxel directly inferior to the centroid $c$ of the most proximal layer.
+		\item A sphere with radius $r$ and centre $c$ is then fitted to the collected contour points $P$ with a least-squares approach to approximate the femoral head.
+	\end{enumerate}
+
+	\begin{figure}
+		\centering
+		\includegraphics[scale=0.2]{figures/fhc_sphere_fit}
+		\caption{Femoral head approximation by a fitted sphere. Outline voxels of the femoral head in blue, fitted sphere in red.}
+		\label{fig:femoral_head}
+	\end{figure}
+
+	The centre $c$ of this sphere is the approximate centre of the femoral head (\textbf{Figure \ref{fig:femoral_head}}).
 	Centre and radius of the fitted sphere can then be used to find the centre of the femoral neck.
 	\textbf{Algorithm \ref{alg:fnc}} can be used for this purpose.\bigskip
 
-	\begin{algorithm}
+	\begin{algorithm}[H]
 		\caption{Femoral Neck Centre Definition}
 		\label{alg:fnc}
 		\begin{algorithmic}[1]
@@ -116,8 +126,16 @@
 		\end{algorithmic}
 	\end{algorithm}
 
-	\noindent On the basis of the femoral head centre with centre $c$ and radius $r$, a hollow sphere is defined around the femoral head with an inner radius of $1.1 \cdot r$ and outer radius of $1.2 \cdot r$.
-	A hollow sphere is a type of solid sphere (think, e.g., a cannonball) with an inner and outer radius; its voxels lie between the inner and outer radius, i.e. it's hollow (like an apricot with its seed removed, see \textbf{Figure \ref{fig:apricot}}).
+	\begin{enumerate}
+		\item On the basis of the femoral head centre with centre $c$ and radius $r$, a hollow sphere is defined around the femoral head with an inner radius of $1.1 \cdot r$ and outer radius of $1.2 \cdot r$.
+		A hollow sphere is a type of solid sphere (think, e.g., a cannonball) with an inner and outer radius; its voxels lie between the inner and outer radius, i.e. it's hollow (like an apricot with its seed removed, see \textbf{Figure \ref{fig:apricot}}).
+		\item The points $S$ of the hollow sphere are filtered to exclude everything superior and medial to the femoral head centre (\textbf{Figure \ref{fig:neck_candidaes}}).
+		\item The intersection $N$ of those points and the femur ($S \cap F$) are an approximation of the voxels comprising the femoral neck.
+		\item From these voxels $N$, the centre of the femoral neck can be calculated as the centroid $nc$.
+		\item The femoral neck axis is then defined as the line from the femoral head centre to the femoral neck centre (\textbf{Figure \ref{fig:neck_axis}}).
+	\end{enumerate}
+
+	\noindent Since both reference points are represented in vector format, the reference line is simply the vector connecting the two points: \[fna = c - nc\]
 	
 	\begin{figure}[]
 		\centering
@@ -125,33 +143,26 @@
 		\caption{An apricot with (solid) and without its seed (hollow).}
 		\label{fig:apricot}
 	\end{figure}
-	
-	\noindent The points $S$ of the hollow sphere are filtered to exclude everything superior and medial to the femoral head centre (\textbf{Figure \ref{fig:neck_candidaes}}).
-	
+
 	\begin{figure}
 		\centering
 		\includegraphics[scale=0.25]{figures/femoral_neck_candidates}
 		\caption{Candidates for the points comprising the femoral neck, i.e. all points of the hollow sphere inferior and lateral to the femoral head centre.}
 		\label{fig:neck_candidaes}
 	\end{figure}
-	
-	\noindent The intersection $N$ of those points and the femur ($S \cap F$) are an approximation of the voxels comprising the femoral neck.
-	From these voxels $N$, the centre of the femoral neck can be calculated as the centroid $nc$.
-	The femoral neck axis is then defined as the line from the femoral head centre to the femoral neck centre (\textbf{Figure \ref{fig:neck_axis}}).
 
 	\begin{figure}
 		\centering
 		\includegraphics[scale=0.2]{figures/neck_axis}
-		\caption{The femoral neck axis (yellow) is defined as the line from the femoral head centre to the femoral neck centre (femoral neck points in red, their centroid in green).}
+		\caption{The femoral neck axis (yellow) is defined as the line from the femoral head centre (fhc) to the femoral neck centre (fnc). Femoral neck points in red, their centroid in green.}
 		\label{fig:neck_axis}
 	\end{figure}
-
-	\noindent Since both reference points are represented in vector format, the reference line is simply the vector connecting the two points: \[fna = c - nc\]
 
 	\paragraph{The Shaft Axis}
 	is an axis through the centre of the femoral shaft.
 	\textbf{Algorithm \ref{alg:fsa}} can be used to get the femoral shaft axis.
-	\begin{algorithm}
+
+	\begin{algorithm}[H]
 		\caption{Femoral Shaft Axis Definition}
 		\label{alg:fsa}
 		\begin{algorithmic}[1]
@@ -167,18 +178,21 @@
 		\end{algorithmic}
 	\end{algorithm}
 
-	The algorithm starts by finding the most distal layer $mdl$ of the femur analogously to algorithm \ref{alg:fhc}.
-	A layer $n$ layers superior to the most distal layer, where $n$ is dependent on the voxel spacing, is selected for the starting point of the femoral shaft axis.
-	This is done to improve robustness against segmentation errors.
-	The first starting point of the axis is therefore the centroid $c_1$ of the $(mdl - n)$th slice.
-	A second layer of the femoral shaft is defined $k$ layers superior to this slice, where $k$ again depends on the transversal spacing of the image.
-	The centroid $c_2$ of this second layer serves as the second reference point.
+	\begin{enumerate}
+		\item The algorithm starts by finding the most distal layer $mdl$ of the femur analogously to algorithm \ref{alg:fhc}.
+		\item A layer $n$ layers superior to the most distal layer, where $n$ is dependent on the voxel spacing, is selected for the starting point of the femoral shaft axis.
+		This is done to improve robustness against segmentation errors.
+		\item The first starting point of the axis is therefore the centroid $c_1$ of the $(mdl - n)$th slice.
+		\item A second layer of the femoral shaft is defined $k$ layers superior to this slice, where $k$ again depends on the transversal spacing of the image.
+		\item The centroid $c_2$ of this second layer serves as the second reference point.
+	\end{enumerate}
+
 	The femoral shaft axis is then defined as the line from the first through the second reference point (\textbf{Figure \ref{fig:shaft_axis}}): \[fsa = c_1 - c_2\]
 
 	\begin{figure}
 		\centering
 		\includegraphics[scale=0.2]{figures/shaft_axis}
-		\caption{The femoral shaft axis (yellow).}
+		\caption{The femoral shaft axis (yellow) from $c_1$ through $c_2$. Ellipses are illustrations of the selected layers $mdl$ and $l$ (depiction not accurate).}
 		\label{fig:shaft_axis}
 	\end{figure}
 
@@ -197,18 +211,58 @@
 
 	\section{3D Alpha Angle}
 	\label{sec:alpha}
-	The alpha angle is defined as the angle between the femoral neck axis and the line from the femoral head centre to the point where the femoral head is no longer spherical.
-	Henceforth, this point is referred to as the alpha point, and the axis connecting the femoral head centre and the alpha point is referred to as alpha axis.
-	While there is only one possible alpha axis on a two-dimensional image, on which the alpha angle is usually measured, there are multiple possible alpha axes in three-dimensional space.
-	Specifically, any point around the circumference of the transition from femoral head to femoral neck can be chosen as the alpha point.
-	Therefore, we identify twelve points around said circumference in a clockwise manner, starting from the most superior point.
+	The alpha angle is defined as the angle between the femoral neck axis and the line ("alpha axis") from the femoral head centre to the point where the femoral head is no longer spherical ("alpha point").
+	While on a two-dimensional image slice, there are only two possible alpha points (\textbf{Figure \ref{fig:alpha_angle_2d}}), there are infinite possible points in three a three-dimensional volume (i.e. the circumference of the transition between femoral head and neck).
+
+	\begin{figure}
+		\centering
+		\includegraphics[scale=0.2]{figures/alpha_angle}
+		\caption{Alpha angle measurement in two-dimensional space. Femoral neck axis in blue, alpha axis in green.}
+		\label{fig:alpha_angle_2d}
+	\end{figure}
+
+	\begin{figure}
+		\centering
+		\includegraphics[scale=0.2]{figures/alpha_angle_3d}
+		\caption{Alpha angle measurement in three-dimensional space. Femoral neck axis in green, alpha axes ($n=4$) in green.}
+		\label{fig:alpha_angle_3d}
+	\end{figure}
 
 	\subheading{Axes Definition}
 
 	\noindent The femoral head centre and neck axis are defined as in section \ref{sec:ccd}.
 
-	\paragraph{Alpha Points and Alpha Axes}
-	TODO
+	\paragraph{Alpha Points and Alpha Angle (Algorithm \ref{alg:alpha_angle})}
+
+	\begin{algorithm}[H]
+		\caption{Alpha Angle Calculation}
+		\label{alg:alpha_angle}
+		\begin{algorithmic}[1]
+			\Procedure{CalculateAlphaAngle}{fhc,fna,NP}
+				\State $fhc \gets \text{femoral head centre}$
+				\State $fna \gets \text{femoral neck axis}$
+				\State $NP \gets \text{Voxels comprising the femoral neck}$
+				\State $P \gets \text{SampleAlphaPoints(NP, n)}$
+				\State $\mathrm{A} \gets \emptyset$
+				\ForAll{$p_i \in P$}
+					\State $\alpha_i \gets \arccos\left(\frac{fna \cdot (p_i - fhc)}{\|fna\| \cdot \|p_i - fhc\|}\right)$
+					\State $\mathrm{A} \gets \mathrm{A} \cup \alpha_i$
+				\EndFor
+				\State $\alpha \gets \frac{1}{n} \sum_{i=1}^{n} \alpha_i \in \mathrm{A}$
+				\State \Return $\alpha$
+			\EndProcedure
+		\end{algorithmic}
+	\end{algorithm}
+
+	\begin{enumerate}
+		\item We sample $n$ alpha points $P$ on the circumference of the transition from femoral head to femoral neck (\textbf{Figure \ref{fig:alpha_angle_3d}}).
+		\item For each alpha point $p_i \in P$, we calculate the alpha angle $\alpha_i$ between the femoral neck axis and the line from the femoral head centre through $p_i$.
+		\item Finally, we can calculate the mean alpha angle $\bar{\alpha}$ as the average of all alpha angles $\alpha_i \in \mathrm{A}$:
+	\end{enumerate}
+
+	\[
+		\alpha = \frac{1}{n} \sum_{i=1}^{n} \alpha_i
+	\]
 
 	\section{Acetabular Anteversion}
 	\label{sec:acetabular_anteversion}
@@ -216,7 +270,14 @@
 
 	\subheading{Axes Definition}
 
-	\noindent Acetabular anteversion is defined as the angle between an axis $t$, which is perpendicular to a line $c$ connecting both femoral head centres and goes through the posterior acetabular rim, and an axis $g$, which connects the anterior and posterior acetabular rim.
+	\begin{figure}
+		\centering
+		\includegraphics[width=\linewidth]{figures/acetabular_anteversion}
+		\caption{Acetabular anteversion measurement in two-dimensional space. Axis $g$ connecting femoral head centres $M$ in green, axis $s$ perpendicular to $g$ through posterior acetabular rim $P$ in orange, axis $t$ connecting $P$ and anterior acetabular rim $A$ in pink.}
+		\label{fig:acetabular_anteversion}
+	\end{figure}
+
+	\noindent Acetabular anteversion is defined as the angle between an axis $t$, which is perpendicular to a line $g$ connecting both femoral head centres $M$ and goes through the posterior acetabular rim $P$, and an axis $s$, which connects the anterior $A$ and posterior acetabular rim $P$ (\textbf{Figure \ref{fig:acetabular_anteversion}}).
 	Algorithm \ref{alg:acetabular_anteversion} can be used to calculate the acetabular anteversion.
 
 	\begin{algorithm}
@@ -228,8 +289,8 @@
 				\State $c_{left} \gets FindFemoralHeadCentre(M, left)$
 				\State $c_{right} \gets FindFemoralHeadCentre(M, right)$
 				\State $l \gets (c_{left}.x + c_{right}.x) \: / \: 2$
-				\State $c \gets c_{right} - c_{left}$
-				\State \Return $c, l$
+				\State $g \gets c_{right} - c_{left}$
+				\State \Return $g, l$
 			\EndProcedure
 			\Procedure{GetAnteriorAcetabularRim}{M, s}
 				\State $M \gets \text{A 2D Segmentation Mask of the Acetabulum}$
@@ -260,30 +321,91 @@
 			\Procedure{GetAcetabularAxes}{$M_A, M_F$, s}
 				\State $M_A \gets \text{A 3D Segmentation Mask of the Acetabulum}$
 				\State $M_F \gets \text{A 3D Segmentation Mask of the Femur}$
-				\State $s \gets \text{Image side}$
-				\State $c, l \gets GetFemoralHeadConnector(M_F)$
+				\State $side \gets \text{Image side}$
+				\State $g, l \gets GetFemoralHeadConnector(M_F)$
 				\State $a \gets GetAnteriorAcetabularRim(M_A[l], s)$
 				\State $p \gets GetPosteriorAcetabularRim(M_A[l], s)$
-				\State $g \gets a - p$
-				\State $M_s \gets split\_mask(M_F, s)$
+				\State $s \gets a - p$
+				\State $M_s \gets split\_mask(M_F, side)$
 				\State $u \gets FindFemoralHeadCentre(M_s)$
-				\State $v \gets c$
-				\State $t \gets ((p - u) \cdot v \: / \: v \cdot v) \cdot v + u$
-				\State \Return $g, t$
+				\State $t \gets ((p - u) \cdot g \: / \: g \cdot g) \cdot g + u$
+				\State \Return $s, t$
 			\EndProcedure
 		\end{algorithmic}
 	\end{algorithm}
 
-	\noindent The algorithm starts by finding the femoral head centres of both femurs and the transversal plane between both centres, $l$.
-	Afterwards, a vector $c$ connecting both femoral head centres is determined.
-	For one image side, the anterior and posterior acetabular rims are found.
-	Both of these reference points are defined on the transversal plane $l$.
-	To find the anterior acetabular rim $a$, the algorithm searches for the most lateral point of the acetabulum in the anterior half of $l$, while the posterior rim $p$ is simply the most lateral point of the acetabulum in $l$.
-	With all reference points defined, a vector $g$ connecting $a$ and $p$ and a vector $t$, which is perpendicular to $c$ and goes through $p$, are calculated.
+	\begin{enumerate}
+		\item We find the femoral head centres $c_{left}$ and $c_{right}$ of the left and right femoral head, respectively.
+		\item The femoral head connector $g$ is then defined as the vector connecting both femoral head centres: $g = c_{left} - c_{right}$.
+		\item Next, we find the anterior and posterior acetabular rim points $a$ and $p$.
+		\item We can find the anterior point $a$ by restricting the search space to the anterior half of the image and selecting the most lateral segmented pixel of the acetabulum.
+		\item Since the posterior point is also the most lateral point, we can find $p$ by selecting the most lateral pixel of the acetabulum.
+		\item The acetabular axis $s$ is then defined as the vector connecting the anterior and posterior acetabular rim points: $s = a - p$.
+		\item We then split the femoral head mask $M_F$ into left and right sides $M_s$.
+		\item The acetabular anteversion axis $t$ is then defined as the line from the femoral head centre $u$ through the posterior acetabular rim point $p$ and perpendicular to the femoral head connector $g$. This is done by projecting the vector from $p$ to $u$ onto $g$ and adding the result to $u$. The acetabular anteversion axis is then defined as $t = ((p - u) \cdot g \: / \: g \cdot g) \cdot g + u$.
+	\end{enumerate}
 
 	\subheading{Angle Calculation}
 
-	\noindent The acetabular anteversion is then calculated as the angle between $g$ and $t$: \[AA = \arccos\left(\frac{g \cdot t}{\|g\| \cdot \|t\|}\right)\]
+	\noindent The acetabular anteversion is then calculated as the angle between $s$ and $t$: \[AA = \arccos\left(\frac{s \cdot t}{\|s\| \cdot \|t\|}\right)\]
+
+	\section{Center-Edge Angle}
+	\label{sec:cea}
+	\noindent The center-edge angle is a measure of acetabular coverage and is used to diagnose hip dysplasia.
+
+	\subheading{Axes Definition}
+
+	\noindent We need to define three axes to calculate the center-edge angle (\textbf{Figure \ref{fig:center_edge}}):
+	\begin{enumerate}
+		\item A line $g$ connecting left and right femoral head centres $c_l$ and $c_r$
+		\item A line $a$ perpendicular to $g$, starting at the femoral head centre $c_{l/r}$ and going in proximal direction
+		\item A line $b$ starting at the femoral head centre $c_{l/r}$ and going through the most lateral point of the acetabulum $e$
+	\end{enumerate}
+
+	\noindent\textbf{Algorithm \ref{alg:cea}} can be used to calculate the center-edge angle.
+
+	\begin{algorithm}[H]
+		\caption{Center-Edge Angle Calculation}
+		\label{alg:cea}
+		\begin{algorithmic}[1]
+			\Procedure{GetCenterEdgeAxes}{F,A}
+				\State $F \gets \text{A 3D Segmentation Mask of the Femur}$
+				\State $A \gets \text{A 3D Segmentation Mask of the Acetabulum}$
+				\State $c_l, c_r \gets FindFemoralHeadCentre(F)$
+				\State $g \gets c_r - c_l$
+				\State $d = (-1, 0, 0)$
+				\State $n = \frac{g}{\lvert \lvert g \rvert \rvert}$
+				\State $d_{perp} = d - ((d \cdot n)n)$
+				\State $a = c_{l/r} + d_{perp}$
+				\State $e \gets FindMostLateralPoint(A)$
+				\State $b \gets e - c_{l/r}$
+				\State \Return $a, b$
+			\EndProcedure
+		\end{algorithmic}
+	\end{algorithm}
+
+	\begin{enumerate}
+		\item We find the femoral head centres $c_l$ and $c_r$.
+		\item The femoral head connector $g$ is then defined as the vector connecting both femoral head centres: $g = c_l - c_r$.
+		\item We define a direction vector $d$ pointing in the proximal direction.
+		\item We calculate the unit vector $n$ in the direction of $g$.
+		\item The perpendicular vector $d_{perp}$ to $g$ is then defined as the vector from $d$ to the projection of $d$ onto $n$: $d_{perp} = d - ((d \cdot n)n)$.
+		\item The line $a$ is then defined as the vector from the femoral head centre $c_{l/r}$ in the direction of $d_{perp}$: $a = c_{l/r} + d_{perp}$.
+		\item We find the most lateral point $e$ of the acetabulum.
+		\item The line $b$ is then defined as the vector from the femoral head centre $c_{l/r}$ to the most lateral point $e$: $b = e - c_{l/r}$.
+	\end{enumerate}
+
+	\begin{figure}
+		\centering
+		\includegraphics[width=\linewidth]{figures/center_edge}
+		\caption{Center-edge angle in three-dimensional space. Femur in green, acetabulum in blue. Line connecting femoral head centres $g$ in yellow, line $a$ perpendicular to $g$ from $c_{l/r}$ in proximal direction in red, line $b$ from $c_{l/r}$ to most lateral point of the acetabulum $e$ in black.}
+		\label{fig:center_edge}
+	\end{figure}
+
+	\subheading{Angle Calculation}
+
+	\noindent With both axed defined, we can calculate the center-edge angle between $a$ and $b$:
+	\[CEA = \arccos\left(\frac{a \cdot b}{\|a\| \cdot \|b\|}\right)\]
 
 	\section{Mikulicz Line Deviation}
 	\label{sec:mikulicz}

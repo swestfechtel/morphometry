@@ -9,11 +9,11 @@ from pathlib import Path
 from morphometry.femur import calculate_femoral_torsion
 from morphometry.tibia import calculate_tibial_torsion
 from morphometry.knee import calculate_knee_rotation_angle
-from morphometry.whole_leg import calculate_mikulicz_deviation, calculate_leg_length
+from morphometry.whole_leg import calculate_mikulicz_deviation, calculate_bone_length
 from morphometry.ankle import calculate_pma_angle
 from morphometry.hip import calculate_ccd
 from morphometry.utils import correct_axis_ordering
-from morphometry.image_io import Image
+from morphometry.image_io import Segmentation
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 from multiprocessing import Pool
@@ -21,11 +21,11 @@ from multiprocessing import Pool
 
 def process_patient(patient):
     try:
-        hip = Image('nibabel')
+        hip = Segmentation('nibabel')
         hip.read_image(f'/home/simon/Data/Augsburg_large/preprocessed/{patient}/hip_seg.nii.gz')
-        knee = Image('nibabel')
+        knee = Segmentation('nibabel')
         knee.read_image(f'/home/simon/Data/Augsburg_large/preprocessed/{patient}/knee_seg.nii.gz')
-        ankle = Image('nibabel')
+        ankle = Segmentation('nibabel')
         ankle.read_image(f'/home/simon/Data/Augsburg_large/preprocessed/{patient}/ankle_seg.nii.gz')
     except FileNotFoundError as e:
         print(f'Patient {patient} could not be found.')
@@ -34,6 +34,10 @@ def process_patient(patient):
     hip.transform_coordinate_system()
     knee.transform_coordinate_system()
     ankle.transform_coordinate_system()
+
+    hip.remove_outliers()
+    knee.remove_outliers()
+    ankle.remove_outliers()
 
     x_ratio = abs(hip.get_spacing()[0]) / 2 * abs(hip.get_spacing()[2])
 
@@ -49,17 +53,17 @@ def process_patient(patient):
     right_ankle = ankle_mask[:, :, ankle_mask.shape[2] // 2:]
 
     left_hip = nib.Nifti1Image(left_hip, hip.get_affine(), hip.get_header())
-    left_hip = Image(left_hip)
+    left_hip = Segmentation(left_hip)
     right_hip = nib.Nifti1Image(right_hip, hip.get_affine(), hip.get_header())
-    right_hip = Image(right_hip)
+    right_hip = Segmentation(right_hip)
     left_knee = nib.Nifti1Image(left_knee, knee.get_affine(), knee.get_header())
-    left_knee = Image(left_knee)
+    left_knee = Segmentation(left_knee)
     right_knee = nib.Nifti1Image(right_knee, knee.get_affine(), knee.get_header())
-    right_knee = Image(right_knee)
+    right_knee = Segmentation(right_knee)
     left_ankle = nib.Nifti1Image(left_ankle, ankle.get_affine(), ankle.get_header())
-    left_ankle = Image(left_ankle)
+    left_ankle = Segmentation(left_ankle)
     right_ankle = nib.Nifti1Image(right_ankle, ankle.get_affine(), ankle.get_header())
-    right_ankle = Image(right_ankle)
+    right_ankle = Segmentation(right_ankle)
 
     try:
         at_lee_left, fig = calculate_femoral_torsion(left_hip, left_knee.get_array(), side='left', x_ratio=x_ratio, plot=True)
@@ -106,38 +110,67 @@ def process_patient(patient):
         tt_right = np.nan
 
     try:
-        ccd_left = calculate_ccd(left_hip.get_array(), 'left', 1, False, x_ratio)
+        ccd_left = calculate_ccd(left_hip, left_knee, 'left', 1, False, x_ratio)
     except (ValueError, IndexError, RuntimeError):
         ccd_left = (np.nan, np.nan)
 
     try:
-        ccd_right = calculate_ccd(right_hip.get_array(), 'right', 1, False, x_ratio)
+        ccd_right = calculate_ccd(right_hip, right_knee, 'right', 1, False, x_ratio)
     except (ValueError, IndexError, RuntimeError):
         ccd_right = (np.nan, np.nan)
 
     try:
-        kra_left = calculate_knee_rotation_angle(left_knee.get_array(), 1, 2, False)
+        kra_left = calculate_knee_rotation_angle(left_knee.get_array(), 1, 2, 'left', False)
     except (ValueError, IndexError, RuntimeError):
         kra_left = np.nan
 
     try:
-        kra_right = calculate_knee_rotation_angle(right_knee.get_array(), 1, 2, False)
+        kra_right = calculate_knee_rotation_angle(right_knee.get_array(), 1, 2, 'right', False)
     except (ValueError, IndexError, RuntimeError):
         kra_right = np.nan
 
     try:
-        ll_left = calculate_leg_length(left_hip, left_ankle)
+        ll_left = calculate_bone_length(left_hip, left_ankle)
     except (ValueError, IndexError, RuntimeError) as e:
         ll_left = np.nan
-        print(e)
 
     try:
-        ll_right = calculate_leg_length(right_hip, right_ankle)
+        ll_right = calculate_bone_length(right_hip, right_ankle)
     except (ValueError, IndexError, RuntimeError) as e:
         ll_right = np.nan
-        print(e)
 
-    return {'patient': patient, 'at_lee_left': at_lee_left, 'at_lee_right': at_lee_right, 'at_murphy_left': at_murphy_left, 'at_murphy_right': at_murphy_right, 'tt_left': tt_left, 'tt_right': tt_right, 'ccd_left': ccd_left, 'ccd_right': ccd_right, 'kra_left': kra_left, 'kra_right': kra_right, 'll_left': ll_left, 'll_right': ll_right}
+    try:
+        fl_left = calculate_bone_length(left_hip, left_knee)
+    except (ValueError, IndexError, RuntimeError) as e:
+        fl_left = np.nan
+
+    try:
+        fl_right = calculate_bone_length(right_hip, right_knee)
+    except (ValueError, IndexError, RuntimeError) as e:
+        fl_right = np.nan
+
+    try:
+        tl_left = calculate_bone_length(left_knee, left_ankle)
+    except (ValueError, IndexError, RuntimeError) as e:
+        tl_left = np.nan
+
+    try:
+        tl_right = calculate_bone_length(right_knee, right_ankle)
+    except (ValueError, IndexError, RuntimeError) as e:
+        tl_right = np.nan
+
+    try:
+        mld_left = calculate_mikulicz_deviation(left_hip, left_knee, left_ankle, 'left', x_ratio=x_ratio)
+    except (ValueError, IndexError, RuntimeError) as e:
+        mld_left = np.nan
+
+    try:
+        mld_right = calculate_mikulicz_deviation(right_hip, right_knee, right_ankle, 'right', x_ratio=x_ratio)
+    except (ValueError, IndexError, RuntimeError) as e:
+        mld_right = np.nan
+
+    return {'patient': patient, 'at_lee_left': at_lee_left, 'at_lee_right': at_lee_right, 'at_murphy_left': at_murphy_left, 'at_murphy_right': at_murphy_right, 'tt_left': tt_left, 'tt_right': tt_right, 'ccd_left': ccd_left, 'ccd_right': ccd_right,
+            'kra_left': kra_left, 'kra_right': kra_right, 'll_left': ll_left, 'll_right': ll_right, 'fl_left': fl_left, 'fl_right': fl_right, 'tl_left': tl_left, 'tl_right': tl_right, 'mld_left': mld_left, 'mld_right': mld_right}
 
 
 if __name__ == '__main__':
@@ -148,7 +181,7 @@ if __name__ == '__main__':
         res = pool.map(process_patient, patients)
 
     index = pd.MultiIndex.from_product([patients, ['right', 'left']], names=['Patient', 'Side'])
-    df = pd.DataFrame(columns=['CCD (actual)', 'CCD (projected)', 'AT (Lee)', 'AT (Murphy)', 'TT', 'KRA', 'LL'], index=index)
+    df = pd.DataFrame(columns=['CCD (actual)', 'CCD (projected)', 'AT (Lee)', 'AT (Murphy)', 'TT', 'KRA', 'LL', 'FL', 'TL', 'LLD', 'MLD'], index=index)
 
     for r in tqdm(res):
         patient = r['patient']
@@ -169,6 +202,14 @@ if __name__ == '__main__':
         df.loc[(patient, 'right'), 'KRA'] = r['kra_left']
         df.loc[(patient, 'left'), 'LL'] = r['ll_right']
         df.loc[(patient, 'right'), 'LL'] = r['ll_left']
+        df.loc[(patient, 'left'), 'FL'] = r['fl_right']
+        df.loc[(patient, 'right'), 'FL'] = r['fl_left']
+        df.loc[(patient, 'left'), 'TL'] = r['tl_right']
+        df.loc[(patient, 'right'), 'TL'] = r['tl_left']
+        df.loc[(patient, 'left'), 'LLD'] = r['ll_right'] - r['ll_left']
+        df.loc[(patient, 'right'), 'LLD'] = r['ll_right'] - r['ll_left']  # convention: if left patient leg is longer, LLD is positive
+        df.loc[(patient, 'left'), 'MLD'] = r['mld_right']
+        df.loc[(patient, 'right'), 'MLD'] = r['mld_left']
 
     df = df.apply(lambda x: np.round(x, 1))
     df.to_excel('/home/simon/Data/Augsburg_large/results_.xlsx')

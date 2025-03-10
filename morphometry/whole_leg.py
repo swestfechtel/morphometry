@@ -63,10 +63,24 @@ def calculate_mikulicz_deviation(hip_image: Image, knee_image: Image, ankle_imag
     kc_world = np.array(knee_image.transform_index_to_physical_point(knee_center))
     ac_world = np.array(ankle_image.transform_index_to_physical_point(ankle_center))
 
-    # switch coordinates back to numpy ordering
-    fhc_world = np.array([fhc_world[2], fhc_world[1], fhc_world[0]])
-    kc_world = np.array([kc_world[2], kc_world[1], kc_world[0]])
-    ac_world = np.array([ac_world[2], ac_world[1], ac_world[0]])
+    mikulicz_line = fhc_world - ac_world
+    w = kc_world - ac_world
+    d = np.linalg.norm(np.cross(mikulicz_line, w)) / np.linalg.norm(mikulicz_line)
+
+    t = (np.dot(w, mikulicz_line)) / np.power(np.linalg.norm(mikulicz_line), 2)
+    l = ac_world + np.dot(t, mikulicz_line)
+
+    # print(f'd = {d}, kc-l = {np.linalg.norm(kc_world - l)}')
+
+    if side == 'left':
+        if l[2] < kc_world[2]:  # if the mikulicz line lateral to the knee, it is a negative deviation
+            return -d
+
+    if side == 'right':
+        if l[2] > kc_world[2]:
+            return -d
+
+    return d
 
     print(f'Femoral head center: {fhc_world}, Knee center: {kc_world}, Ankle center: {ac_world}')
     # discard y coordinate since we are only interested in the deviation in the x-z plane
@@ -80,23 +94,23 @@ def calculate_mikulicz_deviation(hip_image: Image, knee_image: Image, ankle_imag
     return get_minimum_distance_between_line_and_point(fhc_world_2d, ac_world_2d, kc_world_2d)
 
 
-def calculate_leg_length(hip_image: Image, ankle_image: Image) -> floating[Any]:
+def calculate_bone_length(proximal_image: Image, distal_image: Image) -> floating[Any]:
     """
-    Calculate the length of the leg.
-    :param hip_image: An Image object of the hip segmentation mask.
-    :param ankle_image: An Image object of the ankle segmentation mask.
-    :return: The length of the leg.
+    Calculate the length of the femur, tibia or whole leg.
+    :param proximal_image: An Image object of the proximal segmentation mask.
+    :param distal_image: An Image object of the distal segmentation mask.
+    :return: The length of the bone.
     """
-    hip_most_proximal_layer = np.min(np.argwhere(hip_image.get_array())[:, 0])
-    ankle_most_distal_layer = np.max(np.argwhere(ankle_image.get_array())[:, 0])
+    most_proximal_layer = np.min(np.argwhere(proximal_image.get_array())[:, 0])
+    most_distal_layer = np.max(np.argwhere(distal_image.get_array())[:, 0])
 
-    hip_com = center_of_mass(hip_image.get_array()[hip_most_proximal_layer])
-    hip_com = (hip_most_proximal_layer, hip_com[0], hip_com[1])
+    proximal_layer_centroid = center_of_mass(proximal_image.get_array()[most_proximal_layer])
+    proximal_layer_centroid = (most_proximal_layer, proximal_layer_centroid[0], proximal_layer_centroid[1])
 
-    ankle_com = center_of_mass(ankle_image.get_array()[ankle_most_distal_layer])
-    ankle_com = (ankle_most_distal_layer, ankle_com[0], ankle_com[1])
+    distal_layer_centroid = center_of_mass(distal_image.get_array()[most_distal_layer])
+    distal_layer_centroid = (most_distal_layer, distal_layer_centroid[0], distal_layer_centroid[1])
 
-    proximal_world = hip_image.transform_index_to_physical_point(hip_com)
-    distal_world = ankle_image.transform_index_to_physical_point(ankle_com)
+    proximal_world = proximal_image.transform_index_to_physical_point(proximal_layer_centroid)
+    distal_world = distal_image.transform_index_to_physical_point(distal_layer_centroid)
 
     return np.linalg.norm(np.array(proximal_world) - np.array(distal_world))

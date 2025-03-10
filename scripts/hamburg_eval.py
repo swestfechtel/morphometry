@@ -34,7 +34,7 @@ if __name__ == '__main__':
         mask_left = mask_np[:, :, :mask_np.shape[2] // 2]
         mask_right = mask_np[:, :, mask_np.shape[2] // 2:]
 
-        ccd_left = calculate_ccd(mask_left, 'left', 1, isotropic=True)[0]
+        ccd_left = calculate_ccd(mask_left, None, 'left', 1, isotropic=True)[0]
         # ccd_right = calculate_ccd(mask_right, 'right', 1, isotropic=True)[0]
         fat_left = calculate_anteversion(mask_left, 'left', 1, isotropic=True)
         # fat_right = calculate_anteversion(mask_right, 'right', 1)
