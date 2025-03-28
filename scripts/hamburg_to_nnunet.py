@@ -17,7 +17,7 @@ if __name__ == '__main__':
         study_name = study.name
         study_id = study_name.split('_')[0]
 
-        if study_name == 'old_batch':
+        if study_name == 'old_batch' or study_name == 'MRTs überarbeitet und neu':
             continue
 
         if not '_30_' in study_name:
@@ -32,11 +32,11 @@ if __name__ == '__main__':
 
                 segmentation = sitk.ReadImage(file)
                 segmentation_array = sitk.GetArrayFromImage(segmentation)
-                segmentation_array = np.where(segmentation_array == 2, 0, segmentation_array)
-                segmentation_array = np.where(segmentation_array == 3, 2, segmentation_array)
-                segmentation_array = np.where(segmentation_array > 2, 0, segmentation_array)
+                # segmentation_array = np.where(segmentation_array == 2, 0, segmentation_array)
+                # segmentation_array = np.where(segmentation_array == 3, 2, segmentation_array)
+                segmentation_array = np.where(segmentation_array > 3, 0, segmentation_array)
 
-                if np.unique(segmentation_array).tolist() != [0, 1, 2]:
+                if np.unique(segmentation_array).tolist() != [0, 1, 2, 3]:
                     print(f'Unexpected values in segmentation {study_name}: {np.unique(segmentation_array).tolist()}')
                     continue
 

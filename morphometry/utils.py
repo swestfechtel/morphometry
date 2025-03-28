@@ -29,15 +29,15 @@ def calculate_angle_between_vectors(v1: np.ndarray, v2: np.ndarray) -> float:
     return math.degrees(np.arccos(np.dot(v1, v2)))
 
 
-def calculate_discontinuity(mask: np.ndarray, y: int) -> int:
+def calculate_discontinuity(mask: np.ndarray, c: int) -> int:
     """
-    Find a discontinuity in the mask for a given y (i.e. coronal) coordinate
-    :param mask: The 2D mask.
-    :param y: The y coordinate.
-    :return x: The z (i.e. sagittal) coordinate of the discontinuity.
+    Find a discontinuity in the mask for a given coronal coordinate
+    :param mask: A 2D segmentation mask.
+    :param c: The coronal coordinate.
+    :return: The sagittal coordinates of the discontinuity.
     """
-    side_points = get_side_contour_points(mask, y)
-    return np.nonzero(1-mask[y, side_points[0]:side_points[1]])[0] + side_points[0]
+    side_points = get_side_contour_points(mask, c)
+    return np.nonzero(1 - mask[side_points[0]:side_points[1], c])[0] + side_points[0]  # all sagittal coordinates where the mask is 0 between the two side points (?)
 
 
 def calculate_min_distance_between_point_clouds(pc1: np.ndarray, pc2: np.ndarray) -> float:
@@ -87,49 +87,7 @@ def combine_masks(mask1: np.ndarray, mask2: np.ndarray) -> np.ndarray:
     :param mask2: The second mask.
     :return: The combined mask.
     """
-    return np.concatenate((mask1, mask2), 2)
-
-
-def correct_axis_ordering(image: nib.Nifti1Image) -> nib.Nifti1Image:
-    """
-    Transform nibabel image to comply with code expectations.
-
-    The returned Image with axes [x, y, z] follows the following conventions:
-        - the x-axis is the sagittal view, the y axis is the coronal view and the z axis is the axial view
-        - the x-axis is ordered left to right, i.e. slice 0 of the sagittal view is the most left slice
-        - the y-axis is ordered anterior to posterior, i.e. slice 0 of the coronal view is the most anterior slice
-        - the z-axis is ordered from superior to inferior, i.e. slice 0 of the axial view is the most superior slice
-
-    :param image: A nibabel 3D image.
-    :return: A nibabel image conforming to code expectations.
-    """
-    data = image.get_fdata()
-    # data = np.swapaxes(data, 0, 2)
-    affine = image.affine
-    orientation = nib.orientations.io_orientation(affine)
-    std_orientation = nib.orientations.axcodes2ornt(('I', 'P', 'R'))
-
-    transform = nib.orientations.ornt_transform(orientation, std_orientation)
-    reoriented_data = nib.orientations.apply_orientation(data, transform)
-    new_affine = affine @ nib.orientations.inv_ornt_aff(transform, data.shape)
-    new_image = nib.Nifti1Image(reoriented_data, new_affine)
-
-    return new_image
-
-
-def determine_min_y(mask: np.ndarray, percentage: float = 0.5) -> int:
-    """
-    Calculate a min y (i.e. coronal) cut-off value to just have a view on the dorsal part of the mask.
-    :param mask: The 2D mask.
-    :param percentage: The percentage of the dorsal part to consider.
-    :return: The min y value.
-    """
-    contour_points = get_contour_points(mask)
-
-    num_points = int(len(contour_points[:, 0]) * percentage)  # max number of points to consider
-
-    sorted_y = np.sort(contour_points[:, 0])
-    return sorted_y[-num_points]
+    return np.concatenate((mask1, mask2), 0)
 
 
 def draw_circle(mask: np.ndarray, layer: int, r: float, center: np.ndarray, color_label=5) -> np.ndarray:
@@ -143,21 +101,21 @@ def draw_circle(mask: np.ndarray, layer: int, r: float, center: np.ndarray, colo
     :return: A copy of the input mask with the circle drawn on it.
     """
     mask = mask.copy()
-    for x in range(center[2] - int(r) - 2,
-                   center[2] + int(r) + 2):  # all relevant x coordinates
-        if r**2 - (x - center[2])**2 >= 0:
-            y = int(round(math.sqrt(r**2 - (x - center[2])**2)))
-            if y < mask.shape[1]:
-                mask[layer, center[1] + y, x] = color_label
-                mask[layer, center[1] - y, x] = color_label
+    for s in range(center[0] - int(r) - 2,
+                   center[0] + int(r) + 2):  # all relevant sagittal coordinates
+        if r**2 - (s - center[0])**2 >= 0:
+            c = int(round(math.sqrt(r**2 - (s - center[0])**2)))
+            if c < mask.shape[1]:
+                mask[s, center[1] + c, layer] = color_label
+                mask[s, center[1] - c, layer] = color_label
 
-    for y in range(center[1] - int(r) - 2,
+    for c in range(center[1] - int(r) - 2,
                    center[1] + int(r) + 2):  # all relevant y coordinates
-        if r**2 - (y - center[1])**2 >= 0:
-            x = int(round(math.sqrt(r**2 - (y - center[1])**2)))
-            if x < mask.shape[2]:
-                mask[layer, y, center[2] + x] = color_label
-                mask[layer, y, center[2] - x] = color_label
+        if r**2 - (c - center[1])**2 >= 0:
+            s = int(round(math.sqrt(r**2 - (c - center[1])**2)))
+            if s < mask.shape[0]:
+                mask[center[2] + s, c, layer] = color_label
+                mask[center[2] - s, c, layer] = color_label
 
     return mask
 
@@ -173,36 +131,42 @@ def draw_line(mask: np.ndarray, layer: int, start: np.ndarray, end: np.ndarray, 
     :return: A copy of the input mask with the line drawn on it.
     """
     mask = mask.copy()
-    line = bresenhamline([start[1:]], [end[1:]], -1).astype(np.uint16)
+    line = bresenhamline([start[:2]], [end[:2]], -1).astype(np.uint16)
     for u in line:
-        mask[layer, u[0], u[1]] = color_label
+        mask[u[0], u[1], layer] = color_label
 
     return mask
 
 
-def find_notch(mask: np.ndarray, min_y: int = None, percentage: float = 0.5, thresh: float = 0, break_after_first: bool = False) -> np.ndarray:
+def find_notch(mask: np.ndarray, most_ventral: int = None, percentage: float = 0.5, thresh: float = 0, break_after_first: bool = False) -> np.ndarray:
     """
-    Find a notch by decreasing the y (i.e. coronal) value (up to the value of min_y)
-    -> moving to ventral/anterior to find the notch.
+    Find a notch by shifting the coronal coordinate (up to the value of most_ventral) and calculating the discontinuity.
     :param mask: The 2D mask.
-    :param min_y: The minimum y value.
+    :param most_ventral: Threshold for the most ventral coordinate where the notch can be.
     :param percentage: The percentage of the dorsal part to consider.
     :param thresh: The threshold for the discontinuity.
     :param break_after_first: Whether to break after the first notch was found.
-    :return: The notch.
+    :return: The notch (sagittal, coronal).
     """
-    # min_y is the threshold for the most ventral point where the notch can be
-    if min_y is None:
-        min_y = determine_min_y(mask, percentage)
-    y, _ = get_dorsal_mask_point(mask)
-    y = int(y)
+    # most_ventral is the threshold for the most ventral (anterior) point where the notch can be
+    if most_ventral is None:
+        contour_points = get_contour_points(mask)
+
+        num_points = int(len(contour_points[:, 1]) * percentage)  # max number of points to consider
+
+        sorted_coronal = np.sort(contour_points[:, 1])
+        most_ventral = sorted_coronal[-num_points]
+
+    most_dorsal = get_dorsal_mask_point(mask)
+    most_dorsal = most_dorsal[1]
+    most_dorsal = int(most_dorsal)
 
     return_allowed = False
     notch = None
 
-    # lowest mask pt >= y coord of notch >= min_y
-    while y >= min_y:
-        discontinuity = calculate_discontinuity(mask, y)
+    # lowest mask pt >= dorsal coord of notch >= min_y
+    while most_dorsal >= most_ventral:  # if A->P,
+        discontinuity = calculate_discontinuity(mask, most_dorsal)
 
         # discontinuity found, return is now possible
         if isinstance(discontinuity, np.ndarray) and len(discontinuity) > thresh:
@@ -212,16 +176,18 @@ def find_notch(mask: np.ndarray, min_y: int = None, percentage: float = 0.5, thr
         # previous level and return its center
         else:
             if return_allowed:
-                new_discontinuity = calculate_discontinuity(mask, y + 1)
-                notch = np.array([y+1, new_discontinuity[int(len(new_discontinuity)/2)]])
+                new_discontinuity = calculate_discontinuity(mask, most_dorsal + 1)
+                notch = np.array([np.median(new_discontinuity), most_dorsal + 1])  # median of the discontinuity is the sagittal center of the notch
                 return_allowed = False
                 if break_after_first:
                     break
-        y -= 1
+
+        most_dorsal = most_dorsal - 1  # shift in ventral (anterior) direction
 
     if notch is None:
         raise RuntimeError('No notch found.')
-    return notch
+
+    return notch  # notch is always in form (sagittal, coronal)
 
 
 def get_contour(segmentation_mask: np.array) -> np.array:
@@ -278,14 +244,28 @@ def get_contour_points(segmentation_mask: np.ndarray) -> np.ndarray:
 
 def get_dorsal_mask_point(mask: np.ndarray) -> np.ndarray:
     """
-    Return the most dorsal point of a 2D mask, i.e. the point with the greatest y value.
+    Return the most dorsal (posterior) point of a 2D mask, i.e. the point with the greatest coronal value.
     :param mask: The 2D mask.
-    :return: The point with the greatest y value, given as (y, z), where y is the coronal axis and z is the sagittal axis.
+    :return: The point with the greatest coronal value, given as (x, y), where x is the sagittal coordinate and y is the coronal coordinate.
     """
     points = get_contour_points(mask)
-    indices = np.argsort(points[:, 0])
 
-    return np.array([points[:, 0][indices[-1]], points[:, 1][indices[-1]]])
+
+    indices = np.argsort(points[:, 1])
+    most_dorsal_index = indices[-1]  # if indices increase from ventral (anterior) to dorsal (posterior), take the last (= largest) index
+    coronal_coord = points[:, 1][most_dorsal_index]
+    sagittal_coord = points[:, 0][most_dorsal_index]
+
+    most_dorsal_point_old = np.array([sagittal_coord, coronal_coord])  # make sure to always return (sagittal, coronal)
+
+    most_dorsal_coordinate = np.max(points[:, 1])
+    indices = np.nonzero(points[:, 1] == most_dorsal_coordinate)
+    most_dorsal_points = points[indices]
+    median_sagittal = np.median(most_dorsal_points[:, 0])
+    mean_sagittal = int(np.mean(most_dorsal_points[:, 0]))
+    most_dorsal_point = np.array([mean_sagittal, most_dorsal_coordinate])
+
+    return most_dorsal_point
 
 
 def get_layer_with_biggest_convex_area(mask: np.ndarray) -> int:
@@ -294,19 +274,19 @@ def get_layer_with_biggest_convex_area(mask: np.ndarray) -> int:
     :param mask: A 3D segmentation mask.
     :return: The index of the layer with the biggest convex area.
     """
-    area = np.zeros(mask.shape[0])
+    area = np.zeros(mask.shape[2])
     # save diameters of the layers
-    for k in range(len(mask)):
-        if len(np.nonzero(mask[k])[0]) != 0:
-            props = regionprops(label(mask[k]))
+    for i in range(mask.shape[2]):
+        if len(np.nonzero(mask[:, :, i])[0]) != 0:
+            props = regionprops(label(mask[:, :, i]))
             if props.__len__() > 1:
                 i_biggest = 0
-                for i in range(props.__len__()):
-                    if props[i].convex_area > props[i_biggest].convex_area:
-                        i_biggest = i
-                area[k] = props[i_biggest].convex_area
+                for j in range(props.__len__()):
+                    if props[j].convex_area > props[i_biggest].convex_area:
+                        i_biggest = j
+                area[i] = props[i_biggest].convex_area
             else:
-                area[k] = props[0].convex_area
+                area[i] = props[0].convex_area
 
     # find index of the layer with the biggest diameter
     indices = np.argsort(area)
@@ -359,15 +339,15 @@ def get_point_orientation_to_vertical_line(p1: np.ndarray, p2: np.ndarray, p0: n
     return 'left' if cross > 0 else 'right'
 
 
-def get_side_contour_points(mask: np.ndarray, y: int) -> Tuple[int, int]:
+def get_side_contour_points(mask: np.ndarray, c: int) -> Tuple[int, int]:
     """
-    Return the smallest and largest z (i.e. sagittal) coordinate of the contour for a given y (i.e. coronal) in a 2D mask.
+    Return the smallest and largest sagittal coordinate of the contour for a given coronal coordinate in a 2D mask.
     :param mask: The 2D mask.
-    :param y: The y coordinate.
-    :return: The smallest and largest z coordinate of the contour.
+    :param c: The coronal coordinate.
+    :return: The smallest and largest sagittal coordinate of the contour.
     """
-    nonzero = np.nonzero(mask[y])[0]
-    return nonzero.min(), nonzero.max()
+    nonzero_sagittal_coordinates = np.nonzero(mask[:, c])[0]  # returns a 1-tuple, so need to index 0 at the end
+    return nonzero_sagittal_coordinates.min(), nonzero_sagittal_coordinates.max()
 
 
 def get_vector_through_point_perpendicular_to_line(u: np.ndarray, v: np.ndarray, p: np.ndarray) -> np.ndarray:
@@ -398,48 +378,18 @@ def num_mask_points_on_line(mask: np.ndarray, start: np.ndarray, end: np.ndarray
 
     # just look at points on the other side of the threshold
     if thresh_pt is not None:
-        if start[1] < thresh_pt[1]:
+        if start[0] < thresh_pt[0]:
             pts_on_line = np.array(
-                [pt for pt in pts_on_line if pt[1] >= thresh_pt[1]])
+                [pt for pt in pts_on_line if pt[0] >= thresh_pt[0]])
         else:
             pts_on_line = np.array(
-                [pt for pt in pts_on_line if pt[1] <= thresh_pt[1]])
+                [pt for pt in pts_on_line if pt[0] <= thresh_pt[0]])
 
     sum_val = 0
     for pt in pts_on_line:
         sum_val += mask[pt[0], pt[1]]
 
     return sum_val
-
-
-def points_on_circle_(mask: np.ndarray, r: float, center: np.ndarray) -> bool:
-    """
-    Check if there are any non-zero mask points on the circumference of a circle
-    with radius `r` and center `center`
-    :param mask: A 2D mask.
-    :param r: The radius of the circle.
-    :param center: The center of the circle.
-    :return: True if there are any non-zero points on the circumference of the circle, False otherwise.
-    """
-    rt = False
-    for z in range(max(0, center[1] - int(r) - 2), min(mask.shape[1], center[1] + int(r) + 2)):  # all relevant z coordinates
-        temp = r**2 - (z - center[1])**2
-        if temp > 0 and (
-                mask[max(0, int(round(center[0] - math.sqrt(temp)))), z] != 0
-                or mask[min(int(round(center[0] + math.sqrt(temp))), mask.shape[0]-1), z] != 0):
-            rt = True
-            break
-    if rt:
-        return rt
-    else:
-        for y in range(max(0, center[0] - int(r) - 2), min(mask.shape[0], center[0] + int(r) + 2)):  # all relevant y coordinates
-            temp = r**2 - (y - center[0])**2
-            if temp > 0 and (
-                    mask[y, min(0, int(round(center[1] - math.sqrt(temp))))] != 0
-                    or mask[y, max(mask.shape[1]-1, int(round(center[1] + math.sqrt(temp))))] != 0):
-                rt = True
-                break
-    return rt
 
 
 def points_on_circle(mask: np.ndarray, r: float, center: np.ndarray) -> np.ndarray:
@@ -452,34 +402,34 @@ def points_on_circle(mask: np.ndarray, r: float, center: np.ndarray) -> np.ndarr
     :return: An array of points (y, z) that lie on the circle's circumference and have a value of 1 in the mask.
     """
     points = []
-    y_center, z_center = center[0], center[1]
+    c_center, s_center = center[1], center[0]
     for angle in range(360):
         theta = math.radians(angle)
-        y = int(round(y_center + r * math.sin(theta)))
-        z = int(round(z_center + r * math.cos(theta)))
-        if 0 <= y < mask.shape[0] and 0 <= z < mask.shape[1] and mask[y, z] == 1:
-            points.append((y, z))
+        c = int(round(c_center + r * math.sin(theta)))
+        s = int(round(s_center + r * math.cos(theta)))
+        if 0 <= c < mask.shape[1] and 0 <= s < mask.shape[0] and mask[s, c] == 1:
+            points.append((s, c))
 
     return np.array(points) > 0
 
 
 def rotate_mask_dorsal_points(mask: np.ndarray, thresh_point: np.ndarray) -> Tuple[np.ndarray, Optional[float]]:
     """
-    Rotate the mask so that a line between the most dorsal point right and left (on the sagittal axis)
+    Rotate the mask so that a line between the most dorsal (posterior) point right and left (on the sagittal axis)
     of the notch would be parallel to the sagittal axis.
     :param mask: The 2D mask.
-    :param thresh_point: A threshold point, given as (y, z), where y is the coronal axis and z is the sagittal axis.
+    :param thresh_point: A threshold point, given as (x, y), where x is the sagittal axis and y is the coronal axis.
     :return: The rotated mask and optionally the rotation angle.
     """
     start = get_dorsal_mask_point(mask)
-    if start[1] < thresh_point[1]:
-        end = get_dorsal_mask_point(mask[:, thresh_point[1] + 3:])
-        end = (end[0], end[1] + thresh_point[1])
+    if start[0] < thresh_point[0]:  # start is 2D with (sagittal, coronal), thresh_point is 3D
+        end = get_dorsal_mask_point(mask[thresh_point[0] + 3:])
+        end = (end[0] + thresh_point[0], end[1])
     else:
         end = start
-        start = get_dorsal_mask_point(mask[:, :thresh_point[1] - 3])
+        start = get_dorsal_mask_point(mask[:thresh_point[0] - 3])
 
-    return rotate_mask_vec_parallel(mask, np.array(end) - np.array(start), np.array([0, 1]))
+    return rotate_mask_vec_parallel(mask, np.array(end) - np.array(start), np.array([1, 0]))
 
 
 def rotate_mask_vec_parallel(mask: np.ndarray, vec1: np.ndarray, vec2: np.ndarray, return_angle: bool = True) -> Tuple[np.ndarray, Optional[float]]:
@@ -495,10 +445,10 @@ def rotate_mask_vec_parallel(mask: np.ndarray, vec1: np.ndarray, vec2: np.ndarra
     angle = calculate_angle_between_vectors(vec1, vec2)
 
     # need to rotate clockwise or counterclockwise?
-    if calculate_angle_between_vectors(rotate_point(np.array([0, 0]), vec1, angle), vec2) != 0:
+    if calculate_angle_between_vectors(rotate_point(np.array([0, 0]), vec1, angle), vec2) != 0:  # TODO was != 0 before, but that failed with new code, why?
         angle = -angle
 
-    rotated_mask = rotate(mask, angle, resize=True, preserve_range=True) > 0
+    rotated_mask = rotate(mask, -angle, resize=True, preserve_range=True) > 0  # TODO need to invert the sign now, why?
     rotated_mask = rotated_mask.astype(np.uint8)
 
     if return_angle:
@@ -510,21 +460,21 @@ def rotate_mask_vec_parallel(mask: np.ndarray, vec1: np.ndarray, vec2: np.ndarra
 def rotate_point(origin: np.ndarray, point: np.ndarray, angle: float, deg: bool = True) -> np.ndarray:
     """
     Rotate a point on a layer (2D) counterclockwise by a given angle around a given origin.
-    Points are given as (y, z) where y is the coronal axis and z is the sagittal axis.
-    :param origin: The origin of the rotation, given as (y, z).
-    :param point: The point to rotate, given as (y, z).
+    Points are given as (x, y) where x is the sagittal axis and y is the coronal axis.
+    :param origin: The origin of the rotation, given as (sagittal, coronal).
+    :param point: The point to rotate, given as (sagittal, coronal).
     :param angle: The angle of rotation in degrees or radians.
     :param deg: Whether the angle is given in degrees (True) or radians (False).
     """
     if deg:
         angle = np.deg2rad(angle)
 
-    oy, oz = origin[0], origin[1]
-    py, pz = point[0], point[1]
+    oc, os = origin[1], origin[0]
+    pc, ps = point[1], point[0]
 
-    qz = oz + math.cos(angle) * (pz - oz) - math.sin(angle) * (-py + oy)
-    qy = oy - math.sin(angle) * (pz - oz) - math.cos(angle) * (-py + oy)
-    return np.array([qy, qz])
+    qs = os + math.cos(angle) * (ps - os) - math.sin(angle) * (-pc + oc)
+    qc = oc - math.sin(angle) * (ps - os) - math.cos(angle) * (-pc + oc)
+    return np.array([qs, qc])
 
 
 def shrink_points_to_mask(mask: np.ndarray, start_pt: np.ndarray, end_pt: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:

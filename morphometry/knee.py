@@ -17,21 +17,21 @@ def rotate_tibia(segmentation_mask: np.ndarray):
     d = 0
     for i in range(len(contour)):
         for j in range(len(contour)):
-            y1 = contour[:, 0][i]
-            z1 = contour[:, 1][i]
-            y2 = contour[:, 0][j]
-            z2 = contour[:, 1][j]
+            c1 = contour[:, 1][i]
+            s1 = contour[:, 0][i]
+            c2 = contour[:, 1][j]
+            s2 = contour[:, 0][j]
 
-            # vector always starts in point with smaller x value
-            if z1 < z2:
-                vec = np.array([y1, z1]) - np.array([y2, z2])
+            # vector always starts in point with smaller sagittal value
+            if s1 < s2:
+                vec = np.array([s1, c1]) - np.array([s2, c2])
             else:
-                vec = np.array([y2, z2]) - np.array([y1, z1])
+                vec = np.array([s2, c2]) - np.array([s1, c1])
             if np.linalg.norm(vec) > d:
                 d = np.linalg.norm(vec)
                 line = vec
 
-    return rotate_mask_vec_parallel(segmentation_mask, line, np.array([0, 1]))
+    return rotate_mask_vec_parallel(segmentation_mask, line, np.array([1, 0]))
 
 
 def get_knee_reference_line(mask: np.ndarray, bone: str, thresh: int = 2, step_size: int = 1) -> Tuple[
@@ -50,7 +50,7 @@ def get_knee_reference_line(mask: np.ndarray, bone: str, thresh: int = 2, step_s
     assert bone in ['femur', 'tibia'], 'Bone must be either "femur" or "tibia"'
 
     layer_index = get_layer_with_biggest_convex_area(mask)
-    mask_layer = mask[layer_index]  # mask_layer is 2D mask of the selected layer
+    mask_layer = mask[:, :, layer_index]  # mask_layer is 2D mask of the selected layer
 
     if bone == 'femur':
         percentage = 0.7
@@ -59,11 +59,12 @@ def get_knee_reference_line(mask: np.ndarray, bone: str, thresh: int = 2, step_s
         percentage = 0.5
         notch_threshold = 2
 
-    notch = find_notch(mask_layer, percentage=percentage, thresh=notch_threshold)
-    if notch[0] is None:
+    notch = find_notch(mask_layer, percentage=percentage, thresh=notch_threshold).astype(np.int16)
+
+    if notch[1] is None:
         rotated_mask, ang1 = rotate_tibia(mask_layer)
         rot_thresh = find_notch(rotated_mask, percentage=percentage, thresh=2)
-        if rot_thresh[0] is None:
+        if rot_thresh[1] is None:
             rot_thresh = np.array(center_of_mass(rotated_mask)).astype(np.int16)
         rotated_mask, ang2 = rotate_mask_dorsal_points(
             rotated_mask, rot_thresh)
@@ -75,7 +76,7 @@ def get_knee_reference_line(mask: np.ndarray, bone: str, thresh: int = 2, step_s
     # pre-calculate necessary values to rotate points back in original frame
     rot_offset = np.array([
         _rot_dim - _orig_dim
-        for _rot_dim, _orig_dim in zip(rotated_mask.shape, mask[layer_index].shape)
+        for _rot_dim, _orig_dim in zip(rotated_mask.shape, mask[:, :, layer_index].shape)
     ])
     rot_center = np.array([int(
         (rotated_mask.shape[0] - 1) / 2), int((rotated_mask.shape[1] - 1) / 2)])
@@ -98,18 +99,20 @@ def get_knee_reference_line(mask: np.ndarray, bone: str, thresh: int = 2, step_s
     start_pt = get_dorsal_mask_point(rotated_mask)
 
     # choose endpoint on the other side of the notch at the end of the mask
-    if start_pt[1] < notch_rot[1]:
-        x_end = rotated_mask.shape[1] - 1
+    if start_pt[0] < notch_rot[0]:
+        s_end = rotated_mask.shape[0] - 1
         rot_dir = 1  # rotate counterclockwise
     else:
-        x_end = 0
+        s_end = 0
         rot_dir = -1  # rotate clockwise
-    end_pt = (start_pt[0], x_end)
+    end_pt = (s_end, start_pt[1])
 
     # rotate line between start and endpoint
     # until the number of mask points on the line is higher than the threshold
+
     while num_mask_points_on_line(rotated_mask, start_pt, end_pt,
                                   notch_rot) < thresh:
+
         end_pt = rotate_point(start_pt, end_pt, step_size * rot_dir)
 
     _, final_end_pt = shrink_points_to_mask(rotated_mask, start_pt, end_pt)
@@ -129,8 +132,8 @@ def get_knee_reference_line(mask: np.ndarray, bone: str, thresh: int = 2, step_s
     notch = notch.astype(np.uint16)
 
     # transform points from layer mask to 3D mask
-    start_pt_orig = np.array([layer_index, start_pt_orig[0], start_pt_orig[1]])
-    end_pt_orig = np.array([layer_index, end_pt_orig[0], end_pt_orig[1]])
+    start_pt_orig = np.array([start_pt_orig[0], start_pt_orig[1], layer_index])
+    end_pt_orig = np.array([end_pt_orig[0], end_pt_orig[1], layer_index])
     notch = np.array([layer_index, notch[0], notch[1]])
 
     return layer_index, start_pt_orig, end_pt_orig
@@ -162,7 +165,7 @@ def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: in
     femur_mask = np.where(segmentation_mask == femur_label, 1, 0)
     proximal_layer, femur_start, femur_end = get_knee_reference_line(femur_mask, 'femur')
 
-    if femur_start[2] < femur_end[2]:  # if this is somehow not the case, swap the points
+    if femur_start[0] < femur_end[0]:  # end point should always be left from start point; if not, swap points
         tmp = femur_start
         femur_start = femur_end
         femur_end = tmp
@@ -172,14 +175,14 @@ def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: in
     tibia_mask = np.where(segmentation_mask == tibia_label, 1, 0)
     distal_layer, tibia_start, tibia_end = get_knee_reference_line(tibia_mask, 'tibia')
 
-    if tibia_start[2] < tibia_end[2]:
+    if tibia_start[0] < tibia_end[0]:
         tmp = tibia_start
         tibia_start = tibia_end
         tibia_end = tmp
 
     distal_line = tibia_end - tibia_start
 
-    x = np.array([0, 0, -1])
+    x = np.array([-1, 0, 0])
     proximal_angle = calculate_angle_between_vectors(proximal_line, x)
     distal_angle = calculate_angle_between_vectors(distal_line, x)
 
@@ -206,9 +209,9 @@ def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: in
     if plot:
         fig, ax = plt.subplots(1, 2)
         ax[0].imshow(segmentation_mask[proximal_layer])
-        ax[0].plot([femur_start[2], femur_end[2]], [femur_start[1], femur_end[1]], color='red')
+        ax[0].plot([femur_start[0], femur_end[0]], [femur_start[1], femur_end[1]], color='red')
         ax[1].imshow(segmentation_mask[distal_layer])
-        ax[1].plot([tibia_start[2], tibia_end[2]], [tibia_start[1], tibia_end[1]], color='red')
+        ax[1].plot([tibia_start[0], tibia_end[0]], [tibia_start[1], tibia_end[1]], color='red')
         plt.show()
 
     return angle

@@ -4,7 +4,6 @@ import SimpleITK as sitk
 import nibabel as nib
 from morphometry.femur import calculate_femoral_torsion
 from morphometry.tibia import calculate_tibial_torsion
-from morphometry.utils import correct_axis_ordering
 from morphometry.image_io import Image
 from argparse import ArgumentParser
 from matplotlib import pyplot as plt
@@ -20,15 +19,6 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    """
-    hip = sitk.ReadImage(args.hip_mask)
-    knee = sitk.ReadImage(args.knee_mask)
-    ankle = sitk.ReadImage(args.ankle_mask)
-
-    hip = correct_axis_ordering(hip)
-    knee = correct_axis_ordering(knee)
-    ankle = correct_axis_ordering(ankle)
-    """
     hip = Image('nibabel')
     hip.read_image(args.hip_mask)
     hip.transform_coordinate_system()
@@ -39,18 +29,18 @@ if __name__ == '__main__':
     ankle.read_image(args.ankle_mask)
     ankle.transform_coordinate_system()
 
-    x_ratio = abs(hip.get_spacing()[0]) / 2 * abs(hip.get_spacing()[2])
+    x_ratio = abs(hip.get_spacing()[2]) / 2 * abs(hip.get_spacing()[0])
 
     hip_mask = hip.get_array()
     knee_mask = knee.get_array()
     ankle_mask = ankle.get_array()
 
-    left_hip = hip_mask[:, :, :hip_mask.shape[2] // 2]
-    right_hip = hip_mask[:, :, hip_mask.shape[2] // 2:]
-    left_knee = knee_mask[:, :, :knee_mask.shape[2] // 2]
-    right_knee = knee_mask[:, :, knee_mask.shape[2] // 2:]
-    left_ankle = ankle_mask[:, :, :ankle_mask.shape[2] // 2]
-    right_ankle = ankle_mask[:, :, ankle_mask.shape[2] // 2:]
+    left_hip = hip_mask[:hip_mask.shape[0] // 2]  # wtf, the sagittal axis seems to be flipped with the new coordinate system??
+    right_hip = hip_mask[hip_mask.shape[0] // 2:]
+    left_knee = knee_mask[:knee_mask.shape[0] // 2]
+    right_knee = knee_mask[knee_mask.shape[0] // 2:]
+    left_ankle = ankle_mask[:ankle_mask.shape[0] // 2]
+    right_ankle = ankle_mask[ankle_mask.shape[0] // 2:]
 
     left_hip = nib.Nifti1Image(left_hip, hip.get_affine(), hip.get_header())
     left_hip = Image(left_hip)
@@ -62,7 +52,7 @@ if __name__ == '__main__':
             femoral_torsion_left, fig = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=args.plot)
             fig.savefig(f'{args.output}/ft_right.png')  # patient side <-> image side
             plt.close(fig)
-        except (RuntimeError, AssertionError, ValueError) as e:
+        except (NotImplementedError) as e:
             print(f'Failed to calculate femoral torsion for the left side.', e)
             femoral_torsion_left = None
 

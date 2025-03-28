@@ -14,11 +14,6 @@ from skimage.measure import find_contours
 from sklearn.cluster import KMeans
 
 
-"""
-All functions assume axis ordering is x = axial, y = coronal, z = sagittal.
-"""
-
-
 def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, return_layers: bool = False, x_ratio: float = 1., isotropic: bool = False) -> Tuple[float, np.ndarray] | Tuple[float, np.ndarray, int, int]:
     """
     Get the center of the femoral head from a segmentation mask.
@@ -37,62 +32,59 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
 
     # get highest layer with a mask point, its centroid
     # and lowest layer with mask point on this centroid
-    layer_high = np.amin(contour_pts[:, 0])
-    layer_sizes = np.zeros(segmentation_mask.shape[0])
-    for i, layer in enumerate(segmentation_mask):
+    layer_high = np.amin(contour_pts[:, 2])
+    layer_sizes = np.zeros(segmentation_mask.shape[2])
+    for i in range(segmentation_mask.shape[2]):
+        layer = segmentation_mask[:, :, i]
         layer_sizes[i] = np.sum(layer)
 
     layer_zscores = np.abs(zscore(layer_sizes))
     while layer_zscores[layer_high] > 2:
-        # print(f'Layer {layer_high} has too few mask points, going to the next layer.')
         layer_high += 1  # go to the next layer if the current one has too few mask points, i.e. its size is more than 2 standard deviations away from the mean of all slices
 
     # if layer_high has two connected components, choose the larger one
-    label_mask, num_features = label(segmentation_mask[layer_high])
+    label_mask, num_features = label(segmentation_mask[:, :, layer_high])
     if num_features > 1:
-        # print('Multiple connected components found on layer with femoral head, choosing the largest one.')
         sizes = [len(np.argwhere(label_mask == i)) for i in range(1, num_features + 1)]
         largest_component = np.argmax(sizes) + 1
-        segmentation_mask[layer_high] = np.where(label_mask == largest_component, 1, 0)
+        segmentation_mask[:, :, layer_high] = np.where(label_mask == largest_component, 1, 0)
 
-    com_high = center_of_mass(segmentation_mask[layer_high])
+    com_high = center_of_mass(segmentation_mask[:, :, layer_high])
     com_high = (int(com_high[0]), int(com_high[1]))
     layer_low = layer_high
-    while segmentation_mask[layer_low, com_high[0], com_high[1]] != 0:
+    while segmentation_mask[com_high[0], com_high[1], layer_low] != 0:
         layer_low += 1
 
     point_cloud = get_contour_points(segmentation_mask)
-    point_cloud = point_cloud[point_cloud[:, 0] >= layer_high]
-    point_cloud = point_cloud[point_cloud[:, 0] <= layer_low]
-    point_cloud = point_cloud.astype(np.float32) * np.array([x_ratio, 1, 1])
+    point_cloud = point_cloud[point_cloud[:, 2] >= layer_high]
+    point_cloud = point_cloud[point_cloud[:, 2] <= layer_low]  # exclude everything that is not between layer_high and layer_low
+    point_cloud = point_cloud.astype(np.float32) * np.array([1, 1, x_ratio])  # adjust for slice thickness
 
     # need to exclude lateral parts of the mask: compute distance between com and max medial point of femoral head,
     # then exclude everything that is farther away than this distance in the lateral direction
     middle_slice = (layer_high * x_ratio + (layer_low * x_ratio - layer_high * x_ratio) // 2)
-    superior_half = point_cloud[point_cloud[:, 0] <= middle_slice]
+    superior_half = point_cloud[point_cloud[:, 2] <= middle_slice]
     if side == 'left':
-        max_z = np.max(point_cloud[:, 2]) if isotropic else np.max(superior_half[:, 2]) * 0.9  # only look at the superior half of the femoral head
-        radius = max_z - com_high[1]
-        min_z = com_high[1] - radius  # the most lateral point of the femoral head
-        point_cloud = point_cloud[point_cloud[:, 2] >= min_z]
+        max_s = np.max(point_cloud[:, 0]) if isotropic else np.max(superior_half[:, 0]) * 0.9  # only look at the superior half of the femoral head
+        radius = max_s - com_high[0]
+        min_s = com_high[0] - radius  # the most lateral point of the femoral head
+        point_cloud = point_cloud[point_cloud[:, 0] >= min_s]
     else:
-        min_z = np.min(point_cloud[:, 2]) if isotropic else np.min(superior_half[:, 2]) * 0.9 # only look at the superior half of the femoral head
-        radius = com_high[1] - min_z
-        max_z = com_high[1] + radius  # the most lateral point of the femoral head
-        point_cloud = point_cloud[point_cloud[:, 2] <= max_z]
+        min_s = np.min(point_cloud[:, 0]) if isotropic else np.min(superior_half[:, 0]) * 0.9 # only look at the superior half of the femoral head
+        radius = com_high[0] - min_s
+        max_s = com_high[0] + radius  # the most lateral point of the femoral head
+        point_cloud = point_cloud[point_cloud[:, 0] <= max_s]
 
-    min_y = np.min(point_cloud[:, 1])
-    radius = com_high[0] - min_y
-    max_y = com_high[0] + radius
-    point_cloud = point_cloud[point_cloud[:, 1] <= max_y]
-
-    # return point_cloud
+    min_c = np.min(point_cloud[:, 1])
+    radius = com_high[1] - min_c
+    max_c = com_high[1] + radius
+    point_cloud = point_cloud[point_cloud[:, 1] <= max_c]
 
     # get center coordinates of the fitting sphere
     r, center = sphere_fit(point_cloud)
 
     # compensate pixel mm ratio between x, y and z axis
-    center = np.array([center[0] / x_ratio, center[1], center[2]])
+    center = np.array([center[0], center[1], center[2] / x_ratio])
 
     return (r, center) if not return_layers else (r, center, layer_high, layer_low)
 
@@ -109,22 +101,22 @@ def get_femoral_neck_center(segmentation_mask: np.ndarray, femoral_head_center: 
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
     segmentation_mask = np.where(segmentation_mask == segmentation_label, 1, 0)
 
-    r, c = femoral_head_center
+    r, center = femoral_head_center
     point_cloud = np.argwhere(segmentation_mask)
 
     # Get a sphere around the femoral head center with a radius of 1.2 times the femoral head radius
     # This sphere only includes the points between r and 1.2*r, i.e. is hollow
-    solid_sphere = pv.SolidSphere(inner_radius=r, outer_radius=1.2 * r, center=c)
+    solid_sphere = pv.SolidSphere(inner_radius=r, outer_radius=1.2 * r, center=center)
 
     # Get the points that are distal to the femoral head center
     points_i_want = np.array(solid_sphere.points)
-    points_i_want = points_i_want[points_i_want[:, 0] > c[0]]
+    points_i_want = points_i_want[points_i_want[:, 2] > center[2]]
 
     # Get the points that are lateral to the femoral head center
     if side == 'left':
-        points_i_want = points_i_want[points_i_want[:, 2] < c[2]]
+        points_i_want = points_i_want[points_i_want[:, 0] < center[0]]
     else:
-        points_i_want = points_i_want[points_i_want[:, 2] > c[2]]
+        points_i_want = points_i_want[points_i_want[:, 0] > center[0]]
 
     # Build a KDTree for the point cloud and the points we want
     pc_tree = KDTree(point_cloud)
@@ -160,22 +152,22 @@ def get_femoral_shaft_axis(hip_mask: np.ndarray, knee_mask: np.ndarray = None, f
 
     point_cloud_hip = np.argwhere(hip_mask)
 
-    offset = 20 if isotropic else 5
-    layer_low_hip = np.max(point_cloud_hip[:, 0]) - (offset if isotropic else 1)  # get the most distal layer with a mask point
+    offset = 20 if isotropic else 5  # TODO derive this dynamically
+    layer_low_hip = np.max(point_cloud_hip[:, 2]) - (offset if isotropic else 1)  # get the most distal layer with a mask point
     layer_high_hip = layer_low_hip - offset  # get a layer superior to that with some distance, distance depends on the resolution of the image
 
-    com_low_hip = center_of_mass(hip_mask[layer_low_hip])
-    com_low_hip = (layer_low_hip, int(com_low_hip[0]), int(com_low_hip[1]))
-    com_high_hip = center_of_mass(hip_mask[layer_high_hip])
-    com_high_hip = (layer_high_hip, int(com_high_hip[0]), int(com_high_hip[1]))  # get centers of mass of both layers
+    com_low_hip = center_of_mass(hip_mask[:, :, layer_low_hip])
+    com_low_hip = (int(com_low_hip[0]), int(com_low_hip[1]), layer_low_hip)
+    com_high_hip = center_of_mass(hip_mask[:, :, layer_high_hip])
+    com_high_hip = (int(com_high_hip[0]), int(com_high_hip[1]), layer_high_hip)  # get centers of mass of both layers
 
     if knee_mask is not None:
         knee_mask = np.where(knee_mask == femur_label, 1, 0)
         point_cloud_knee = np.argwhere(knee_mask)
-        layer_high_knee = np.min(point_cloud_knee[:, 0]) + (
+        layer_high_knee = np.min(point_cloud_knee[:, 2]) + (
             offset if isotropic else 1)  # get the most proximal layer with a mask point
-        com_high_knee = center_of_mass(knee_mask[layer_high_knee])
-        com_high_knee = (layer_high_knee, int(com_high_knee[0]), int(com_high_knee[1]))
+        com_high_knee = center_of_mass(knee_mask[:, :, layer_high_knee])
+        com_high_knee = (int(com_high_knee[0]), int(com_high_knee[1]), layer_high_knee)
 
         return np.array(com_high_knee), np.array(com_high_hip)
 
@@ -249,6 +241,7 @@ def calculate_anteversion(segmentation_mask: np.ndarray, side: str = 'left', seg
     :param isotropic: Whether the image has isotropic voxels.
     :return: The anteversion angle.
     """
+    # TODO revise
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
     r, femoral_head_center = get_femoral_head_center(segmentation_mask, side=side, segmentation_label=segmentation_label, isotropic=isotropic)
@@ -268,12 +261,12 @@ def get_femoral_neck_transition(neck_points: np.ndarray, side: str = 'left') -> 
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
-    most_proximal_points = neck_points[neck_points[:, 0] == np.min(neck_points[:, 0])]  # get the most proximal points
+    most_proximal_points = neck_points[neck_points[:, 2] == np.min(neck_points[:, 2])]  # get the most proximal points
 
     if side == 'left':
-        most_proximal_medial_point = most_proximal_points[most_proximal_points[:, 2] == np.max(most_proximal_points[:, 2])]  # of the most proximal points, get the most medial one
+        most_proximal_medial_point = most_proximal_points[most_proximal_points[:, 0] == np.max(most_proximal_points[:, 0])]  # of the most proximal points, get the most medial one
     else:
-        most_proximal_medial_point = most_proximal_points[most_proximal_points[:, 2] == np.min(most_proximal_points[:, 2])]  # of the most proximal points, get the most medial one
+        most_proximal_medial_point = most_proximal_points[most_proximal_points[:, 0] == np.min(most_proximal_points[:, 0])]  # of the most proximal points, get the most medial one
 
     return most_proximal_medial_point[0]  # this point is one possible transition point
 
@@ -329,7 +322,7 @@ def get_p2(acetabulum_array: np.ndarray, side: str = 'left', segmentation_label:
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
     acetabulum_array = np.where(acetabulum_array == segmentation_label, 1, 0)
 
-    p2 = np.argwhere(acetabulum_array[:acetabulum_array.shape[0] // 2])
+    p2 = np.argwhere(acetabulum_array[:, :, acetabulum_array.shape[2] // 2])
     p2 = p2[p2[:, 1].argmin()] if side == 'left' else p2[p2[:, 1].argmax()]
 
     return p2
@@ -344,33 +337,33 @@ def calculate_acetabular_anteversion(segmentation_mask: np.ndarray, femur_label:
     :param isotropic: Whether the image has isotropic voxels.
     :return: The acetabular anteversion for both sides.
     """
-    left_mask = segmentation_mask[:, :, :segmentation_mask.shape[2] // 2]
-    right_mask = segmentation_mask[:, :, segmentation_mask.shape[2] // 2:]
+    left_mask = segmentation_mask[:segmentation_mask.shape[0] // 2]
+    right_mask = segmentation_mask[segmentation_mask.shape[0] // 2:]
 
     _, left_fhc = get_femoral_head_center(left_mask, side='left', segmentation_label=femur_label, isotropic=isotropic)
     _, right_fhc = get_femoral_head_center(right_mask, side='right', segmentation_label=femur_label, isotropic=isotropic)
 
-    slice_gap = abs(int(left_fhc[0]) - int(right_fhc[0]))
-    correct_slice = min(int(left_fhc[0]), int(right_fhc[0])) + slice_gap // 2
+    slice_gap = abs(int(left_fhc[2]) - int(right_fhc[2]))
+    correct_slice = min(int(left_fhc[2]), int(right_fhc[2])) + slice_gap // 2
 
-    p1_left = get_p1(left_mask[correct_slice], side='left', segmentation_label=acetabulum_label)
-    p2_left = get_p2(left_mask[correct_slice], side='left', segmentation_label=acetabulum_label)
-    p1_right = get_p1(right_mask[correct_slice], side='right', segmentation_label=acetabulum_label)
-    p2_right = get_p2(right_mask[correct_slice], side='right', segmentation_label=acetabulum_label)
+    p1_left = get_p1(left_mask[:, :, correct_slice], side='left', segmentation_label=acetabulum_label)
+    p2_left = get_p2(left_mask[:, :, correct_slice], side='left', segmentation_label=acetabulum_label)
+    p1_right = get_p1(right_mask[:, :, correct_slice], side='right', segmentation_label=acetabulum_label)
+    p2_right = get_p2(right_mask[:, :, correct_slice], side='right', segmentation_label=acetabulum_label)
 
     femur_array = np.where(segmentation_mask == femur_label, 1, 0)
-    left_femur = femur_array[:, :, :femur_array.shape[2] // 2]
+    left_femur = femur_array[:femur_array.shape[0] // 2]
 
     right_fhc_adj = right_fhc.copy()
-    right_fhc_adj[2] += left_femur.shape[2]  # adjust the x coordinate of the right femoral head center to account for the splitting into left and right
-    G = left_fhc[1:] - right_fhc_adj[1:]  # G is the vector connecting the left and right femoral head center
+    right_fhc_adj[0] += left_femur.shape[0]  # adjust the x coordinate of the right femoral head center to account for the splitting into left and right
+    G = left_fhc[:2] - right_fhc_adj[:2]  # G is the vector connecting the left and right femoral head center
 
-    u = left_fhc[1:]  # the point of origin of the line
+    u = left_fhc[:2]  # the point of origin of the line
     v = G  # the direction of the line
     p = p1_left  # the point the perpendicular vector goes through
     s_left = get_vector_through_point_perpendicular_to_line(u, v, p)  # s is the vector that goes through p1 and is perpendicular to G (i.e. u + lambda * G)
 
-    u = right_fhc_adj[1:]
+    u = right_fhc_adj[:2]
     p = p1_right
     s_right = get_vector_through_point_perpendicular_to_line(u, v, p)
 
@@ -399,12 +392,12 @@ def calculate_acetabular_depth(segmentation_mask: np.ndarray, side: str = 'left'
 
     _, fhc = get_femoral_head_center(segmentation_mask, side=side, segmentation_label=femur_label, isotropic=isotropic)
 
-    correct_slice = int(fhc[0])
+    correct_slice = int(fhc[2])
 
-    p1 = get_p1(segmentation_mask[correct_slice], side=side, segmentation_label=acetabulum_label)
-    p2 = get_p2(segmentation_mask[correct_slice], side=side, segmentation_label=acetabulum_label)
+    p1 = get_p1(segmentation_mask[:, :, correct_slice], side=side, segmentation_label=acetabulum_label)
+    p2 = get_p2(segmentation_mask[:, :, correct_slice], side=side, segmentation_label=acetabulum_label)
 
-    ad = get_minimum_distance_between_line_and_point(p1, p2, fhc[1:])
+    ad = get_minimum_distance_between_line_and_point(p1, p2, fhc[:2])
 
     return ad
 
@@ -418,19 +411,19 @@ def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int 
     :param isotropic: Whether the image has isotropic voxels.
     :return: The center edge angle for both sides.
     """
-    left_mask = segmentation_mask[:, :, :segmentation_mask.shape[2] // 2]
-    right_mask = segmentation_mask[:, :, segmentation_mask.shape[2] // 2:]
+    left_mask = segmentation_mask[:segmentation_mask.shape[0] // 2]
+    right_mask = segmentation_mask[segmentation_mask.shape[0] // 2:]
 
     _, left_fhc = get_femoral_head_center(left_mask, side='left', segmentation_label=femur_label, isotropic=isotropic)
     _, right_fhc = get_femoral_head_center(right_mask, side='right', segmentation_label=femur_label, isotropic=isotropic)
 
     femur_array = np.where(segmentation_mask == femur_label, 1, 0)
-    left_femur = femur_array[:, :, :femur_array.shape[2] // 2]
-    right_femur = femur_array[:, :, femur_array.shape[2] // 2:]
+    left_femur = femur_array[:femur_array.shape[0] // 2]
+    right_femur = femur_array[femur_array.shape[0] // 2:]
 
     right_fhc_adj = right_fhc.copy()
-    right_fhc_adj[2] += left_femur.shape[
-        2]  # adjust the x coordinate of the right femoral head center to account for the splitting into left and right
+    right_fhc_adj[0] += left_femur.shape[
+        0]  # adjust the x coordinate of the right femoral head center to account for the splitting into left and right
     G = left_fhc - right_fhc_adj  # G is the vector connecting the left and right femoral head center
 
     def get_lateral_edge_point(fa: np.ndarray, aa: np.ndarray, side: str = 'left') -> np.ndarray:
@@ -443,12 +436,12 @@ def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int 
         """
         assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
-        most_proximal_femur_slice = np.min(np.nonzero(fa)[0])
+        most_proximal_femur_slice = np.min(np.nonzero(fa)[2])
         tmp = aa.copy()
-        tmp[:most_proximal_femur_slice - 20] = 0
-        tmp[most_proximal_femur_slice + 10:] = 0
+        tmp[:, :, most_proximal_femur_slice - 20] = 0
+        tmp[:, :, most_proximal_femur_slice + 10:] = 0
         acetabulum_points = np.nonzero(tmp)
-        lateral_edge = np.argmin(acetabulum_points[2]) if side == 'left' else np.argmax(acetabulum_points[2])
+        lateral_edge = np.argmin(acetabulum_points[0]) if side == 'left' else np.argmax(acetabulum_points[0])
         lateral_edge_point = np.array(
             [acetabulum_points[0][lateral_edge], acetabulum_points[1][lateral_edge],
              acetabulum_points[2][lateral_edge]])
@@ -456,10 +449,10 @@ def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int 
         return lateral_edge_point
 
     acetabulum_array = np.where(segmentation_mask == acetabulum_label, 1, 0)
-    left_acetabulum = acetabulum_array[:, :, :acetabulum_array.shape[2] // 2]
-    right_acetabulum = acetabulum_array[:, :, acetabulum_array.shape[2] // 2:]
+    left_acetabulum = acetabulum_array[:acetabulum_array.shape[0] // 2]
+    right_acetabulum = acetabulum_array[acetabulum_array.shape[0] // 2:]
 
-    d = np.array([-1, 0, 0])
+    d = np.array([0, 0, -1])
     n = G / np.linalg.norm(G)
     d_perp = d - np.dot(d, n) * n
     s = right_fhc_adj + d_perp  # s is perpendicular to G and goes in proximal direction
@@ -492,7 +485,7 @@ def calculate_min_distance_between_femoral_head_and_acetabulum(segmentation_mask
 
     # Get the points that are distal to the femoral head center
     points_i_want = np.array(solid_sphere.points)
-    points_i_want = points_i_want[points_i_want[:, 0] > c[0]]
+    points_i_want = points_i_want[points_i_want[:, 2] > c[2]]
 
     # Build a KDTree for the point cloud and the points we want
     pc_tree = KDTree(point_cloud)

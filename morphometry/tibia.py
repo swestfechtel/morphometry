@@ -21,9 +21,9 @@ def get_layer_with_largest_diameter(segmentation_mask: np.ndarray) -> int:
 
     diameter = np.zeros(segmentation_mask.shape[0])
     # save diameters of the layers
-    for i in range(len(segmentation_mask)):
-        if len(np.nonzero(segmentation_mask[i])[0]) != 0:
-            props = regionprops(label(segmentation_mask[i]))
+    for i in range(segmentation_mask.shape[2]):
+        if len(np.nonzero(segmentation_mask[:, :, i])[0]) != 0:
+            props = regionprops(label(segmentation_mask[:, :, i]))
             if props.__len__() > 1:
                 i_biggest = 0
                 for j in range(props.__len__()):
@@ -56,12 +56,12 @@ def get_distal_reference_line(segmentation_mask: np.ndarray, tibia_label: int, f
     layer_index = get_layer_with_largest_diameter(tibia_mask)
 
     # calculate center of mass of tibia und fibula on the layer
-    com_tibia = center_of_mass(tibia_mask[layer_index])
-    com_fibula = center_of_mass(fibula_mask[layer_index])
+    com_tibia = center_of_mass(tibia_mask[:, :, layer_index])
+    com_fibula = center_of_mass(fibula_mask[:, :, layer_index])
 
     # transform points from layer mask to 3D mask
-    com_tibia = np.array([layer_index, com_tibia[0], com_tibia[1]])
-    com_fibula = np.array([layer_index, com_fibula[0], com_fibula[1]])
+    com_tibia = np.array([com_tibia[0], com_tibia[1], layer_index])
+    com_fibula = np.array([com_fibula[0], com_fibula[1], layer_index])
 
     return layer_index, com_tibia, com_fibula
 
@@ -88,15 +88,24 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
     knee_mask = np.where(knee_mask == tibia_label_knee, 1, 0)
     # get proximal reference line
     knee_layer, knee_start, knee_end = get_knee_reference_line(knee_mask, 'tibia')
+    print(f'knee_start: {knee_start}, knee_end: {knee_end}')
     proximal_line = knee_end - knee_start
-    x = np.array([0, 0, -1])  # because end is always left of start
+
+    # knee_end is always left of knee_start
+    if knee_start[0] < knee_end[0]:  # if this is somehow not the case, swap the points
+        tmp = knee_start
+        knee_start = knee_end
+        knee_end = tmp
+
+    x = np.array([-1, 0, 0])  # because end is always left of start
+
     proximal_angle = calculate_angle_between_vectors(proximal_line, x)
 
     if proximal_angle > 90:
-        print('Warning: proximal angle > 90°. Correcting', proximal_angle)
         proximal_angle = 180 - proximal_angle
 
     proximal_orientation = knee_end[1] - knee_start[1]
+    print(f'proximal orientation: {proximal_orientation}')
     if side == 'left':
         if proximal_orientation < 0:  # lateral condyle is anterior to medial condyle
             proximal_angle = -proximal_angle
@@ -108,11 +117,10 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
     # get distal reference line
     ankle_layer, ankle_start, ankle_end = get_distal_reference_line(ankle_mask, tibia_label_ankle, fibula_label)
     distal_line = ankle_end - ankle_start
-    x = np.array([0, 0, -1]) if side == 'left' else np.array([0, 0, 1])
+    x = np.array([-1, 0, 0]) if side == 'left' else np.array([1, 0, 0])
     distal_angle = calculate_angle_between_vectors(distal_line, x)
 
     if distal_angle > 90:
-        print('Warning: distal angle > 90°. Correcting', distal_angle)
         distal_angle = 180 - distal_angle
 
     distal_orientation = ankle_end[1] - ankle_start[1]
@@ -120,40 +128,22 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
         distal_angle = -distal_angle
 
     angle = distal_angle - proximal_angle
-    # calculate angle
-    """
-    if side == 'left':
-        if distal_orientation < 0:  # fibula is anterior to tibia
-            if proximal_orientation < 0:  # lateral condyle is anterior to medial condyle
-                angle = proximal_angle - distal_angle
-            else:  # lateral condyle is posterior to medial condyle
-                angle = proximal_angle + distal_angle
-        else:  # fibula is posterior to tibia
-            if proximal_orientation < 0:  # lateral condyle is anterior to medial condyle
-                angle = proximal_angle + distal_angle
-            else:
-                angle = proximal_angle - distal_angle
-    else:
-        if distal_orientation < 0:
-            if proximal_orientation < 0:
-                angle = proximal_angle + distal_angle
-            else:
-                angle = proximal_angle - distal_angle
-        else:
-            if proximal_orientation < 0:
-                angle = proximal_angle - distal_angle
-            else:
-                angle = proximal_angle + distal_angle
-    """
+
+    print(f'proximal line: {proximal_line}')
+    print(f'distal line: {distal_line}')
+    print(f'proximal angle: {proximal_angle}')
+    print(f'distal angle: {distal_angle}')
+    print(f'angle: {angle}')
+
     if not mark_mask and not plot:
         return angle
 
     if plot:
         fig, ax = plt.subplots(1, 2)
-        ax[0].imshow(knee_mask[knee_layer])
-        ax[0].plot([knee_start[2], knee_end[2]], [knee_start[1], knee_end[1]], color='red')
-        ax[1].imshow(ankle_mask[ankle_layer])
-        ax[1].plot([ankle_start[2], ankle_end[2]], [ankle_start[1], ankle_end[1]], color='red')
+        ax[0].imshow(knee_mask[:, :, knee_layer].T)
+        ax[0].plot([knee_start[0], knee_end[0]], [knee_start[1], knee_end[1]], color='red')
+        ax[1].imshow(ankle_mask[:, :, ankle_layer].T)
+        ax[1].plot([ankle_start[0], ankle_end[0]], [ankle_start[1], ankle_end[1]], color='red')
         if not mark_mask:
             return angle, fig
 

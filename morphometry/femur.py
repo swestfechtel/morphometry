@@ -12,16 +12,12 @@ from morphometry.utils import rotate_mask_dorsal_points, find_notch, transform_p
 from morphometry.image_io import Image
 from typing import Tuple
 
-"""
-All functions assume axis ordering is x = axial, y = coronal, z = sagittal.
-"""
-
 
 def contour_femoral_neck(mask: np.ndarray, contour: np.ndarray, layer_selected: int, center: np.ndarray, r: float) -> \
         Tuple[np.ndarray, np.ndarray, float, float]:
     """
     Get the contour of the femoral neck.
-    :param mask: 3d segmentation mask
+    :param mask: 3D segmentation mask of the proximal femur.
     :param contour: contour of segmentation mask
     :param layer_selected: index of layer with femoral neck
     :param center: center coordinates of femur head
@@ -30,16 +26,21 @@ def contour_femoral_neck(mask: np.ndarray, contour: np.ndarray, layer_selected: 
     0.9 and 1.1 times the radius of the femoral head
     """
     # rotate mask and find notch to regulate the radii of the spheres
-    mask_new = mask[layer_selected].copy()
+
+    mask_new = mask[:, :, layer_selected].copy()
+
     rotated_mask, angle1 = rotate_mask_dorsal_points(mask_new,
                                                      np.array(center_of_mass(mask_new)).astype(np.int16))
+
     rotated_mask, angle2 = rotate_mask_dorsal_points(rotated_mask,
                                                      np.array(center_of_mass(rotated_mask)).astype(np.int16))
     angle = angle1 + angle2
+
     notch_rot = find_notch(rotated_mask,
                            percentage=0.8,
                            thresh=5,
                            break_after_first=True)
+
     rot_offset = np.array([
         _rot_dim - _orig_dim
         for _rot_dim, _orig_dim in zip(rotated_mask.shape, mask_new.shape)
@@ -55,31 +56,33 @@ def contour_femoral_neck(mask: np.ndarray, contour: np.ndarray, layer_selected: 
                                 offset=-rot_offset / 2)
 
     # get 2 new radii a little closer and further to the center than the notch
-    a = np.linalg.norm(notch - np.array([center[1], center[2]])) / r
+    center_2d = np.array([center[0], center[1]])  # (sagittal, coronal)
+
+    a = np.linalg.norm(notch - center_2d) / r
     r_1 = (-0.1 + a) * r
     r_2 = (0.1 + a) * r
 
-    mask_new = mask[layer_selected].copy()
+    # mask_new = mask[layer_selected].copy()
 
     # get contour only between the two circles on the selected layer
-    for z in range(mask.shape[2] - 1):  # all z coordinates
-        if r_2 ** 2 - (z - center[2]) ** 2 >= 0:
-            y_b = int(round(math.sqrt(r_2 ** 2 - (z - center[2]) ** 2)))
-            if center[1] + y_b < mask.shape[1]:
-                contour[layer_selected, center[1] + y_b:, z] = 0
-                mask_new[center[1] + y_b:, z] = 0
-            if center[1] - y_b > 0:
-                contour[layer_selected, :center[1] - y_b, z] = 0
-                mask_new[:center[1] - y_b, z] = 0
+    for s in range(mask.shape[0] - 1):  # all sagittal coordinates
+        if r_2 ** 2 - (s - center[0]) ** 2 >= 0:
+            c_a = int(round(math.sqrt(r_2 ** 2 - (s - center[0]) ** 2)))
+            if center[1] + c_a < mask.shape[1]:
+                contour[s, center[1] + c_a:, layer_selected] = 0
+                mask_new[s, center[1] + c_a:] = 0  # mask_new is 2D
+            if center[1] - c_a > 0:
+                contour[s, :center[1] - c_a, layer_selected] = 0
+                mask_new[s, :center[1] - c_a] = 0
         else:
-            contour[layer_selected, :, z] = 0
-            mask_new[:, z] = 0
+            contour[s, :, layer_selected] = 0
+            mask_new[s] = 0
 
-        if r_1 ** 2 - (z - center[2]) ** 2 >= 0:
-            y_c = int(round(math.sqrt(r_1 ** 2 - (z - center[2]) ** 2)))
-            if center[1] - y_c > 0 and center[1] + y_c < mask.shape[1]:
-                contour[layer_selected, center[1] - y_c:center[1] + y_c, z] = 0
-                mask_new[center[1] - y_c:center[1] + y_c, z] = 0
+        if r_1 ** 2 - (s - center[0]) ** 2 >= 0:
+            c_b = int(round(math.sqrt(r_1 ** 2 - (s - center[0]) ** 2)))
+            if center[1] - c_b > 0 and center[1] + c_b < mask.shape[1]:
+                contour[s, center[1] - c_b:center[1] + c_b, layer_selected] = 0
+                mask_new[s, center[1] - c_b:center[1] + c_b] = 0
 
     return mask_new, contour, r_1, r_2
 
@@ -94,57 +97,57 @@ def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarra
     :return: The centre of the femoral neck.
     """
     layer_selected = None
-    for n in range(0, segmentation_mask.shape[0]):
-        contour_length = len(find_contours(segmentation_mask[n],
+    for i in range(segmentation_mask.shape[2]):
+        contour_length = len(find_contours(segmentation_mask[:, :, i],
                                            0.8))  # need to use find_contours here because it can detect disconnected contours
-        on_circle = points_on_circle(segmentation_mask[n], r * 2, center[1:])
+        on_circle = points_on_circle(segmentation_mask[:, :, i], r * 2, center[:2])
         if contour_length == 1 and len(on_circle) > 0:
-            layer_selected = n
+            layer_selected = i
             break
 
     if layer_selected is None:
         raise ValueError('Could not find a suitable layer for the femoral neck.')
 
     contour = get_contour(segmentation_mask)
+
     femoral_neck, contour, r_1, r_2 = contour_femoral_neck(segmentation_mask, contour,
                                                            layer_selected, center,
                                                            r)
-
-    # I think this ensures that the femoral neck is not too thin? I'm gonna leave this out for now
-    """
-    while np.count_nonzero(femoral_neck == 1) < 65:
-        print(np.count_nonzero(femoral_neck == 1))
-        layer_selected = layer_selected + 1
-        femoral_neck, contour, r_1, r_2 = contour_femoral_neck(
-            segmentation_mask, contour, layer_selected, center, r)
-    """
 
     # center of femoral neck
     center_fn = np.array(center_of_mass(femoral_neck)).astype(np.int16)
 
     # get coordinates of the selected contour points
-    contour_pts_l = np.nonzero(contour[layer_selected])
+    contour_pts_l = np.nonzero(contour[:, :, layer_selected])
 
     distance_center = (contour_pts_l[0] -
                        center_fn[0]) ** 2 + (contour_pts_l[1] - center_fn[1]) ** 2
     r_3 = math.sqrt(np.median(distance_center)) * 1.5
 
+    x = []
+    y = []
     # get contour also only with small distance to center_fn on the selected layer
-    for z in range(segmentation_mask.shape[2] - 1):  # all z coordinates
-        if r_3 ** 2 - (z - center_fn[1]) ** 2 >= 0:
-            y_b = int(round(math.sqrt(r_3 ** 2 - (z - center_fn[1]) ** 2)))
-            if center_fn[0] + y_b < segmentation_mask.shape[1]:
-                contour[layer_selected, center_fn[0] + y_b:, z] = 0
-            if center_fn[0] - y_b > 0:
-                contour[layer_selected, :center_fn[0] - y_b, z] = 0
+    # basically what this does is draw a circle with a certain radius around center_fn and exclude all contour points
+    # that are outside of that circle
+    for s in range(segmentation_mask.shape[0] - 1):  # all sagittal coordinates
+        if r_3 ** 2 - (s - center_fn[0]) ** 2 >= 0:  # if less than r_3 from center_fn
+            c_a = int(round(math.sqrt(r_3 ** 2 - (s - center_fn[0]) ** 2)))
+            if center_fn[1] + c_a < segmentation_mask.shape[1]:  # if coronal coordinate of center_fn + c_a is within the mask, null contour points posterior to that
+                contour[s, center_fn[1] + c_a:, layer_selected] = 0
+                x.append(s)
+                y.append(center_fn[1] + c_a)
+            if center_fn[1] - c_a > 0:  # if coronal coordinate of center_fn - c_a is within the mask, null contour points anterior to that
+                contour[s, :center_fn[1] - c_a, layer_selected] = 0
+                x.append(s)
+                y.append(center_fn[1] - c_a)
         else:
-            contour[layer_selected, :, z] = 0
+            contour[s, :, layer_selected] = 0
 
-    contour_pts_l = np.nonzero(contour[layer_selected])
+    contour_pts_l = np.nonzero(contour[:, :, layer_selected])
 
     # get index of the contour point after the largest gap
     # -> first contour point on the other side of the segmentation mask
-    diff = np.ediff1d(contour_pts_l[0])
+    diff = np.ediff1d(contour_pts_l[1])
     ind_gap = np.argsort(diff)[-1] + 1
 
     def g(x, m):
@@ -152,52 +155,21 @@ def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarra
 
     if diff.max() == 1:
         # lsf through the center and the contour points to get its slope
-        popt, _ = curve_fit(g, contour_pts_l[1] - center[2],
-                            contour_pts_l[0] - center[1])
+        popt, _ = curve_fit(g, contour_pts_l[0] - center[0],
+                            contour_pts_l[1] - center[1])
         m_new = popt[0]
     else:
         # separated lsf through the center and the contour points on both sides
         # to get their slopes and calculate the mean
-        popt1, _ = curve_fit(g, contour_pts_l[1][:ind_gap] - center[2],
-                             contour_pts_l[0][:ind_gap] - center[1])
-        popt2, _ = curve_fit(g, contour_pts_l[1][ind_gap:] - center[2],
-                             contour_pts_l[0][ind_gap:] - center[1])
+        popt1, _ = curve_fit(g, contour_pts_l[0][:ind_gap] - center[0],
+                             contour_pts_l[1][:ind_gap] - center[1])
+        popt2, _ = curve_fit(g, contour_pts_l[0][ind_gap:] - center[0],
+                             contour_pts_l[1][ind_gap:] - center[1])
         m_new = np.mean([popt1[0], popt2[0]])
 
     # find endpoint for the reference line
-    end = np.array([layer_selected, int((-80) * m_new + center[1]), int(-80 + center[2])])
+    end = np.array([int(-80 + center[0]), int((-80) * m_new + center[1]), layer_selected])
     return end
-
-
-def get_femoral_neck_base_(segmentation_mask: np.ndarray) -> np.ndarray:
-    """
-    Get the centre of the base of the femoral neck as described by Murphy et al.
-
-    :param segmentation_mask: A 3D segmentation mask of the femur.
-    :return: The centre of the base of the femoral neck.
-    """
-    decreasing = False
-    max_medial_extent = -1
-    for i in range(segmentation_mask.shape[0]):  # iterate superior -> inferior
-        if np.count_nonzero(segmentation_mask[i]) == 0:
-            continue
-
-        medial_extent = np.argwhere(segmentation_mask[i])[:,
-                        1].max()  # get the maximum x coordinate, i.e. most medial extent of this slice
-        if medial_extent < max_medial_extent:  # if medial extent of this slice is smaller than the previous one, medial extent is now decreasing
-            decreasing = True
-            max_medial_extent = medial_extent
-            continue
-
-        if decreasing:  # if medial extent is increasing again after decreasing, we have found the base of the femoral neck
-            break
-
-        max_medial_extent = medial_extent  # update the maximum medial extent otherwise and continue with next layer
-
-    layer_selected = i
-    center = np.array(center_of_mass(segmentation_mask[layer_selected])).astype(np.int16)
-    center = np.array([layer_selected, center[0], center[1]])
-    return center
 
 
 def get_trochanter_major(hip_image: Image, femoral_head_centre: np.ndarray) -> np.ndarray:
@@ -208,11 +180,11 @@ def get_trochanter_major(hip_image: Image, femoral_head_centre: np.ndarray) -> n
     :param femoral_head_centre: The centre of the femoral head.
     :return: The coordinates of the trochanter major.
     """
-    lateral_extents = np.zeros(hip_image.get_size()[0])
+    lateral_extents = np.zeros(hip_image.get_size()[2])
     # iterate from superior to inferior and get the maximum lateral extent of each layer
-    for i in range(hip_image.get_size()[0]):
-        if np.count_nonzero(hip_image.get_array()[i]):
-            lateral_extents[i] = np.argwhere(hip_image.get_array()[i])[:, 1].min()
+    for i in range(hip_image.get_size()[2]):
+        if np.count_nonzero(hip_image.get_array()[:, :, i]):
+            lateral_extents[i] = np.argwhere(hip_image.get_array()[:, :, i])[:, 0].min()
         else:
             lateral_extents[i] = 1000
 
@@ -236,11 +208,11 @@ def get_trochanter_major(hip_image: Image, femoral_head_centre: np.ndarray) -> n
     while True:
         # on that layer, get the most lateral point, which should be the trochanter major
         try:
-            trochanter_major_z = np.argwhere(hip_image.get_array()[trochanter_major_layer])[:,
-                                 1].min()  # get the minimum z coordinate, i.e. most lateral extent of this slice
-            trochanter_major_y = np.median(np.argwhere(hip_image.get_array()[trochanter_major_layer, :,
-                                                       trochanter_major_z]))  # select all points with the same x coordinate and get the median y coordinate
-            trochanter_major = np.array([trochanter_major_y, trochanter_major_z])
+            trochanter_major_s = np.argwhere(hip_image.get_array()[:, :, trochanter_major_layer])[:,
+                                 0].min()  # get the minimum sagittal coordinate, i.e. most lateral extent of this slice
+            trochanter_major_c = np.median(np.argwhere(hip_image.get_array()[trochanter_major_s, :,
+                                                       trochanter_major_layer]))  # select all points with the same sagittal coordinate and get the median coronal coordinate
+            trochanter_major = np.array([trochanter_major_s, trochanter_major_c])
         except IndexError:
             raise RuntimeError('Could not find a plausible trochanter major.')
 
@@ -250,7 +222,7 @@ def get_trochanter_major(hip_image: Image, femoral_head_centre: np.ndarray) -> n
         # if the trochanter major is not plausible, continue with the next layer
         trochanter_major_layer += 1
 
-    return np.array([trochanter_major_layer, trochanter_major[0], trochanter_major[1]])
+    return np.array([trochanter_major[0], trochanter_major[1], trochanter_major_layer])
 
 
 def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray) -> np.ndarray:
@@ -263,16 +235,14 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray) -> n
     """
     spacing = hip_image.get_spacing()
     trochanter_major = get_trochanter_major(hip_image, femoral_head_centre)
-    trochanter_major_layer = int(trochanter_major[0])
+    trochanter_major_layer = int(trochanter_major[2])
     inferior_mask = hip_image.get_array().copy()
-    inferior_mask[:trochanter_major_layer + 2] = 0  # null everything superior to the trochanter major
-    # print(f'Trochanter major located on layer {trochanter_major_layer}')
-    # print(f'Spacing: {spacing}')
+    inferior_mask[:, :, trochanter_major_layer + 2] = 0  # null everything superior to the trochanter major
 
-    medial_extents = np.zeros(len(inferior_mask))
-    for i in range(len(inferior_mask)):
-        if np.count_nonzero(inferior_mask[i]):
-            medial_extents[i] = np.argwhere(inferior_mask[i])[:, 1].max()
+    medial_extents = np.zeros(inferior_mask.shape[2])
+    for i in range(inferior_mask.shape[2]):
+        if np.count_nonzero(inferior_mask[:, :, i]):
+            medial_extents[i] = np.argwhere(inferior_mask[:, :, i])[:, 0].max()
         else:
             medial_extents[i] = 0
 
@@ -282,40 +252,28 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray) -> n
 
         :return: Whether the trochanter minor is plausible.
         """
-        tm = (int(trochanter_minor_layer), int(trochanter_minor[0]), int(trochanter_minor[1]))
+        tm = (int(trochanter_minor[0]), int(trochanter_minor[1]), trochanter_minor_layer)
         fh = (int(femoral_head_centre[0]), int(femoral_head_centre[1]), int(femoral_head_centre[2]))
-        # print(f'Trochanter minor: {tm}, Femoral head: {fh}')
+
         tm_world = hip_image.transform_index_to_physical_point(tm)
         fh_world = hip_image.transform_index_to_physical_point(fh)
-        tm_world = np.array([tm_world[0], tm_world[2]])
+        tm_world = np.array([tm_world[0], tm_world[2]])  # exclude coronal axis?
         fh_world = np.array([fh_world[0], fh_world[2]])
-        # print(f'Trochanter minor (world): {tm_world}, Femoral head (world): {fh_world}')
-        distance_world = np.linalg.norm(np.array(tm_world) - np.array(fh_world))
-        tm = np.array(tm) * spacing
-        fh = np.array(fh) * spacing
-        tm = np.array([tm[0], tm[2]])
-        fh = np.array([fh[0], fh[2]])
-        # print(f'Trochanter minor (adj): {tm}, Femoral head (adj): {fh}')
-        distance_spacing = np.linalg.norm(np.array(tm) - np.array(fh))
-        # print(f'Distance between trochanter minor and femoral head: {distance_world} (world), {distance_spacing} (spacing)')
-        # if distance_world < 430:
-        # if distance_spacing < 43:
-        # print(f'Distance between trochanter minor and femoral head not plausible: {distance_world}')
 
-        # return True if (380 < distance < 480) else False
+        distance_world = np.linalg.norm(np.array(tm_world) - np.array(fh_world))
+
         return True if distance_world > 43 else False
-        # return True if distance_spacing > 43 else False
 
     trochanter_minor_layer = np.argmax(medial_extents)
-    # print(f'Layer with max medial extent: {trochanter_minor_layer}')
+
     while True:
         # on that layer, get the most medial point, which should be the trochanter minor
         try:
-            trochanter_minor_z = np.argwhere(inferior_mask[trochanter_minor_layer])[:,
-                                 1].max()  # get the maximum z coordinate, i.e. most medial extent of this slice
-            trochanter_minor_y = np.median(np.argwhere(inferior_mask[trochanter_minor_layer, :,
-                                                       trochanter_minor_z]))  # select all points with the same x coordinate and get the median y coordinate
-            trochanter_minor = np.array([trochanter_minor_y, trochanter_minor_z])
+            trochanter_minor_s = np.argwhere(inferior_mask[:, :, trochanter_minor_layer])[:,
+                                 0].max()  # get the maximum sagittal coordinate, i.e. most medial extent of this slice
+            trochanter_minor_c = np.median(np.argwhere(inferior_mask[trochanter_minor_s, :,
+                                                       trochanter_minor_layer]))  # select all points with the same sagittal coordinate and get the median coronal coordinate
+            trochanter_minor = np.array([trochanter_minor_s, trochanter_minor_c])
         except IndexError:
             raise RuntimeError('Could not find a plausible trochanter minor.')
 
@@ -325,7 +283,7 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray) -> n
         # if the trochanter minor is not plausible, continue with the next layer
         trochanter_minor_layer += 1
 
-    return np.array([trochanter_minor_layer, trochanter_minor[0], trochanter_minor[1]])
+    return np.array([trochanter_minor[0], trochanter_minor[1], trochanter_minor_layer])
 
 
 def get_femoral_neck_base(hip_image: Image, femoral_head_centre: np.ndarray) -> np.ndarray:
@@ -338,9 +296,9 @@ def get_femoral_neck_base(hip_image: Image, femoral_head_centre: np.ndarray) -> 
     :return: The centre of the base of the femoral neck.
     """
     trochanter_minor = get_trochanter_minor(hip_image, femoral_head_centre)
-    trochanter_minor_layer = int(trochanter_minor[0])
-    center = np.array(center_of_mass(hip_image.get_array()[trochanter_minor_layer])).astype(np.int16)
-    center = np.array([trochanter_minor_layer, center[0], center[1]])
+    trochanter_minor_layer = int(trochanter_minor[2])
+    center = np.array(center_of_mass(hip_image.get_array()[:, :, trochanter_minor_layer])).astype(np.int16)
+    center = np.array([center[0], center[1], trochanter_minor_layer])
     return center
 
 
@@ -352,16 +310,16 @@ def get_trochanter_major_center(hip_image: Image, femoral_head_centre: np.ndarra
     :return: The centre and radius of the trochanter major at neck base level.
     """
     trochanter_major = get_trochanter_major(hip_image, femoral_head_centre)
-    trochanter_major_layer = int(trochanter_major[0])
+    trochanter_major_layer = int(trochanter_major[2])
 
-    lateral_mask_point = np.argwhere(hip_image.get_array()[trochanter_major_layer])[:, 1].min()
-    medial_mask_point = np.argwhere(hip_image.get_array()[trochanter_major_layer])[:, 1].max()
+    lateral_mask_point = np.argwhere(hip_image.get_array()[:, :, trochanter_major_layer])[:, 0].min()
+    medial_mask_point = np.argwhere(hip_image.get_array()[:, :, trochanter_major_layer])[:, 0].max()
 
     split_point = (lateral_mask_point + medial_mask_point) // 2
-    lateral_mask = hip_image.get_array()[trochanter_major_layer].copy()
-    lateral_mask[:, split_point:] = 0  # null everything medial to the split point
+    lateral_mask = hip_image.get_array()[:, :, trochanter_major_layer].copy()
+    lateral_mask[split_point:] = 0  # null everything medial to the split point
     center, radius = circle_fit(lateral_mask)
-    center = np.array([trochanter_major_layer, center[0], center[1]]).astype(np.int16)
+    center = np.array([center[0], center[1], trochanter_major_layer]).astype(np.int16)
     return center, radius
 
 
@@ -390,25 +348,24 @@ def get_proximal_reference_line(hip_image: Image, side: str = 'left',
                                                                   isotropic=isotropic)
     center = center.astype(np.int16)
 
-    if side == 'right':  # flip z axis to make this 'left-sided'
-        segmentation_mask = hip_image.get_array()[:, :, ::-1]
-        center[2] = center[2] + (segmentation_mask.shape[2] // 2 - center[2]) * 2  # flip z coordinate
+    if side == 'right':  # flip sagittal axis to make this 'left-sided'
+        segmentation_mask = hip_image.get_array()[::-1]
+        center[0] = center[0] + (segmentation_mask.shape[0] // 2 - center[0]) * 2  # flip sagittal coordinate of center
         tmp = nib.Nifti1Image(segmentation_mask, hip_image.get_affine(), hip_image.get_header())
         hip_image = Image(tmp)
 
     if method == 'lee':
         end = get_femoral_neck_center_lee(hip_image.get_array(), center, r_fh)
     elif method == 'murphy':
-        # return np.array([0, 0, 0]), np.array([0, 0, 1]), 1
         end = get_femoral_neck_base(hip_image, center)
     elif method == 'tomczak':
         end, r_tm = get_trochanter_major_center(hip_image, center)
 
-    layer_selected = end[0]
+    layer_selected = end[2]
 
     if side == 'right':
-        end[2] = end[2] + (hip_image.get_array().shape[2] // 2 - end[2]) * 2  # flip z coordinate
-        center[2] = center[2] - (center[2] - hip_image.get_array().shape[2] // 2) * 2  # flip z coordinate
+        end[0] = end[0] + (hip_image.get_array().shape[0] // 2 - end[0]) * 2  # flip sagittal coordinate back
+        center[0] = center[0] - (center[0] - hip_image.get_array().shape[0] // 2) * 2
 
     start: np.ndarray = np.array([center[0], center[1], center[2]])
     return (start, end, r_fh, r_tm) if method == 'tomczak' else (start, end, r_fh)
@@ -443,20 +400,22 @@ def calculate_femoral_torsion(hip_image: Image, knee_mask: np.ndarray, side: str
     landmarks = get_proximal_reference_line(hip_image, side=side, method=method,
                                             segmentation_label=segmentation_label, x_ratio=x_ratio, isotropic=isotropic)
     hip_start = landmarks[0]
-    fhc_layer = hip_start[0]
+    fhc_layer = hip_start[2]
     hip_end = landmarks[1]
-    hip_start[0] = hip_end[0]
+    hip_start[2] = hip_end[2]  # adjust axial coordinate to align layers
     r_fh = landmarks[2]
     if method == 'tomczak':
         r_tm = landmarks[3]
 
-    hip_layer = hip_end[0]
-    # proximal_line = (hip_end - hip_start) if side == 'left' else (hip_start - hip_end)  # for the left image side, hip_start is to the right of hip_end; vice versa for right image side
-    # -> need to distinguish between image sides
+    hip_layer = hip_end[2]
+
     proximal_line = hip_end - hip_start
-    x = np.array([0, 0, -1]) if side == 'left' else np.array(
-        [0, 0, 1])  # need to distinguish between left and right image side
+    x = np.array([-1, 0, -0]) if side == 'left' else np.array(
+        [1, 0, 0])  # need to distinguish between left and right image side
     proximal_angle = calculate_angle_between_vectors(proximal_line, x)
+
+    if proximal_angle > 90:
+        proximal_angle = 180 - proximal_angle
 
     proximal_orientation = hip_end[1] - hip_start[1]  # positive if hip_end is posterior to hip_start
     if proximal_orientation < 0:  # if hip_end is anterior to hip_start, the angle is negative
@@ -465,15 +424,18 @@ def calculate_femoral_torsion(hip_image: Image, knee_mask: np.ndarray, side: str
     knee_mask = np.where(knee_mask == segmentation_label, 1, 0)
     knee_layer, knee_start, knee_end = get_knee_reference_line(knee_mask,
                                                                bone='femur')  # for both image sides, knee_start is to the right of knee_end
-    if knee_start[2] < knee_end[2]:  # if this is somehow not the case, swap the points
+    if knee_start[0] < knee_end[0]:  # if this is somehow not the case, swap the points
         tmp = knee_start
         knee_start = knee_end
         knee_end = tmp
 
     distal_line = knee_end - knee_start
 
-    x = np.array([0, 0, -1])  # because end is always left of start
+    x = np.array([1, 0, 0])  # because end is always left of start, no need to distinguish between left and right
     distal_angle = calculate_angle_between_vectors(distal_line, x)
+
+    if distal_angle > 90:
+        distal_angle = 180 - distal_angle
 
     distal_orientation = knee_end[1] - knee_start[1]  # positive if knee_end is posterior to knee_start
     if side == 'left':
@@ -490,14 +452,14 @@ def calculate_femoral_torsion(hip_image: Image, knee_mask: np.ndarray, side: str
 
     if plot:
         fig, ax = plt.subplots(1, 2)
-        ax[0].imshow(np.where(hip_image.get_array()[hip_layer] == 0, np.nan, hip_image.get_array()[hip_layer]))
+        ax[0].imshow(np.where(hip_image.get_array()[:, :, hip_layer] == 0, np.nan, hip_image.get_array()[:, :, hip_layer]).T)
         if method == 'murphy':
-            tmp = hip_image.get_array()[fhc_layer].copy()
+            tmp = hip_image.get_array()[:, :, fhc_layer].copy().T
             tmp = np.where(tmp == 0, np.nan, tmp)
             ax[0].imshow(tmp, alpha=.5)
-        ax[0].plot([hip_start[2], hip_end[2]], [hip_start[1], hip_end[1]], 'r')
-        ax[1].imshow(knee_mask[knee_layer])
-        ax[1].plot([knee_start[2], knee_end[2]], [knee_start[1], knee_end[1]], 'r')
+        ax[0].plot([hip_start[0], hip_end[0]], [hip_start[1], hip_end[1]], 'r')
+        ax[1].imshow(knee_mask[:, :, knee_layer].T)
+        ax[1].plot([knee_start[0], knee_end[0]], [knee_start[1], knee_end[1]], 'r')
         if not mark_mask:
             return angle, fig
 
