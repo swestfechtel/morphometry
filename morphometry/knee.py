@@ -96,7 +96,7 @@ def get_knee_reference_line(mask: np.ndarray, bone: str, thresh: int = 2, step_s
                                 -angle,
                                 offset=-rot_offset / 2)
 
-    start_pt = get_dorsal_mask_point(rotated_mask)
+    start_pt = get_dorsal_mask_point(rotated_mask, knee=True)
 
     # choose endpoint on the other side of the notch at the end of the mask
     if start_pt[0] < notch_rot[0]:

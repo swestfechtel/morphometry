@@ -242,14 +242,14 @@ def get_contour_points(segmentation_mask: np.ndarray) -> np.ndarray:
     return np.argwhere(get_contour(segmentation_mask))
 
 
-def get_dorsal_mask_point(mask: np.ndarray) -> np.ndarray:
+def get_dorsal_mask_point(mask: np.ndarray, knee: bool = False) -> np.ndarray:
     """
     Return the most dorsal (posterior) point of a 2D mask, i.e. the point with the greatest coronal value.
     :param mask: The 2D mask.
+    :param knee: Workaround for the knee mask, where I need to get the most dorsal point with the maximum sagittal value.
     :return: The point with the greatest coronal value, given as (x, y), where x is the sagittal coordinate and y is the coronal coordinate.
     """
     points = get_contour_points(mask)
-
 
     indices = np.argsort(points[:, 1])
     most_dorsal_index = indices[-1]  # if indices increase from ventral (anterior) to dorsal (posterior), take the last (= largest) index
@@ -261,9 +261,11 @@ def get_dorsal_mask_point(mask: np.ndarray) -> np.ndarray:
     most_dorsal_coordinate = np.max(points[:, 1])
     indices = np.nonzero(points[:, 1] == most_dorsal_coordinate)
     most_dorsal_points = points[indices]
+
     median_sagittal = np.median(most_dorsal_points[:, 0])
     mean_sagittal = int(np.mean(most_dorsal_points[:, 0]))
-    most_dorsal_point = np.array([mean_sagittal, most_dorsal_coordinate])
+    max_sagittal = int(np.max(most_dorsal_points[:, 0]))
+    most_dorsal_point = np.array([max_sagittal, most_dorsal_coordinate]) if knee else np.array([mean_sagittal, most_dorsal_coordinate])  # TODO figure out a better way for this
 
     return most_dorsal_point
 
