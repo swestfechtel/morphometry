@@ -407,6 +407,43 @@
 	\noindent With both axed defined, we can calculate the center-edge angle between $a$ and $b$:
 	\[CEA = \arccos\left(\frac{a \cdot b}{\|a\| \cdot \|b\|}\right)\]
 
+	\section{Femoral Antetorsion (Murphy)}
+	\label{sec:murphy}
+	The femoral antetorsion is the angle between a proximal and distal reference line. In the method described by Murphy et al., the proximal reference line connects the centre of the femoral head and the centre of the base of the femoral neck directly superior to the lesser trochanter (\textbf{Figure \ref{fig:murphy}}).
+
+	The centre of the femoral head can be found using the algorithm described in section \ref{sec:ccd}.
+	We can use the following algorithm to find the centre of the base of the femoral neck:
+
+	\begin{enumerate}
+		\item We find the image slice with the most lateral extension of the femur.
+		This is where the greater trochanter is located.
+		\item We restrict the search space to everything inferior to the greater trochanter.
+		\item We find the image slice with the most medial extension of the femur.
+		This is where the lesser trochanter is located.
+		By restricting the search space, we ensure that this isn't the femoral head.
+		\item We select the image slice directly superior to the lesser trochanter.
+		\item We find the centroid of this image slice.
+		This is the centre of the base of the femoral neck.
+		\item We connect the femoral head centre to the centre of the base of the femoral neck to define the proximal reference line $p$.
+	\end{enumerate}
+
+	\noindent Usually, the distal reference line connects the posterior condyles of the femur at the knee joint.
+	Since the knee joint is not included in our dataset, we simply use the sagittal axis as the distal reference line $d$.
+
+	\subheading{Angle Calculation}
+
+	We can calculate the femoral antetorsion as the angle between the proximal and distal reference lines:
+
+	\[FA = \arccos\left(\frac{p \cdot d}{\|p\| \cdot \|d\|}\right)\]
+	
+	\begin{figure}
+		\centering
+		\includegraphics[width=\linewidth]{figures/PA000001_murphy_right}
+		\caption{Proximal and distal reference lines for antetorsion calculation following Murphy's method. Left image: Femur at the level of the femoral head centre in light purple, femur at the level of the base of the femoral neck in dark purple, reference line connecting centre of the femoral head to centre of the base of the femoral neck in red.
+		Right image: Femur at the level of the knee joint in yellow, reference line connecting the posterior condyles in red.}
+		\label{fig:murphy}
+	\end{figure}
+
 	\section{Mikulicz Line Deviation}
 	\label{sec:mikulicz}
 	The Mikulicz line is a line connecting the centre of the femoral head and the centre of the upper ankle joint.

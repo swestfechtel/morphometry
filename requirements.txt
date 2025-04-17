@@ -62,7 +62,7 @@ isoduration==20.11.0
 itsdangerous==2.2.0
 jedi==0.19.1
 jenkspy==0.4.1
-Jinja2==3.1.4
+Jinja2==3.1.6
 joblib==1.4.2
 json5==0.9.25
 jsonpointer==3.0.0
@@ -198,3 +198,7 @@ wslink==2.1.2
 xvfbwrapper==0.2.9
 yacs==0.1.8
 yarl==1.11.0
+
+argparse~=1.4.0
+Deprecated~=1.2.18
+fastapi~=0.115.12

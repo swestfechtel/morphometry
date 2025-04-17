@@ -66,7 +66,8 @@ def get_distal_reference_line(segmentation_mask: np.ndarray, tibia_label: int, f
     return layer_index, com_tibia, com_fibula
 
 
-def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibia_label_knee: int, tibia_label_ankle: int, fibula_label: int, side: str = 'left', plot: bool = False, mark_mask: bool = False) -> float | Tuple[float, plt.Figure] | Tuple[float, np.ndarray, np.ndarray] | Tuple[float, plt.Figure, np.ndarray, np.ndarray]:
+def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibia_label_knee: int, tibia_label_ankle: int,
+                             fibula_label: int, side: str = 'left', plot: bool = False, return_landmarks: bool = False) -> float | Tuple[float, plt.Figure] | Tuple[float, dict] | Tuple[float, plt.Figure, dict]:
     """
     Calculate the tibial torsion angle.
 
@@ -80,7 +81,7 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
     :param fibula_label: The segmentation label of the fibula.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param plot: If True, plot the distal reference line and the line connecting the center of mass points.
-    :param mark_mask: Whether to mark landmarks and reference lines on the segmentation masks.
+    :param return_landmarks: Whether to return the landmarks as a dict.
     :return: The tibial torsion angle in degrees.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
@@ -129,7 +130,7 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
 
     angle = distal_angle - proximal_angle
 
-    if not mark_mask and not plot:
+    if not return_landmarks and not plot:
         return angle
 
     if plot:
@@ -138,15 +139,13 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
         ax[0].plot([knee_start[0], knee_end[0]], [knee_start[1], knee_end[1]], color='red')
         ax[1].imshow(ankle_mask[:, :, ankle_layer].T)
         ax[1].plot([ankle_start[0], ankle_end[0]], [ankle_start[1], ankle_end[1]], color='red')
-        if not mark_mask:
+        if not return_landmarks:
             return angle, fig
 
-    if mark_mask:
-        knee_mask = np.where(knee_mask == 1, tibia_label_knee, knee_mask)
-        ankle_mask = draw_line(ankle_mask, ankle_layer, ankle_start, ankle_end)
-        knee_mask = draw_line(knee_mask, knee_layer, knee_start, knee_end)
-
+    if return_landmarks:
+        landmarks = {'knee_start': knee_start, 'knee_end': knee_end,
+                    'ankle_start': ankle_start, 'ankle_end': ankle_end}
         if not plot:
-            return angle, ankle_mask, knee_mask
+            return angle, landmarks
 
-    return angle, fig, ankle_mask, knee_mask
+    return angle, fig, landmarks

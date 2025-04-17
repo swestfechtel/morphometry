@@ -1,7 +1,8 @@
 import sys
-sys.path.append('/home/simon/Work/morpohmetry')
+sys.path.append('/home/simon/Work/morphometry')
 import SimpleITK as sitk
 import nibabel as nib
+import numpy as np
 from morphometry.femur import calculate_femoral_torsion
 from morphometry.tibia import calculate_tibial_torsion
 from morphometry.image_io import Image
@@ -43,18 +44,18 @@ if __name__ == '__main__':
     right_ankle = ankle_mask[ankle_mask.shape[0] // 2:]
 
     left_hip = nib.Nifti1Image(left_hip, hip.get_affine(), hip.get_header())
-    left_hip = Image(left_hip)
+    left_hip = Image.from_nibabel(left_hip)
     right_hip = nib.Nifti1Image(right_hip, hip.get_affine(), hip.get_header())
-    right_hip = Image(right_hip)
+    right_hip = Image.from_nibabel(right_hip)
 
     if args.plot:
         try:
             femoral_torsion_left, fig = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=args.plot)
             fig.savefig(f'{args.output}/ft_right.png')  # patient side <-> image side
             plt.close(fig)
-        except (NotImplementedError) as e:
+        except (RuntimeError, AssertionError, ValueError) as e:
             print(f'Failed to calculate femoral torsion for the left side.', e)
-            femoral_torsion_left = None
+            femoral_torsion_left = np.nan
 
         try:
             femoral_torsion_right, fig = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio, plot=args.plot)
@@ -62,7 +63,7 @@ if __name__ == '__main__':
             plt.close(fig)
         except (RuntimeError, AssertionError, ValueError) as e:
             print(f'Failed to calculate femoral torsion for the right side.', e)
-            femoral_torsion_right = None
+            femoral_torsion_right = np.nan
 
         try:
             tibial_torsion_left, fig = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left', plot=args.plot)
@@ -70,7 +71,7 @@ if __name__ == '__main__':
             plt.close(fig)
         except (RuntimeError, AssertionError, ValueError) as e:
             print(f'Failed to calculate tibial torsion for the left side.', e)
-            tibial_torsion_left = None
+            tibial_torsion_left = np.nan
 
         try:
             tibial_torsion_right, fig = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right', plot=args.plot)
@@ -78,31 +79,31 @@ if __name__ == '__main__':
             plt.close(fig)
         except (RuntimeError, AssertionError, ValueError) as e:
             print(f'Failed to calculate tibial torsion for the right side.', e)
-            tibial_torsion_right = None
+            tibial_torsion_right = np.nan
     else:
         try:
             femoral_torsion_left = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=args.plot)
         except (RuntimeError, AssertionError, ValueError) as e:
             print(f'Failed to calculate femoral torsion for the left side.', e)
-            femoral_torsion_left = None
+            femoral_torsion_left = np.nan
 
         try:
             femoral_torsion_right = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio, plot=args.plot)
         except (RuntimeError, AssertionError, ValueError) as e:
             print(f'Failed to calculate femoral torsion for the right side.', e)
-            femoral_torsion_right = None
+            femoral_torsion_right = np.nan
 
         try:
             tibial_torsion_left = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left', plot=args.plot)
         except (RuntimeError, AssertionError, ValueError) as e:
             print(f'Failed to calculate tibial torsion for the left side.', e)
-            tibial_torsion_left = None
+            tibial_torsion_left = np.nan
 
         try:
             tibial_torsion_right = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right', plot=args.plot)
         except (RuntimeError, AssertionError, ValueError) as e:
             print(f'Failed to calculate tibial torsion for the right side.', e)
-            tibial_torsion_right = None
+            tibial_torsion_right = np.nan
 
     print(f'Femoral torsion (right patient side): {femoral_torsion_left:.2f}°')
     print(f'Femoral torsion (left patient side): {femoral_torsion_right:.2f}°')

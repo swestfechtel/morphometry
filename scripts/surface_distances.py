@@ -65,7 +65,10 @@ if __name__ == '__main__':
     df.to_csv('/home/simon/Data/Augsburg_large/proxy_metrics_ankle.csv')
     print(df.describe())
     """
-    prediction_path = '/home/simon/Data/nnUnet_raw/Dataset029_HamburgHip/labels_pred_pp'
-    gt_path = '/home/simon/Data/nnUnet_raw/Dataset029_HamburgHip/labelsTs'
+    prediction_path = '/home/simon/Data/nnUNet_raw/Dataset029_HamburgHip/labels_pred_pp'
+    prediction_path_pretraining = '/home/simon/Data/nnUNet_raw/Dataset029_HamburgHip/labels_pred_pp_pretraining'
+    gt_path = '/home/simon/Data/nnUNet_raw/Dataset029_HamburgHip/labelsTs'
     df = compute_metrics(prediction_path, gt_path, [1, 2, 3])
+    df_pretraining = compute_metrics(prediction_path_pretraining, gt_path, [1, 2, 3])
     print(df.groupby(level='label').describe().T)
+    print(df_pretraining.groupby(level='label').describe().T)

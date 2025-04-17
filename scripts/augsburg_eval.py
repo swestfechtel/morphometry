@@ -58,13 +58,13 @@ if __name__ == '__main__':
                 # lee
                 tmp_l = left_hip.copy()
                 tmp_r = right_hip.copy()
-                femoral_torsion_left, fig, tmp_l, _ = calculate_femoral_torsion(tmp_l, left_knee, side='left', x_ratio=x_ratio, plot=plot, mark_mask=True)
+                femoral_torsion_left, fig, tmp_l, _ = calculate_femoral_torsion(tmp_l, left_knee, side='left', x_ratio=x_ratio, plot=plot, return_landmarks=True)
                 fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_left.png')
                 plt.close(fig)
 
                 femoral_torsion_right, fig, tmp_r, _ = calculate_femoral_torsion(tmp_r, right_knee, side='right',
-                                                                       x_ratio=x_ratio,
-                                                                       plot=plot, mark_mask=True)
+                                                                                 x_ratio=x_ratio,
+                                                                                 plot=plot, return_landmarks=True)
                 fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_right.png')
                 plt.close(fig)
 
@@ -75,14 +75,14 @@ if __name__ == '__main__':
                 tmp_l = left_hip.copy()
                 tmp_r = right_hip.copy()
                 print('Murphy - left image side')
-                femoral_torsion_left_murphy, fig, tmp_l, _ = calculate_femoral_torsion(tmp_l, left_knee, side='left', method='murphy', x_ratio=x_ratio, plot=plot, hip_image=hip, mark_mask=True)
+                femoral_torsion_left_murphy, fig, tmp_l, _ = calculate_femoral_torsion(tmp_l, left_knee, side='left', method='murphy', x_ratio=x_ratio, plot=plot, hip_image=hip, return_landmarks=True)
                 fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_left_murphy.png')
                 plt.close(fig)
 
                 print('Murphy - right image side')
                 femoral_torsion_right_murphy, fig, tmp_r, _ = calculate_femoral_torsion(tmp_r, right_knee, side='right',
-                                                                              method='murphy', x_ratio=x_ratio,
-                                                                              plot=plot, hip_image=hip, mark_mask=True)
+                                                                                        method='murphy', x_ratio=x_ratio,
+                                                                                        plot=plot, hip_image=hip, return_landmarks=True)
                 fig.savefig(f'/home/simon/Downloads/Augsburg/figures/{patient}_at_right_murphy.png')
                 plt.close(fig)
 

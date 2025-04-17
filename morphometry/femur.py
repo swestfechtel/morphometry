@@ -101,6 +101,7 @@ def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarra
         contour_length = len(find_contours(segmentation_mask[:, :, i],
                                            0.8))  # need to use find_contours here because it can detect disconnected contours
         on_circle = points_on_circle(segmentation_mask[:, :, i], r * 2, center[:2])
+
         if contour_length == 1 and len(on_circle) > 0:
             layer_selected = i
             break
@@ -180,9 +181,9 @@ def get_trochanter_major(hip_image: Image, femoral_head_centre: np.ndarray) -> n
     :param femoral_head_centre: The centre of the femoral head.
     :return: The coordinates of the trochanter major.
     """
-    lateral_extents = np.zeros(hip_image.get_size()[2])
+    lateral_extents = np.zeros(hip_image.get_shape()[2])
     # iterate from superior to inferior and get the maximum lateral extent of each layer
-    for i in range(hip_image.get_size()[2]):
+    for i in range(hip_image.get_shape()[2]):
         if np.count_nonzero(hip_image.get_array()[:, :, i]):
             lateral_extents[i] = np.argwhere(hip_image.get_array()[:, :, i])[:, 0].min()
         else:
@@ -352,7 +353,7 @@ def get_proximal_reference_line(hip_image: Image, side: str = 'left',
         segmentation_mask = hip_image.get_array()[::-1]
         center[0] = center[0] + (segmentation_mask.shape[0] // 2 - center[0]) * 2  # flip sagittal coordinate of center
         tmp = nib.Nifti1Image(segmentation_mask, hip_image.get_affine(), hip_image.get_header())
-        hip_image = Image(tmp)
+        hip_image = Image.from_nibabel(tmp)
 
     if method == 'lee':
         end = get_femoral_neck_center_lee(hip_image.get_array(), center, r_fh)
@@ -373,13 +374,7 @@ def get_proximal_reference_line(hip_image: Image, side: str = 'left',
 
 def calculate_femoral_torsion(hip_image: Image, knee_mask: np.ndarray, side: str = 'left', method: str = 'lee',
                               segmentation_label: int = 1, x_ratio: float = 1., plot: bool = False,
-                              isotropic: bool = False, mark_mask: bool = False) -> float | \
-                                                                                                                 Tuple[
-                                                                                                                     float, plt.Figure] | \
-                                                                                                                 Tuple[
-                                                                                                                     float, np.ndarray, np.ndarray] | \
-                                                                                                                 Tuple[
-                                                                                                                     float, plt.Figure, np.ndarray, np.ndarray]:
+                              isotropic: bool = False, return_landmarks: bool = False) -> float | Tuple[float, plt.Figure] | Tuple[float, dict] | Tuple[float, plt.Figure, dict]:
     """
     Calculate the femoral torsion from a segmentation mask.
     :param hip_image: An Image object of the hip segmentation mask.
@@ -390,7 +385,7 @@ def calculate_femoral_torsion(hip_image: Image, knee_mask: np.ndarray, side: str
     :param x_ratio: Correction factor for slice thickness.
     :param plot: Whether to plot the reference lines or not.
     :param isotropic: Whether the image has isotropic voxels.
-    :param mark_mask: Whether to mark landmarks and reference lines on the segmentation masks.
+    :param return_landmarks: Whether to return the landmarks as a dict.
     :return: The femoral torsion in degrees and optionally a matplotlib figure of the reference lines.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
@@ -447,7 +442,7 @@ def calculate_femoral_torsion(hip_image: Image, knee_mask: np.ndarray, side: str
 
     angle = proximal_angle - distal_angle
 
-    if not mark_mask and not plot:
+    if not return_landmarks and not plot:
         return angle
 
     if plot:
@@ -460,18 +455,12 @@ def calculate_femoral_torsion(hip_image: Image, knee_mask: np.ndarray, side: str
         ax[0].plot([hip_start[0], hip_end[0]], [hip_start[1], hip_end[1]], 'r')
         ax[1].imshow(knee_mask[:, :, knee_layer].T)
         ax[1].plot([knee_start[0], knee_end[0]], [knee_start[1], knee_end[1]], 'r')
-        if not mark_mask:
+        if not return_landmarks:
             return angle, fig
 
-    if mark_mask:
-        hip_mask = draw_line(hip_image.get_array(), hip_layer, hip_start, hip_end)
-        hip_mask = draw_circle(hip_mask, hip_layer, r_fh, hip_start)
-        if method == 'tomczak':
-            hip_mask = draw_circle(hip_mask, hip_layer, r_tm, hip_end)
-
-        knee_mask = draw_line(knee_mask, knee_layer, knee_start, knee_end)
-
+    if return_landmarks:
+        landmarks = {'hip_start': hip_start, 'hip_end': hip_end, 'knee_start': knee_start, 'knee_end': knee_end}
         if not plot:
-            return angle, hip_mask, knee_mask
+            return angle, landmarks
 
-    return angle, fig, hip_mask, knee_mask
+    return angle, fig, landmarks
