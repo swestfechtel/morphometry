@@ -405,7 +405,7 @@ def calculate_femoral_torsion(hip_image: Image, knee_mask: np.ndarray, side: str
     hip_layer = hip_end[2]
 
     proximal_line = hip_end - hip_start
-    x = np.array([-1, 0, -0]) if side == 'left' else np.array(
+    x = np.array([-1, 0, 0]) if side == 'left' else np.array(
         [1, 0, 0])  # need to distinguish between left and right image side
     proximal_angle = calculate_angle_between_vectors(proximal_line, x)
 
@@ -426,7 +426,7 @@ def calculate_femoral_torsion(hip_image: Image, knee_mask: np.ndarray, side: str
 
     distal_line = knee_end - knee_start
 
-    x = np.array([1, 0, 0])  # because end is always left of start, no need to distinguish between left and right
+    x = np.array([-1, 0, 0])  # because end is always left of start, no need to distinguish between left and right
     distal_angle = calculate_angle_between_vectors(distal_line, x)
 
     if distal_angle > 90:

@@ -109,10 +109,14 @@ def get_examination_by_id(examination_id: str):
         layers = pool.map(encode_figure, layers)
 
     d['image'] = layers
+    d['shape'] = examination.transformed_image.shape
 
     if isinstance(examination, TorsionExamination):
         logger.debug(dict(examination.landmarks))
         d['landmarks'] = dict(examination.landmarks)
+        d['knee_offset'] = examination.hip.shape[2]
+        d['ankle_offset'] = examination.hip.shape[2] + examination.knee.shape[2]
+        d['torsion'] = examination.get_torsion_values()
 
     return d
 

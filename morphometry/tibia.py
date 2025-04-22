@@ -90,13 +90,13 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
     # get proximal reference line
     knee_layer, knee_start, knee_end = get_knee_reference_line(knee_mask, 'tibia')
 
-    proximal_line = knee_end - knee_start
-
     # knee_end is always left of knee_start
     if knee_start[0] < knee_end[0]:  # if this is somehow not the case, swap the points
         tmp = knee_start
         knee_start = knee_end
         knee_end = tmp
+
+    proximal_line = knee_end - knee_start
 
     x = np.array([-1, 0, 0])  # because end is always left of start
 
