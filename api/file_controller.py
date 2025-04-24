@@ -6,6 +6,7 @@ import string
 import random
 import pickle
 import shutil
+import json
 
 from api.examination import Examination
 
@@ -208,6 +209,20 @@ class FileController(object):
                 shutil.copyfileobj(upload_file.file, buffer)
         finally:
             upload_file.file.close()
+
+    @staticmethod
+    def filter_orthanc_files(files: list[UploadFile]) -> list[UploadFile]:
+        """
+        Filter files received from Orthanc according to pre-specified rules.
+        :param files: A list of dicom files received from an orthanc server.
+        :return:
+        """
+        raise NotImplementedError
+        with open('filter_rules.json') as f:
+            filter_rules = json.load(f)
+
+        ds = pydicom.dcm
+
 
     def save_files(self, files: list[UploadFile], origin: str) -> Examination | bool:
         """

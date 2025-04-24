@@ -30,22 +30,22 @@ class ModelJob:
         self.file_controller = file_controller
         self.running = False
 
-    def segment_and_process(self, examination: TorsionExamination) -> str:
+    def segment_and_process(self, examination: TorsionExamination):
         """
         Compute segmentation and torsional alignment for a TorsionExamination object.
         :param examination: A TorsionExamination object to process.
-        :return: The identifier of the job.
+        :return: The job.
         """
         self.compute_segmentation(examination)
         self.compute_torsional_alignment(examination)
 
-        return self.identifier
+        return self
 
-    def compute_segmentation(self, examination: TorsionExamination) -> str:
+    def compute_segmentation(self, examination: TorsionExamination):
         """
         Compute segmentation masks for hip, knee and ankle.
         :param examination: A TorsionExamination object to compute segmentations for.
-        :return: The identifier of the job.
+        :return: The job
         """
         logger = logging.getLogger('api')
         logger.info(f'Created segmentation job for {examination.identifier} with identifier {self.identifier}.')
@@ -100,18 +100,19 @@ class ModelJob:
         ankle_mask.axcodes = examination.ankle.axcodes
         examination.ankle_mask = ankle_mask
 
+        examination.encode_images()
+
         logger.info(f'Finished segmentation job for {examination.identifier} with identifier {self.identifier}.')
         examination.status = 'segmented'
-        self.running = False
         self.file_controller.update_examination(examination)
 
-        return self.identifier
+        return self
 
-    def compute_torsional_alignment(self, examination: TorsionExamination) -> str:
+    def compute_torsional_alignment(self, examination: TorsionExamination):
         """
         Compute the torsional alignment for a TorsionExamination object.
         :param examination: A TorsionExamination object to compute torsional alignment for.
-        :return: The identifier of the job.
+        :return: The job.
         """
         logger = logging.getLogger('api')
         logger.info(f'Created torsional alignment job for {examination.identifier} with identifier {self.identifier}.')
@@ -188,10 +189,9 @@ class ModelJob:
         logger.info(f'Finished torsional alignment job for {examination.identifier} with identifier {self.identifier}.')
 
         examination.status = 'processed'
-        self.running = False
         self.file_controller.update_examination(examination)
 
-        return self.identifier
+        return self
 
     async def dummy_job(self):
         import asyncio

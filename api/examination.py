@@ -1,6 +1,7 @@
 import pydicom
 import ruptures
 import base64
+import multiprocessing
 
 import nibabel as nib
 import numpy as np
@@ -10,11 +11,12 @@ from morphometry.image_io import Image, Segmentation
 from io import BytesIO
 
 from matplotlib.figure import Figure
-from matplotlib import colors, cm
+from matplotlib.colors import ListedColormap, BoundaryNorm
 
 from dataclasses import dataclass
 from copy import deepcopy
 from collections import defaultdict
+from typing import Tuple, Union
 
 masking_value = -1
 
@@ -26,6 +28,7 @@ class Examination(object):
     transformed_image: Image
     metadata: pydicom.FileDataset
     status: str
+    image_b64: list[str]
 
     def __init__(self, identifier: str = None, original_image: Image = None, transformed_image: Image = None, metadata: pydicom.FileDataset = None):
         self.identifier = identifier
@@ -33,6 +36,7 @@ class Examination(object):
         self.transformed_image = transformed_image
         self.metadata = metadata
         self.status = 'unprocessed'
+        self.image_b64 = None
 
     def copy(self):
         """
@@ -73,6 +77,16 @@ class Examination(object):
         """
         return self.metadata[0x0010, 0x0010].value
 
+    def encode_images(self):
+        """
+        Encode the images and segmentation masks to base64 strings.
+        :return: A list of base64 encoded images and segmentation masks.
+        """
+        layers = [self.transformed_image.array[:, :, i] for i in range(self.transformed_image.shape[-1])]
+
+        with multiprocessing.Pool() as pool:
+            self.image_b64 = pool.map(encode_figure, layers)
+
 
 class TorsionExamination(Examination):
     hip: Image
@@ -86,6 +100,7 @@ class TorsionExamination(Examination):
     tibial_torsion_left: float
     tibial_torsion_right: float
     landmarks: defaultdict
+    image_segmentation_b64: list[str]
 
     def __init__(self, examination: Examination):
         super().__init__(examination.identifier, examination.original_image, examination.transformed_image, examination.metadata)
@@ -100,6 +115,7 @@ class TorsionExamination(Examination):
         self.tibial_torsion_left = None
         self.tibial_torsion_right = None
         self.landmarks = defaultdict(dict)
+        self.image_segmentation_b64 = None
 
     def split_series(self):
         """
@@ -129,19 +145,41 @@ class TorsionExamination(Examination):
         return {'femoral_torsion_left': self.femoral_torsion_left, 'femoral_torsion_right': self.femoral_torsion_right,
                 'tibial_torsion_left': self.tibial_torsion_left, 'tibial_torsion_right': self.tibial_torsion_right}
 
+    def encode_images(self):
+        """
+        Encode the images and segmentation masks to base64 strings.
+        :return: A list of base64 encoded images and segmentation masks.
+        """
+        super().encode_images()
 
-def encode_figure(layer: np.ndarray, segmentation: bool = False) -> str:
+        tmp = self.ankle_mask.array.copy()
+        tmp = np.where(tmp == 2, 3, tmp)
+        tmp = np.where(tmp == 1, 2, tmp)
+        segmented_array = np.concatenate((self.hip_mask.array, self.knee_mask.array, tmp), axis=2)
+        image_layers = [self.transformed_image.array[:, :, i] for i in range(self.transformed_image.shape[-1])]
+        segmentation_layers = [segmented_array[:, :, i] for i in range(segmented_array.shape[-1])]
+        layers = [(image_layers[i], segmentation_layers[i]) for i in range(len(image_layers))]
+
+        with multiprocessing.Pool() as pool:
+            self.image_segmentation_b64 = pool.map(encode_figure, layers)
+
+
+def encode_figure(layer: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]) -> str:
+    image_layer = layer[0] if isinstance(layer, tuple) else layer
+    segmentation_layer = layer[1] if isinstance(layer, tuple) else None
+
     fig = Figure(figsize=(20, 20))
     ax = fig.subplots()
-    if segmentation:
-        layer = np.ma.masked_where(layer < 4, layer)
-        cmap = colors.ListedColormap(['yellow', 'purple', 'lightblue', 'red'])
-        # cmap.set_under('k', alpha=0)
-        bounds = [1, 2, 3, 4, 5]
-        norm = colors.BoundaryNorm(bounds, cmap.N)
-        ax.imshow(layer.T, cmap='viridis')
-    else:
-        ax.imshow(layer.T, cmap='gray')
+
+    ax.imshow(image_layer.T, cmap='gray')
+    if segmentation_layer is not None:
+        colours = ['white', 'yellow', 'purple', 'cyan']
+        cmap = ListedColormap(colours)
+
+        bounds = [-1, 0.5, 1.5, 2.5, 3.5]
+        norm = BoundaryNorm(bounds, cmap.N)
+
+        ax.imshow(np.where(segmentation_layer == 0, np.nan, segmentation_layer).T, cmap=cmap, norm=norm, alpha=0.5)
 
     ax.axis('off')
     buffer = BytesIO()

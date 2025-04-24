@@ -4,6 +4,8 @@ import datetime
 import multiprocessing
 import asyncio
 
+import numpy as np
+
 from functools import partial
 from concurrent.futures import ThreadPoolExecutor
 
@@ -41,10 +43,10 @@ def task_callback(task):
     try:
         result = task.result()
         logger.info(f'Task {task} finished with result: {result}')
-        return result
+        result.running = False
     except:
         logger.error(f'Task {task} failed with exception: {task.exception()}')
-        del open_jobs[task.name]  # make sure to clean up the job
+        del open_jobs[task.get_name()]  # make sure to clean up the job
 
     return None
 
@@ -103,12 +105,11 @@ def get_examination_by_id(examination_id: str):
 
     assert d['accession_number'] == examination.accession_number == examination_id  # sanity check
 
-    layers = [examination.transformed_image.array[:, :, i] for i in range(examination.transformed_image.shape[-1])]
+    if examination.image_b64 is None:
+        examination.encode_images()
+        file_controller.update_examination(examination)
 
-    with multiprocessing.Pool() as pool:
-        layers = pool.map(encode_figure, layers)
-
-    d['image'] = layers
+    d['image'] = examination.image_b64
     d['shape'] = examination.transformed_image.shape
 
     if isinstance(examination, TorsionExamination):
@@ -117,6 +118,12 @@ def get_examination_by_id(examination_id: str):
         d['knee_offset'] = examination.hip.shape[2]
         d['ankle_offset'] = examination.hip.shape[2] + examination.knee.shape[2]
         d['torsion'] = examination.get_torsion_values()
+
+        if examination.image_segmentation_b64 is None:
+            examination.encode_images()
+            file_controller.update_examination(examination)
+
+        d['segmentation'] = examination.image_segmentation_b64
 
     return d
 
@@ -190,6 +197,7 @@ async def compute_torsion(examination_id: str):
 
     job.running = True
     open_jobs[job.identifier] = job
+    task.set_name(job.identifier)
 
     task.add_done_callback(task_callback)
     task.set_name(job.identifier)
@@ -224,6 +232,7 @@ async def compute_segmentation(examination_id: str):
     job.running = True
 
     open_jobs[job.identifier] = job
+    task.set_name(job.identifier)
 
     task.add_done_callback(task_callback)
     task.set_name(job.identifier)
