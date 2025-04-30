@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import datetime
@@ -8,8 +9,9 @@ import numpy as np
 
 from functools import partial
 from concurrent.futures import ThreadPoolExecutor
+from typing import Annotated, Dict
 
-from fastapi import FastAPI, UploadFile, status, Response, Form, Request
+from fastapi import FastAPI, UploadFile, status, Response, Form, Request, Body, File
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.file_controller import FileController
@@ -62,12 +64,10 @@ def get_examinations():
     for examination_id in examinations:
         examination = file_controller.get_examination(examination_id)
         d = dict()
-        d['patient_name'] = examination.patient_name.family_comma_given()
-
-        tmp = examination.study_date
-        tmp = datetime.datetime.strptime(tmp, '%Y%m%d')
-        d['study_date'] = tmp.strftime('%Y-%m-%d')
-
+        # d['patient_name'] = examination.patient_name.family_comma_given()
+        d['patient_name'] = 'Anonymised'
+        d['study_date'] = examination.study_date
+        d['study_time'] = examination.study_time
         d['study_description'] = examination.study_description
         d['accession_number'] = examination.accession_number
         d['status'] = examination.status
@@ -93,12 +93,10 @@ def get_examination_by_id(examination_id: str):
         return Response(status_code=status.HTTP_404_NOT_FOUND)
 
     d = dict()
-    d['patient_name'] = examination.patient_name.family_comma_given()
-
-    tmp = examination.study_date
-    tmp = datetime.datetime.strptime(tmp, '%Y%m%d')
-    d['study_date'] = tmp.strftime('%Y-%m-%d')
-
+    # d['patient_name'] = examination.patient_name.family_comma_given()
+    d['patient_name'] = 'Anonymised'
+    d['study_date'] = examination.study_date
+    d['study_time'] = examination.study_time
     d['study_description'] = examination.study_description
     d['accession_number'] = examination.accession_number
     d['status'] = examination.status
@@ -128,6 +126,28 @@ def get_examination_by_id(examination_id: str):
     return d
 
 
+@app.patch('/examinations/{examination_id}', status_code=status.HTTP_200_OK)
+def update_examination(examination_id: str, examination_json: str = Body(...)):
+    """
+    Update an examination by its identifier.
+    :param examination_json: Examination data to update in json form.
+    :param examination_id: The identifier of the examination to update.
+    :return:
+    """
+    examination = file_controller.get_examination(examination_id)
+    examination_json = json.loads(examination_json)
+
+    if examination is None:
+        return Response(status_code=status.HTTP_404_NOT_FOUND)
+
+    for k, v in examination_json.items():
+        if hasattr(examination, k):
+            setattr(examination, k, v)
+
+    file_controller.update_examination(examination)
+    return {'status': 'updated'}
+
+
 @app.delete('/examinations/{examination_id}', status_code=status.HTTP_205_RESET_CONTENT)
 def delete_file_by_id(examination_id: str):
     """
@@ -143,12 +163,11 @@ def delete_file_by_id(examination_id: str):
     return Response(status_code=status.HTTP_205_RESET_CONTENT)  # tell client to refresh the UI
 
 
-@app.post('/upload/{origin}', status_code=status.HTTP_201_CREATED)
-async def upload_files(request: Request, origin: str = 'ui'):
+@app.post('/upload/', status_code=status.HTTP_201_CREATED)
+async def files_from_html_form(request: Request):
     """
     Upload files to the server via HTML form.
     :param request: A list of files to upload.
-    :param origin: The origin of the files to upload.
     :return:
     """
     data = await request.form()
@@ -158,9 +177,44 @@ async def upload_files(request: Request, origin: str = 'ui'):
         if isinstance(files[0], UploadFile):
             break
 
-    examination = file_controller.save_files(files, origin)
+    examination = file_controller.save_files(files, 'ui')
 
     if examination is False:
+        return Response(status_code=status.HTTP_400_BAD_REQUEST)
+
+    return {'examination_id': examination.identifier}
+
+
+@app.post('/upload/orthanc', status_code=status.HTTP_201_CREATED)
+async def files_from_orthanc(file: Annotated[bytes, File(...)], metadata: Dict = Body(...)):
+    """
+    Upload files to the server from Orthanc.
+    :param file: The file to upload.
+    :param metadata: Metadata associated with the file.
+    :return:
+    """
+    logger.info(f'Got file {file} and metadata {metadata}')
+
+    if not isinstance(file, bytes):
+        return Response(status_code=status.HTTP_400_BAD_REQUEST)
+
+    workdir = os.path.dirname(os.path.realpath(__file__))
+    with open(f'{workdir}/filter_rules.json', 'r') as file:
+        rules = json.load(file)
+
+    model = None
+    for rule in rules:
+        try:
+            for tag, value in rule['DICOM Tags']:
+                assert tag in metadata.keys()
+                assert value == metadata[tag]
+
+            model = rule['Model']
+        except AssertionError:
+            logger.debug(f'Rule {rule} does not apply to file {metadata["AccessionNumber"]}')
+
+    if model is None:
+        logger.error(f'No model found for file {metadata["AccessionNumber"]}')
         return Response(status_code=status.HTTP_400_BAD_REQUEST)
 
     return {'examination_id': examination.identifier}

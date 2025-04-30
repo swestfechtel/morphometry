@@ -2,6 +2,7 @@ import pydicom
 import ruptures
 import base64
 import multiprocessing
+import datetime
 
 import nibabel as nib
 import numpy as np
@@ -51,7 +52,17 @@ class Examination(object):
         Get the study date from the metadata.
         :return: The study date.
         """
-        return self.metadata[0x0008, 0x0020].value
+        tmp = self.metadata[0x0008, 0x0020].value
+        return datetime.datetime.strptime(tmp, '%Y%m%d').strftime('%Y-%m-%d')
+
+    @property
+    def study_time(self):
+        """
+        Get the study time from the metadata.
+        :return: The study time.
+        """
+        tmp = self.metadata[0x0008, 0x0030].value
+        return datetime.datetime.strptime(tmp, '%H%M%S').strftime('%H:%M')
 
     @property
     def study_description(self):

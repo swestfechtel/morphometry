@@ -1,5 +1,11 @@
 {
-  "torsion_rule": {
-    "series_description": "MR Axial 3 Stack"
-  }
+	"Rules": [
+		{
+			"DICOM Tags": [
+				["0x0008,0x1030", "MRT Beinachsenmessung"],
+				["0x0008,0x103e", "T2 TSE ax 3 Stacks"]
+			],
+			"Model": "Torsion"
+		}
+	]
 }

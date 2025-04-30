@@ -1,6 +1,8 @@
 import orthanc
-import pprint
+import requests
 import json
+import logging
+from io import BytesIO
 
 
 def on_receive(data, origin):
@@ -18,38 +20,20 @@ def on_receive(data, origin):
     return orthanc.ReceivedInstanceAction.DISCARD, None
 
 
-def on_change(change_type, level, resource):
-    """
-    Callback function to handle changes in Orthanc.
-    :param change_type: The type of change (e.g., "Create", "Update", "Delete").
-    :param level: The level of the change (e.g., "Instance", "Series", "Study").
-    :param resource: The resource that changed.
-    :return:
-    """
-    print("Change type:", change_type)
-    print("Level:", level)
-    print("Resource:", resource)
-    orthanc.LogInfo(f"Change detected: {change_type} at {level} for {resource}")
-    # Process the change as needed
-
-
 def on_stored_instance(dicom, instance_id):
-    print('Received instance %s of size %d (transfer syntax %s, SOP class UID %s)' % (
-        instance_id, dicom.GetInstanceSize(),
-        dicom.GetInstanceMetadata('TransferSyntax'),
-        dicom.GetInstanceMetadata('SopClassUid')))
-
-    # Print the origin information
-    if dicom.GetInstanceOrigin() == orthanc.InstanceOrigin.DICOM_PROTOCOL:
-        print('This instance was received through the DICOM protocol')
-    elif dicom.GetInstanceOrigin() == orthanc.InstanceOrigin.REST_API:
-        print('This instance was received through the REST API')
-
-    # Print the DICOM tags
-    pprint.pprint(json.loads(dicom.GetInstanceSimplifiedJson()))
+    file = BytesIO(dicom.SerializeDicomInstance())
+    metadata = json.loads(dicom.GetInstanceSimplifiedJson())
+    response = requests.post(url='http://localhost:8000/upload/orthanc', data=file, json=metadata)
+    logger.info(f'Got status code {response.status_code} and message {response.text}')
 
 
-if __name__ == '__main__':
-    orthanc.RegisterReceivedInstanceCallback(on_receive)
-    orthanc.RegisterOnChangeCallback(on_change)
-    orthanc.RegisterOnStoredInstanceCallback(on_stored_instance)
+logger = logging.getLogger('logger')
+logger.setLevel(logging.INFO)
+fh = logging.FileHandler(filename='/home/orthanc/orthanc_python_log.log', mode='w')
+fh.setFormatter(logging.Formatter('%(levelname)s: %(asctime)s - %(filename)s - %(funcName)s - %(message)s'))
+logger.addHandler(fh)
+logger.info('Logger initialised')
+
+# orthanc.RegisterReceivedInstanceCallback(on_receive)
+orthanc.RegisterOnStoredInstanceCallback(on_stored_instance)
+logger.info('Callbacks registered')
