@@ -7,6 +7,7 @@ import random
 import pickle
 import shutil
 import json
+import threading
 
 from api.examination import Examination
 
@@ -16,6 +17,45 @@ from queue import Queue
 from copy import deepcopy
 from pathlib import Path
 from fastapi import UploadFile
+from typing import Callable
+
+
+class ReceivedSeriesBuffer:
+    """
+    A buffer to store received series.
+    """
+
+    identifier: str
+    queue: Queue
+    timeout: int
+    timer: threading.Timer
+    file_controller: 'FileController'
+    callback: Callable
+
+    def __init__(self, identifier, file_controller, callback, timeout=60):
+        self.identifier = identifier
+        self.file_controller = file_controller
+        self.callback = callback
+        self.queue = Queue()
+        self.timeout = timeout
+        self.timer = threading.Timer(self.timeout, self._create_examination)
+
+    def add(self, item):
+        """
+        Add an item to the buffer.
+        :param item: The item to add.
+        :return:
+        """
+        self.queue.put(item)
+
+        self.timer.cancel()
+        self.timer.start()
+
+    def _create_examination(self):
+        """
+        Create an examination from the buffered items and call the callback function.
+        :return:
+        """
 
 
 class FileController(object):

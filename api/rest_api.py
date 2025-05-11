@@ -14,7 +14,7 @@ from typing import Annotated, Dict
 from fastapi import FastAPI, UploadFile, status, Response, Form, Request, Body, File
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.file_controller import FileController
+from api.file_controller import FileController, ReceivedSeriesBuffer
 from api.model_controller import ModelJob
 from api.examination import Examination, TorsionExamination, encode_figure
 from api.utils import create_directories_and_files, init_logger
@@ -51,6 +51,9 @@ def task_callback(task):
         del open_jobs[task.get_name()]  # make sure to clean up the job
 
     return None
+
+
+def buffer_callback()
 
 
 @app.get('/examinations/', status_code=status.HTTP_200_OK)
@@ -216,6 +219,7 @@ async def files_from_orthanc(file: Annotated[bytes, File(...)], metadata: Dict =
     if model is None:
         logger.error(f'No model found for file {metadata["AccessionNumber"]}')
         return Response(status_code=status.HTTP_400_BAD_REQUEST)
+
 
     return {'examination_id': examination.identifier}
 
