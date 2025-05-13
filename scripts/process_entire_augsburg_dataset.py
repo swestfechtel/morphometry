@@ -1,10 +1,11 @@
 import sys
-sys.path.append('/home/simon/Work/morpohmetry')
+sys.path.append('/home/simon/Work/morphometry')
 
-import SimpleITK as sitk
+
 import pandas as pd
 import numpy as np
 import nibabel as nib
+import traceback
 from pathlib import Path
 from morphometry.femur import calculate_femoral_torsion
 from morphometry.tibia import calculate_tibial_torsion
@@ -12,7 +13,6 @@ from morphometry.knee import calculate_knee_rotation_angle
 from morphometry.whole_leg import calculate_mikulicz_deviation, calculate_bone_length
 from morphometry.ankle import calculate_pma_angle
 from morphometry.hip import calculate_ccd
-from morphometry.utils import correct_axis_ordering
 from morphometry.image_io import Segmentation
 from matplotlib import pyplot as plt
 from tqdm import tqdm
@@ -39,134 +39,170 @@ def process_patient(patient):
     knee.remove_outliers()
     ankle.remove_outliers()
 
-    x_ratio = abs(hip.get_spacing()[0]) / 2 * abs(hip.get_spacing()[2])
+    x_ratio = abs(hip.spacing[2]) / 2 * abs(hip.spacing[0])
 
-    hip_mask = hip.get_array()
-    knee_mask = knee.get_array()
-    ankle_mask = ankle.get_array()
+    hip_mask = hip.array
+    knee_mask = knee.array
+    ankle_mask = ankle.array
 
-    left_hip = hip_mask[:, :, :hip_mask.shape[2] // 2]
-    right_hip = hip_mask[:, :, hip_mask.shape[2] // 2:]
-    left_knee = knee_mask[:, :, :knee_mask.shape[2] // 2]
-    right_knee = knee_mask[:, :, knee_mask.shape[2] // 2:]
-    left_ankle = ankle_mask[:, :, :ankle_mask.shape[2] // 2]
-    right_ankle = ankle_mask[:, :, ankle_mask.shape[2] // 2:]
+    left_hip = hip_mask[:hip_mask.shape[0] // 2]
+    right_hip = hip_mask[hip_mask.shape[0] // 2:]
+    left_knee = knee_mask[:knee_mask.shape[0] // 2]
+    right_knee = knee_mask[knee_mask.shape[0] // 2:]
+    left_ankle = ankle_mask[:ankle_mask.shape[0] // 2]
+    right_ankle = ankle_mask[ankle_mask.shape[0] // 2:]
 
-    left_hip = nib.Nifti1Image(left_hip, hip.get_affine(), hip.get_header())
-    left_hip = Segmentation(left_hip)
-    right_hip = nib.Nifti1Image(right_hip, hip.get_affine(), hip.get_header())
-    right_hip = Segmentation(right_hip)
-    left_knee = nib.Nifti1Image(left_knee, knee.get_affine(), knee.get_header())
-    left_knee = Segmentation(left_knee)
-    right_knee = nib.Nifti1Image(right_knee, knee.get_affine(), knee.get_header())
-    right_knee = Segmentation(right_knee)
-    left_ankle = nib.Nifti1Image(left_ankle, ankle.get_affine(), ankle.get_header())
-    left_ankle = Segmentation(left_ankle)
-    right_ankle = nib.Nifti1Image(right_ankle, ankle.get_affine(), ankle.get_header())
-    right_ankle = Segmentation(right_ankle)
+    left_hip = nib.Nifti1Image(left_hip, hip.affine, hip.header)
+    left_hip = Segmentation.from_nibabel(left_hip)
+    right_hip = nib.Nifti1Image(right_hip, hip.affine, hip.header)
+    right_hip = Segmentation.from_nibabel(right_hip)
+    left_knee = nib.Nifti1Image(left_knee, knee.affine, knee.header)
+    left_knee = Segmentation.from_nibabel(left_knee)
+    right_knee = nib.Nifti1Image(right_knee, knee.affine, knee.header)
+    right_knee = Segmentation.from_nibabel(right_knee)
+    left_ankle = nib.Nifti1Image(left_ankle, ankle.affine, ankle.header)
+    left_ankle = Segmentation.from_nibabel(left_ankle)
+    right_ankle = nib.Nifti1Image(right_ankle, ankle.affine, ankle.header)
+    right_ankle = Segmentation.from_nibabel(right_ankle)
 
     try:
-        at_lee_left, fig = calculate_femoral_torsion(left_hip, left_knee.get_array(), side='left', x_ratio=x_ratio, plot=True)
+        at_lee_left, fig = calculate_femoral_torsion(left_hip, left_knee.array, side='left', x_ratio=x_ratio, plot=True)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/{patient}_lee_left.png')
         plt.close(fig)
-    except (ValueError, IndexError, RuntimeError):
+    except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate femoral torsion (lee) for the left side.', e)
+        print(traceback.format_exc())
         at_lee_left = np.nan
 
     try:
-        at_lee_right, fig = calculate_femoral_torsion(right_hip, right_knee.get_array(), side='right', x_ratio=x_ratio, plot=True)
+        at_lee_right, fig = calculate_femoral_torsion(right_hip, right_knee.array, side='right', x_ratio=x_ratio, plot=True)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/{patient}_lee_right.png')
         plt.close(fig)
-    except (ValueError, IndexError, RuntimeError):
+    except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate femoral torsion (lee) for the right side.', e)
+        print(traceback.format_exc())
         at_lee_right = np.nan
 
     try:
-        at_murphy_left, fig = calculate_femoral_torsion(left_hip, left_knee.get_array(), 'left', 'murphy', x_ratio=x_ratio,
+        at_murphy_left, fig = calculate_femoral_torsion(left_hip, left_knee.array, 'left', 'murphy', x_ratio=x_ratio,
                                                  plot=True)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/{patient}_murphy_left.png')
         plt.close(fig)
-    except (ValueError, IndexError, RuntimeError):
+    except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate femoral torsion (murphy) for the left side.', e)
+        print(traceback.format_exc())
         at_murphy_left = np.nan
 
     try:
-        at_murphy_right, fig = calculate_femoral_torsion(right_hip, right_knee.get_array(), 'right', 'murphy', x_ratio=x_ratio,
+        at_murphy_right, fig = calculate_femoral_torsion(right_hip, right_knee.array, 'right', 'murphy', x_ratio=x_ratio,
                                                     plot=True)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/{patient}_murphy_right.png')
         plt.close(fig)
-    except (ValueError, IndexError, RuntimeError):
+    except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate femoral torsion (murphy) for the right side.', e)
+        print(traceback.format_exc())
         at_murphy_right = np.nan
 
     try:
-        tt_left = calculate_tibial_torsion(left_knee.get_array(), left_ankle.get_array(), tibia_label_knee=2,
+        tt_left, fig = calculate_tibial_torsion(left_knee.array, left_ankle.array, tibia_label_knee=2,
                                            tibia_label_ankle=1,
-                                           fibula_label=2, side='left', plot=False)
-    except (ValueError, IndexError, RuntimeError):
+                                           fibula_label=2, side='left', plot=True)
+        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/{patient}_tt_left.png')
+        plt.close(fig)
+    except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate tibial torsion for the left side.', e)
         tt_left = np.nan
 
     try:
-        tt_right = calculate_tibial_torsion(right_knee.get_array(), right_ankle.get_array(), tibia_label_knee=2,
+        tt_right, fig = calculate_tibial_torsion(right_knee.array, right_ankle.array, tibia_label_knee=2,
                                             tibia_label_ankle=1, fibula_label=2, side='right',
-                                            plot=False)
-    except (ValueError, IndexError, RuntimeError):
+                                            plot=True)
+        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/{patient}_tt_right.png')
+        plt.close(fig)
+    except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate tibial torsion for the right side.', e)
         tt_right = np.nan
 
     try:
-        ccd_left = calculate_ccd(left_hip, left_knee, 'left', 1, False, x_ratio)
-    except (ValueError, IndexError, RuntimeError):
+        ccd_left_actual, ccd_left_projected, fig = calculate_ccd(left_hip, left_knee, 'left', 1, False, x_ratio, plot=True)
+        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/{patient}_ccd_left.png')
+        plt.close(fig)
+        ccd_left = (ccd_left_actual, ccd_left_projected)
+    except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate CCD for the left side.', e)
         ccd_left = (np.nan, np.nan)
 
     try:
-        ccd_right = calculate_ccd(right_hip, right_knee, 'right', 1, False, x_ratio)
-    except (ValueError, IndexError, RuntimeError):
+        ccd_left_actual, ccd_left_projected, fig = calculate_ccd(right_hip, right_knee, 'right', 1, False, x_ratio, plot=True)
+        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/{patient}_ccd_right.png')
+        plt.close(fig)
+        ccd_right = (ccd_left_actual, ccd_left_projected)
+    except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate CCD for the right side.', e)
         ccd_right = (np.nan, np.nan)
 
     try:
-        kra_left = calculate_knee_rotation_angle(left_knee.get_array(), 1, 2, 'left', False)
-    except (ValueError, IndexError, RuntimeError):
+        kra_left, fig = calculate_knee_rotation_angle(left_knee.array, 1, 2, 'left', True)
+        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/{patient}_kra_left.png')
+        plt.close(fig)
+    except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate KRA for the left side.', e)
         kra_left = np.nan
 
     try:
-        kra_right = calculate_knee_rotation_angle(right_knee.get_array(), 1, 2, 'right', False)
-    except (ValueError, IndexError, RuntimeError):
+        kra_right, fig = calculate_knee_rotation_angle(right_knee.array, 1, 2, 'right', True)
+        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/{patient}_kra_right.png')
+        plt.close(fig)
+    except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate KRA for the right side.', e)
         kra_right = np.nan
 
     try:
         ll_left = calculate_bone_length(left_hip, left_ankle)
     except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate leg length for the left side.', e)
         ll_left = np.nan
 
     try:
         ll_right = calculate_bone_length(right_hip, right_ankle)
     except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate leg length for the right side.', e)
         ll_right = np.nan
 
     try:
         fl_left = calculate_bone_length(left_hip, left_knee)
     except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate femur length for the left side.', e)
         fl_left = np.nan
 
     try:
         fl_right = calculate_bone_length(right_hip, right_knee)
     except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate femur length for the right side.', e)
         fl_right = np.nan
 
     try:
         tl_left = calculate_bone_length(left_knee, left_ankle)
     except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate tibia length for the left side.', e)
         tl_left = np.nan
 
     try:
         tl_right = calculate_bone_length(right_knee, right_ankle)
     except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate tibia length for the right side.', e)
         tl_right = np.nan
 
     try:
         mld_left = calculate_mikulicz_deviation(left_hip, left_knee, left_ankle, 'left', x_ratio=x_ratio)
     except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate MLD for the left side.', e)
         mld_left = np.nan
 
     try:
         mld_right = calculate_mikulicz_deviation(right_hip, right_knee, right_ankle, 'right', x_ratio=x_ratio)
     except (ValueError, IndexError, RuntimeError) as e:
+        print(patient, f'Failed to calculate MLD for the right side.', e)
         mld_right = np.nan
 
     return {'patient': patient, 'at_lee_left': at_lee_left, 'at_lee_right': at_lee_right, 'at_murphy_left': at_murphy_left, 'at_murphy_right': at_murphy_right, 'tt_left': tt_left, 'tt_right': tt_right, 'ccd_left': ccd_left, 'ccd_right': ccd_right,
@@ -175,7 +211,7 @@ def process_patient(patient):
 
 if __name__ == '__main__':
     plot = False
-    patients = [x.name for x in Path('/home/simon/Data/Augsburg_large/preprocessed/').iterdir()]
+    patients = [x.name for x in Path('/home/simon/Data/Augsburg_large/reader_study_augsburg/').iterdir()]
 
     with Pool() as pool:
         res = pool.map(process_patient, patients)

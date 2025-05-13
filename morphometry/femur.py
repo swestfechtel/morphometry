@@ -238,7 +238,7 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray) -> n
     trochanter_major = get_trochanter_major(hip_image, femoral_head_centre)
     trochanter_major_layer = int(trochanter_major[2])
     inferior_mask = hip_image.get_array().copy()
-    inferior_mask[:, :, trochanter_major_layer + 2] = 0  # null everything superior to the trochanter major
+    inferior_mask[:, :, :trochanter_major_layer] = 0  # null everything superior to the trochanter major
 
     medial_extents = np.zeros(inferior_mask.shape[2])
     for i in range(inferior_mask.shape[2]):
@@ -270,12 +270,12 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray) -> n
     while True:
         # on that layer, get the most medial point, which should be the trochanter minor
         try:
-            trochanter_minor_s = np.argwhere(inferior_mask[:, :, trochanter_minor_layer])[:,
-                                 0].max()  # get the maximum sagittal coordinate, i.e. most medial extent of this slice
+            trochanter_minor_s = np.argwhere(inferior_mask[:, :, trochanter_minor_layer])[:, 0].max()  # get the maximum sagittal coordinate, i.e. most medial extent of this slice
             trochanter_minor_c = np.median(np.argwhere(inferior_mask[trochanter_minor_s, :,
                                                        trochanter_minor_layer]))  # select all points with the same sagittal coordinate and get the median coronal coordinate
             trochanter_minor = np.array([trochanter_minor_s, trochanter_minor_c])
-        except IndexError:
+        except (IndexError, ValueError):
+            print(trochanter_minor_layer, np.argwhere(inferior_mask[:, :, trochanter_minor_layer]), np.unique(inferior_mask[:, :, trochanter_minor_layer]))
             raise RuntimeError('Could not find a plausible trochanter minor.')
 
         if check_plausibility():
@@ -300,6 +300,7 @@ def get_femoral_neck_base(hip_image: Image, femoral_head_centre: np.ndarray) -> 
     trochanter_minor_layer = int(trochanter_minor[2])
     center = np.array(center_of_mass(hip_image.get_array()[:, :, trochanter_minor_layer])).astype(np.int16)
     center = np.array([center[0], center[1], trochanter_minor_layer])
+    # center = trochanter_minor.astype(np.int16)
     return center
 
 
@@ -446,15 +447,21 @@ def calculate_femoral_torsion(hip_image: Image, knee_mask: np.ndarray, side: str
         return angle
 
     if plot:
-        fig, ax = plt.subplots(1, 2)
-        ax[0].imshow(np.where(hip_image.get_array()[:, :, hip_layer] == 0, np.nan, hip_image.get_array()[:, :, hip_layer]).T)
+        fig, ax = plt.subplots(1, 3)
+        ax[0].imshow(np.where(hip_image.array[:, :, hip_layer] == 0, np.nan, hip_image.array[:, :, hip_layer]).T)
         if method == 'murphy':
             tmp = hip_image.get_array()[:, :, fhc_layer].copy().T
             tmp = np.where(tmp == 0, np.nan, tmp)
             ax[0].imshow(tmp, alpha=.5)
+
+            ax[2].imshow(hip_image.array[:, hip_end[1]].T)
+            ax[2].plot([hip_start[0], hip_end[0]], [fhc_layer, hip_layer], 'r')
+            ax[2].set_aspect(x_ratio)
+
         ax[0].plot([hip_start[0], hip_end[0]], [hip_start[1], hip_end[1]], 'r')
         ax[1].imshow(knee_mask[:, :, knee_layer].T)
         ax[1].plot([knee_start[0], knee_end[0]], [knee_start[1], knee_end[1]], 'r')
+
         if not return_landmarks:
             return angle, fig
 

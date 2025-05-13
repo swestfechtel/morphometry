@@ -1,6 +1,7 @@
 import numpy as np
 import pyvista as pv
 import pandas as pd
+import pyvista as pv
 
 from morphometry.utils import sphere_fit, get_contour_points, calculate_angle_between_vectors, \
     calculate_min_distance_between_point_clouds, get_vector_through_point_perpendicular_to_line, \
@@ -12,6 +13,7 @@ from scipy.stats import zscore
 from typing import Tuple, Optional
 from skimage.measure import find_contours
 from sklearn.cluster import KMeans
+from matplotlib import pyplot as plt
 
 
 def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, return_layers: bool = False, x_ratio: float = 1., isotropic: bool = False) -> Tuple[float, np.ndarray] | Tuple[float, np.ndarray, int, int]:
@@ -89,13 +91,14 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     return (r, center) if not return_layers else (r, center, layer_high, layer_low)
 
 
-def get_femoral_neck_center(segmentation_mask: np.ndarray, femoral_head_center: Tuple[float, np.ndarray], side: str = 'left', segmentation_label: int = 1) -> Tuple[np.ndarray, np.ndarray]:
+def get_femoral_neck_center(segmentation_mask: np.ndarray, femoral_head_center: Tuple[float, np.ndarray], side: str = 'left', segmentation_label: int = 1, x_ratio: float = None) -> Tuple[np.ndarray, np.ndarray]:
     """
     Get the endpoint of the femoral neck axis from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur where the femur is 1 and everything else 0.
     :param femoral_head_center: The radius and center of the femoral head.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
+    :param x_ratio: Correction factor for slice thickness.
     :return: The points constituting the femoral neck and the endpoint of the femoral neck axis.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
@@ -103,6 +106,9 @@ def get_femoral_neck_center(segmentation_mask: np.ndarray, femoral_head_center: 
 
     r, center = femoral_head_center
     point_cloud = np.argwhere(segmentation_mask)
+
+    point_cloud = point_cloud * np.array([1, 1, x_ratio])  # adjust for slice thickness
+    center = center * np.array([1, 1, x_ratio])
 
     # Get a sphere around the femoral head center with a radius of 1.2 times the femoral head radius
     # This sphere only includes the points between r and 1.2*r, i.e. is hollow
@@ -118,25 +124,45 @@ def get_femoral_neck_center(segmentation_mask: np.ndarray, femoral_head_center: 
     else:
         points_i_want = points_i_want[points_i_want[:, 0] > center[0]]
 
+    com = KMeans(n_clusters=1).fit(points_i_want).cluster_centers_[0]
+    distances = np.linalg.norm(points_i_want - com, axis=1)
+    points_i_want = points_i_want[distances <= distances.mean() + 2 * distances.std()]  # remove outliers
+
     # Build a KDTree for the point cloud and the points we want
     pc_tree = KDTree(point_cloud)
     sphere_tree = KDTree(points_i_want)
 
     # Get the intersection between the two point clouds, i.e. the points that should constitute the
     # femoral neck
-    pairs = pc_tree.query_ball_tree(sphere_tree, 2)
+    # pairs = pc_tree.query_ball_tree(sphere_tree, 2)
+    pairs = sphere_tree.query_ball_tree(pc_tree, 2)
     neck_points = list()
     for pair in pairs:
         if len(pair) > 0:
             for index in pair:
-                neck_points.append(sphere_tree.data[index])
+                # neck_points.append(sphere_tree.data[index])
+                # if np.linalg.norm(point_cloud[index] - center) <= 1.2 * r:
+                neck_points.append(point_cloud[index])
 
     neck_points = np.array(neck_points)
 
     # Get the center of mass of these points
     com = KMeans(n_clusters=1).fit(neck_points).cluster_centers_[0]
+    com = np.array([com[0], com[1], com[2]])
 
-    return neck_points, np.array([com[0], com[1], com[2]])
+    """
+    p = pv.Plotter()
+    p.add_mesh(pv.PolyData(point_cloud.astype(np.float32)), color='g', opacity=.5)
+    p.add_mesh(pv.PolyData(neck_points.astype(np.float32)), color='r')
+    # p.add_mesh(pv.PolyData(points_i_want * np.array([1, 1, 1])), color='b', opacity=.5)
+    p.add_lines(np.array([center, com]), color='k')
+    p.show()
+    """
+
+    neck_points = neck_points / np.array([1, 1, x_ratio])
+    com = com / np.array([1, 1, x_ratio])
+
+    return neck_points, com
 
 
 def get_femoral_shaft_axis(hip_mask: np.ndarray, knee_mask: np.ndarray = None, femur_label: int = 1, isotropic: bool = False) -> Tuple[np.ndarray, np.ndarray]:
@@ -174,7 +200,7 @@ def get_femoral_shaft_axis(hip_mask: np.ndarray, knee_mask: np.ndarray = None, f
     return np.array(com_low_hip), np.array(com_high_hip)  # return the two points as the femoral shaft axis
 
 
-def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1., debug: bool = False) -> Tuple[float, float]:
+def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1., debug: bool = False, plot: bool = False) -> Tuple[float, float] | Tuple[float, float, plt.Figure]:
     """
     Calculate the CCD angle from the femoral head center, femoral neck axis and femoral shaft axis.
     :param hip_image: A segmentation mask of the proximal femur.
@@ -184,13 +210,14 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
     :param isotropic: Whether the image has isotropic voxels.
     :param x_ratio: Correction factor for slice thickness.
     :param debug: Whether to display debug messages.
+    :param plot: Whether to plot the results.
     :return: The actual and projected CCD angle.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
     hip_mask = hip_image.get_array()
     r, femoral_head_center = get_femoral_head_center(hip_mask, side=side, segmentation_label=segmentation_label, x_ratio=x_ratio, isotropic=isotropic)
-    femoral_neck_points, femoral_neck_center = get_femoral_neck_center(hip_mask, (r, femoral_head_center), side=side, segmentation_label=segmentation_label)
+    femoral_neck_points, femoral_neck_center = get_femoral_neck_center(hip_mask, (r, femoral_head_center), side=side, segmentation_label=segmentation_label, x_ratio=x_ratio)
 
     knee_mask = knee_image.get_array() if knee_image else None
 
@@ -198,6 +225,10 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
                                                              isotropic=isotropic)
 
     if knee_image is not None:
+        femoral_head_center_orig = femoral_head_center.copy()
+        femoral_neck_center_orig = femoral_neck_center.copy()
+        shaft_axis_low_orig, shaft_axis_high_orig = shaft_axis_low.copy(), shaft_axis_high.copy()
+
         femoral_head_center = hip_image.transform_index_to_physical_point(femoral_head_center)  # transform to physical coordinates
         femoral_neck_center = hip_image.transform_index_to_physical_point(femoral_neck_center)
         shaft_axis_low = knee_image.transform_index_to_physical_point(shaft_axis_low)
@@ -228,6 +259,23 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
     projected_ccd = calculate_angle_between_vectors(neck_vector_projected.astype('float32'), shaft_vector_projected.astype('float32'))
 
     projected_ccd = 180 - projected_ccd if projected_ccd < 90 else projected_ccd
+
+    if plot:
+        fig, ax = plt.subplots()
+
+        if knee_image is not None:
+            ax.imshow(hip_mask[:, int(femoral_head_center_orig[1]), :].T)
+            ax.plot([femoral_head_center_orig[0], femoral_neck_center_orig[0]], [femoral_head_center_orig[2], femoral_neck_center_orig[2]],
+                    'r-')
+            # ax.plot([shaft_axis_high_orig[0], shaft_axis_low_orig[0]], [shaft_axis_high_orig[2], shaft_axis_low_orig[2]], 'g-')
+        else:
+            ax.imshow(hip_mask[:, int(femoral_head_center[1]), :].T)
+            ax.plot([shaft_axis_high[0], shaft_axis_low[0]], [shaft_axis_high[2], shaft_axis_low[2]], 'g-')
+            ax.plot([femoral_head_center[0], femoral_neck_center[0]], [femoral_head_center[2], femoral_neck_center[2]],
+                    'r-')
+
+        ax.set_aspect(x_ratio)
+        return ccd, projected_ccd, fig
 
     return ccd, projected_ccd
 

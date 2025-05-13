@@ -149,7 +149,7 @@ def get_knee_center(segmentation_mask: np.ndarray) -> np.ndarray:
     return np.array(center_of_mass(segmentation_mask))
 
 
-def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: int, tibia_label: int, side: str = 'left', plot: bool = False) -> float:
+def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: int, tibia_label: int, side: str = 'left', plot: bool = False) -> float | Tuple[float, plt.Figure]:
     """
     Calculate the knee rotation angle.
 
@@ -195,7 +195,7 @@ def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: in
         if distal_orientation < 0:
             distal_angle = -distal_angle
     else:
-        if proximal_orientation > 0:  # if the medial condlye is more posterior than the lateral one
+        if proximal_orientation > 0:  # if the medial condyle is more posterior than the lateral one
             proximal_angle = -proximal_angle
         if distal_orientation > 0:
             distal_angle = -distal_angle
@@ -208,10 +208,10 @@ def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: in
 
     if plot:
         fig, ax = plt.subplots(1, 2)
-        ax[0].imshow(segmentation_mask[proximal_layer])
+        ax[0].imshow(segmentation_mask[:, :, proximal_layer].T)
         ax[0].plot([femur_start[0], femur_end[0]], [femur_start[1], femur_end[1]], color='red')
-        ax[1].imshow(segmentation_mask[distal_layer])
+        ax[1].imshow(segmentation_mask[:, :, distal_layer].T)
         ax[1].plot([tibia_start[0], tibia_end[0]], [tibia_start[1], tibia_end[1]], color='red')
-        plt.show()
+        return angle, fig
 
     return angle
