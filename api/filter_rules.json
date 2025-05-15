@@ -5,7 +5,8 @@
 				["0x0008,0x1030", "MRT Beinachsenmessung"],
 				["0x0008,0x103e", "T2 TSE ax 3 Stacks"]
 			],
-			"Model": "Torsion"
+			"ExaminationType": "TorsionExamination",
+			"ModelJob": "TorsionModelJob"
 		}
 	]
 }

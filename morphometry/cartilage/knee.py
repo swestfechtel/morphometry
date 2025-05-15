@@ -561,12 +561,12 @@ def get_plate_corners(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.nd
     """
     left_image_boundary = points[:, 0].min()  # right patient side
     right_image_boundary = points[:, 0].max()  # left patient side
-    upper_image_boundary = points[:, 1].min()  # anterior
-    lower_image_boundary = points[:, 1].max()  # posterior
+    upper_image_boundary = points[:, 1].max()  # posterior
+    lower_image_boundary = points[:, 1].min()  # anterior
 
-    upper_right = np.array([upper_image_boundary, right_image_boundary])  # upper right image corner, i.e. left patient side, posterior
-    lower_right = np.array([lower_image_boundary, right_image_boundary])  # lower right image corner, i.e. left patient side, anterior
-    upper_left = np.array([upper_image_boundary, left_image_boundary])  # upper left image corner, i.e. right patient side, posterior
-    lower_left = np.array([lower_image_boundary, left_image_boundary])  # lower left image corner, i.e. right patient side, anterior
+    upper_right = np.array([right_image_boundary, upper_image_boundary])
+    lower_right = np.array([right_image_boundary, lower_image_boundary])
+    upper_left = np.array([left_image_boundary, upper_image_boundary])
+    lower_left = np.array([left_image_boundary, lower_image_boundary])
 
     return upper_right, lower_right, upper_left, lower_left

@@ -56,6 +56,21 @@ class ReceivedSeriesBuffer:
         Create an examination from the buffered items and call the callback function.
         :return:
         """
+        items = list()
+        i = 0
+        while not self.queue.empty():
+            tmp = UploadFile(self.queue.get(), filename=f'{self.identifier}_{i}.dcm')
+            items.append(tmp)
+
+        if len(items) == 0:
+            return
+
+        examination = self.file_controller.save_files(items, origin='orthanc')
+
+        self.timer.cancel()
+
+        # Call the callback function with the buffered items
+        self.callback(examination)
 
 
 class FileController(object):

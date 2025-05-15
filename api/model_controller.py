@@ -20,7 +20,11 @@ from morphometry.image_io import Image, Segmentation
 from morphometry.femur import calculate_femoral_torsion
 from morphometry.tibia import calculate_tibial_torsion
 
+
 class ModelJob:
+    """
+    Abstract class for a model job. Subclass must implement the execute method.
+    """
     identifier: str
     running: bool
     file_controller: FileController
@@ -30,7 +34,18 @@ class ModelJob:
         self.file_controller = file_controller
         self.running = False
 
-    def segment_and_process(self, examination: TorsionExamination):
+    async def dummy_job(self):
+        import asyncio
+        import time
+        self.running = True
+        # await asyncio.sleep(10)
+        time.sleep(10)
+        self.running = False
+
+
+class TorsionModelJob(ModelJob):
+
+    def execute(self, examination: TorsionExamination):
         """
         Compute segmentation and torsional alignment for a TorsionExamination object.
         :param examination: A TorsionExamination object to process.
@@ -192,11 +207,3 @@ class ModelJob:
         self.file_controller.update_examination(examination)
 
         return self
-
-    async def dummy_job(self):
-        import asyncio
-        import time
-        self.running = True
-        # await asyncio.sleep(10)
-        time.sleep(10)
-        self.running = False
