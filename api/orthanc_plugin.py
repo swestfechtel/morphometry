@@ -21,9 +21,11 @@ def on_receive(data, origin):
 
 
 def on_stored_instance(dicom, instance_id):
-    file = BytesIO(dicom.SerializeDicomInstance())
+    file = dicom.SerializeDicomInstance()
     metadata = json.loads(dicom.GetInstanceSimplifiedJson())
-    response = requests.post(url='http://localhost:8000/upload/orthanc', data=file, json=metadata)
+    files =  {'file': (instance_id, file, 'application/dicom')}
+    data = {'metadata': json.dumps(metadata)}
+    response = requests.post(url='http://localhost:8000/upload/orthanc', files=files, data=data)
     logger.info(f'Got status code {response.status_code} and message {response.text}')
 
 

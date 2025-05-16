@@ -222,34 +222,33 @@ async def files_from_html_form(request: Request):
 
 
 @app.post('/upload/orthanc', status_code=status.HTTP_201_CREATED)
-async def files_from_orthanc(file: Annotated[bytes, File(...)], metadata: Dict = Body(...)):
+async def files_from_orthanc(file: Annotated[bytes, File(...)], metadata: str = Body(...)):
     """
     Upload files to the server from Orthanc.
     :param file: The file to upload.
     :param metadata: Metadata associated with the file.
     :return:
     """
-    logger.info(f'Got file {file} and metadata {metadata}')
 
     if not isinstance(file, bytes):
         return Response(status_code=status.HTTP_400_BAD_REQUEST)
 
     workdir = os.path.dirname(os.path.realpath(__file__))
-    with open(f'{workdir}/filter_rules.json', 'r') as file:
-        rules = json.load(file)
+    with open(f'{workdir}/filter_rules.json', 'r') as f:
+        rules = json.load(f)
 
     model_job = None
     examination_type = None
-    for rule in rules:
+    for rule in rules['Rules']:
         try:
             for tag, value in rule['DICOM Tags']:
-                assert tag in metadata.keys()
-                assert value == metadata[tag]
+                assert tag in metadata.keys(), f'Tag {tag} not found in metadata.'
+                assert value == metadata[tag], f'Tag {tag} has value {metadata[tag]} instead of {value}.'
 
             model_job = rule['ModelJob']
             examination_type = rule['ExaminationType']
-        except AssertionError:
-            logger.debug(f'Rule {rule} does not apply to file {metadata["AccessionNumber"]}')
+        except AssertionError as e:
+            logger.debug(f'Rule {rule} does not apply to file {metadata["AccessionNumber"]}: {e}')
 
     if (model_job is None) or (examination_type is None):
         logger.error(f'No model/examination found for file {metadata["AccessionNumber"]}')
