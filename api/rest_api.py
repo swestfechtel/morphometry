@@ -15,7 +15,7 @@ from fastapi import FastAPI, UploadFile, status, Response, Form, Request, Body, 
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.file_controller import FileController, ReceivedSeriesBuffer
-from api.model_controller import ModelJob
+from api.model_controller import ModelJob, TorsionModelJob
 from api.examination import Examination, TorsionExamination, encode_figure
 from api.utils import create_directories_and_files, init_logger
 
@@ -33,6 +33,7 @@ file_controller = FileController()
 logger.info('FileController started.')
 
 open_jobs = dict()
+open_series_buffers = dict()
 executor = ThreadPoolExecutor()
 
 
@@ -53,7 +54,39 @@ def task_callback(task):
     return None
 
 
-def buffer_callback()
+def buffer_callback(examination: Examination, examination_type: str, model_job: str):
+    """
+    Receive a created examination object from a concluded buffer and start a job for it.
+    :param examination: An Examination object to process.
+    :param examination_type: The type of examination.
+    :param model_job: The model job to run.
+    :return:
+    """
+    assert examination_type in globals(), f'{examination_type} is not a valid class.'
+    examination = globals()[examination_type](examination)
+
+    file_controller.update_examination(examination)
+
+    assert model_job in globals(), f'{model_job} is not a valid model job.'
+    job = globals()[model_job](file_controller)
+
+    job.identifier = examination.identifier
+
+    async def run_in_executor(func, *args):
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(executor, func, *args)
+
+
+    task = asyncio.create_task(run_in_executor(job.execute, examination))
+
+    job.running = True
+    open_jobs[job.identifier] = job
+    task.set_name(job.identifier)
+
+    task.add_done_callback(task_callback)
+    task.set_name(job.identifier)
+
+    del open_series_buffers[examination.identifier]  # remove the buffer from the list of open buffers
 
 
 @app.get('/examinations/', status_code=status.HTTP_200_OK)
@@ -189,40 +222,48 @@ async def files_from_html_form(request: Request):
 
 
 @app.post('/upload/orthanc', status_code=status.HTTP_201_CREATED)
-async def files_from_orthanc(file: Annotated[bytes, File(...)], metadata: Dict = Body(...)):
+async def files_from_orthanc(file: Annotated[bytes, File(...)], metadata: str = Body(...)):
     """
     Upload files to the server from Orthanc.
     :param file: The file to upload.
     :param metadata: Metadata associated with the file.
     :return:
     """
-    logger.info(f'Got file {file} and metadata {metadata}')
 
     if not isinstance(file, bytes):
         return Response(status_code=status.HTTP_400_BAD_REQUEST)
 
     workdir = os.path.dirname(os.path.realpath(__file__))
-    with open(f'{workdir}/filter_rules.json', 'r') as file:
-        rules = json.load(file)
+    with open(f'{workdir}/filter_rules.json', 'r') as f:
+        rules = json.load(f)
 
-    model = None
-    for rule in rules:
+    model_job = None
+    examination_type = None
+    for rule in rules['Rules']:
         try:
             for tag, value in rule['DICOM Tags']:
-                assert tag in metadata.keys()
-                assert value == metadata[tag]
+                assert tag in metadata.keys(), f'Tag {tag} not found in metadata.'
+                assert value == metadata[tag], f'Tag {tag} has value {metadata[tag]} instead of {value}.'
 
-            model = rule['Model']
-        except AssertionError:
-            logger.debug(f'Rule {rule} does not apply to file {metadata["AccessionNumber"]}')
+            model_job = rule['ModelJob']
+            examination_type = rule['ExaminationType']
+        except AssertionError as e:
+            logger.debug(f'Rule {rule} does not apply to file {metadata["AccessionNumber"]}: {e}')
 
-    if model is None:
-        logger.error(f'No model found for file {metadata["AccessionNumber"]}')
+    if (model_job is None) or (examination_type is None):
+        logger.error(f'No model/examination found for file {metadata["AccessionNumber"]}')
         return Response(status_code=status.HTTP_400_BAD_REQUEST)
 
+    identifier = metadata['AccessionNumber']
 
-    return {'examination_id': examination.identifier}
-
+    if identifier in open_series_buffers.keys():
+        q: ReceivedSeriesBuffer = open_series_buffers[identifier]
+        q.add(file)
+    else:
+        callback = partial(buffer_callback, model_job=model_job, examination_type=examination_type)
+        q = ReceivedSeriesBuffer(identifier=identifier, file_controller=file_controller, callback=callback)
+        q.add(file)
+        open_series_buffers[identifier] = q
 
 
 @app.post('/model/torsion/{examination_id}', status_code=status.HTTP_202_ACCEPTED)
@@ -241,7 +282,7 @@ async def compute_torsion(examination_id: str):
         examination = TorsionExamination(examination)
         file_controller.update_examination(examination)
 
-    job = ModelJob(file_controller)
+    job = TorsionModelJob(file_controller)
     job.identifier = examination.identifier
 
     async def run_in_executor(func, *args):
@@ -249,7 +290,7 @@ async def compute_torsion(examination_id: str):
         return await loop.run_in_executor(executor, func, *args)
 
     if examination.status == 'unprocessed':
-        task = asyncio.create_task(run_in_executor(job.segment_and_process, examination))
+        task = asyncio.create_task(run_in_executor(job.execute, examination))
     else:
         task = asyncio.create_task(run_in_executor(job.compute_torsional_alignment, examination))
 
@@ -279,7 +320,7 @@ async def compute_segmentation(examination_id: str):
         examination = TorsionExamination(examination)
         file_controller.update_examination(examination)
 
-    job = ModelJob(file_controller)
+    job = TorsionModelJob(file_controller)
     job.identifier = examination.identifier
 
     async def run_in_executor(func, *args):

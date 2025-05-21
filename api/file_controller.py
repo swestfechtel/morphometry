@@ -8,6 +8,7 @@ import pickle
 import shutil
 import json
 import threading
+import asyncio
 
 from api.examination import Examination
 
@@ -26,36 +27,48 @@ class ReceivedSeriesBuffer:
     """
 
     identifier: str
-    queue: Queue
+    queue: asyncio.Queue
     timeout: int
-    timer: threading.Timer
+    timer: any
     file_controller: 'FileController'
     callback: Callable
 
-    def __init__(self, identifier, file_controller, callback, timeout=60):
+    def __init__(self, identifier, file_controller, callback, timeout=10):
         self.identifier = identifier
         self.file_controller = file_controller
         self.callback = callback
-        self.queue = Queue()
+        self.queue = asyncio.Queue()
         self.timeout = timeout
-        self.timer = threading.Timer(self.timeout, self._create_examination)
+        self.timer = None
 
-    def add(self, item):
-        """
-        Add an item to the buffer.
-        :param item: The item to add.
-        :return:
-        """
-        self.queue.put(item)
+    async def add(self, item):
+        await self.queue.put(item)
+        # Cancel existing timer task if it exists
+        if self.timer and not self.timer.done():
+            self.timer.cancel()
+        # Start a new timer task
+        self.timer = asyncio.create_task(self._start_timer())
 
-        self.timer.cancel()
-        self.timer.start()
+    async def _start_timer(self):
+        try:
+            await asyncio.sleep(self.timeout)
+            await self._create_examination()
+        except asyncio.CancelledError:
+            pass
 
-    def _create_examination(self):
-        """
-        Create an examination from the buffered items and call the callback function.
-        :return:
-        """
+    async def _create_examination(self):
+        items = []
+
+        while not self.queue.empty():
+            item = await self.queue.get()
+            items.append(item)
+
+        if not items:
+            return
+
+        examination = self.file_controller.save_files(items, origin='orthanc')
+        # Call the callback (if the callback is async, you could await it)
+        self.callback(examination)
 
 
 class FileController(object):
@@ -247,14 +260,19 @@ class FileController(object):
             return False
 
     @staticmethod
-    def save_upload_file(upload_file: UploadFile, destination: Path) -> None:
-        try:
+    def save_upload_file(upload_file: UploadFile | bytes, destination: Path) -> None:
+        if type(upload_file) == bytes:
             with destination.open("wb") as buffer:
-                shutil.copyfileobj(upload_file.file, buffer)
-        finally:
-            upload_file.file.close()
+                buffer.write(upload_file)
+            return
+        else:
+            try:
+                with destination.open("wb") as buffer:
+                    shutil.copyfileobj(upload_file.file, buffer)
+            finally:
+                upload_file.file.close()
 
-    def save_files(self, files: list[UploadFile], origin: str) -> Examination | bool:
+    def save_files(self, files: list[UploadFile | bytes], origin: str) -> Examination | bool:
         """
         Save uploaded files to a temporary directory and create an Examination object.
         :param files: A list of uploaded files.
@@ -292,7 +310,7 @@ class FileController(object):
                         self.save_upload_file(file, Path(f'{temp_dir}/I0{number}'))
 
                 elif origin == 'orthanc':  # if files were sent from orthanc, they are already in the correct order
-                    self.save_upload_file(file, Path(f'{temp_dir}/{file.filename}'))  # so just save them as is
+                    self.save_upload_file(file, Path(f'{temp_dir}/{i}.dcm'))  # so just save them as is
 
             metdata = Image.read_dicom_metadata(temp_dir)
 
