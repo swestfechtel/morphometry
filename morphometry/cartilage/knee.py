@@ -228,8 +228,6 @@ class Tibia:
         self.extract_subregions()
 
         for subregion in ['clt', 'ilt', 'elt', 'alt', 'plt', 'crt', 'irt', 'ert', 'art', 'prt']:
-            print(subregion)
-            print(getattr(self, subregion))
             superior_surface, inferior_surface = get_superior_and_inferior_surface_points(getattr(self, subregion))
             if method == 'mesh':
                 tmp = self.mesh_method(superior_surface, inferior_surface)
@@ -248,6 +246,8 @@ class Femur:
         self.left_cwbz, self.right_cwbz = None, None
         self.left_anterior_zone, self.right_anterior_zone = None, None
         self.left_posterior_zone, self.right_posterior_zone = None, None
+        self.eclf, self.iclf, self.cclf, self.ecrf, self.icrf, self.ccrf = None, None, None, None, None, None
+        self.alf, self.arf, self.plf, self.prf = None, None, None, None
 
         image_array = self.image.get_array()
         cartilage = np.where(image_array == self.cartilage_label, 1, 0)
@@ -358,6 +358,55 @@ class Femur:
         else:
             self.right_anterior_zone = cartilage[cartilage[:, 1] < cwbz_most_anterior]
             self.right_posterior_zone = cartilage[cartilage[:, 1] > cwbz_most_posterior]
+
+    def extract_subregions(self):
+        """
+        Extract the subregions of the femoral cartilage.
+        """
+        alf, arf, plf, prf = list(), list(), list(), list()
+        eclf, iclf, cclf, ecrf, icrf, ccrf = list(), list(), list(), list(), list(), list()
+
+        for point in self.left_anterior_zone:
+            alf.append(point)
+
+        for point in self.right_anterior_zone:
+            arf.append(point)
+
+        for point in self.left_posterior_zone:
+            plf.append(point)
+
+        for point in self.right_posterior_zone:
+            prf.append(point)
+
+        first_split, second_split = self.get_femoral_thirds(side='left')
+        for point in self.left_cwbz:
+            if point[0] < first_split:
+                iclf.append(point)
+            elif first_split <= point[0] < second_split:
+                cclf.append(point)
+            else:
+                eclf.append(point)
+
+        first_split, second_split = self.get_femoral_thirds(side='right')
+        for point in self.right_cwbz:
+            if point[0] < first_split:
+                ecrf.append(point)
+            elif first_split <= point[0] < second_split:
+                ccrf.append(point)
+            else:
+                icrf.append(point)
+
+        self.alf = np.array(alf)
+        self.arf = np.array(arf)
+        self.plf = np.array(plf)
+        self.prf = np.array(prf)
+        self.eclf = np.array(eclf)
+        self.iclf = np.array(iclf)
+        self.cclf = np.array(cclf)
+        self.ecrf = np.array(ecrf)
+        self.icrf = np.array(icrf)
+        self.ccrf = np.array(ccrf)
+
 
     def mesh_method(self, superior_surface: np.ndarray, inferior_surface: np.ndarray) -> dict:
         """
@@ -564,9 +613,9 @@ def get_plate_corners(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.nd
     upper_image_boundary = points[:, 1].min()  # anterior
     lower_image_boundary = points[:, 1].max()  # posterior
 
-    upper_right = np.array([upper_image_boundary, right_image_boundary])  # upper right image corner, i.e. left patient side, posterior
-    lower_right = np.array([lower_image_boundary, right_image_boundary])  # lower right image corner, i.e. left patient side, anterior
-    upper_left = np.array([upper_image_boundary, left_image_boundary])  # upper left image corner, i.e. right patient side, posterior
-    lower_left = np.array([lower_image_boundary, left_image_boundary])  # lower left image corner, i.e. right patient side, anterior
+    upper_right = np.array([right_image_boundary, upper_image_boundary])  # upper right image corner, i.e. left patient side, posterior
+    lower_right = np.array([right_image_boundary, lower_image_boundary])  # lower right image corner, i.e. left patient side, anterior
+    upper_left = np.array([left_image_boundary, upper_image_boundary])  # upper left image corner, i.e. right patient side, posterior
+    lower_left = np.array([left_image_boundary, lower_image_boundary])  # lower left image corner, i.e. right patient side, anterior
 
     return upper_right, lower_right, upper_left, lower_left
