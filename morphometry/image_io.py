@@ -62,7 +62,7 @@ class Image(object):
         """
         return cls('nibabel', image=image)
 
-    def read_image(self, filepath: str):
+    def read_image(self, filepath: str | Path):
         """
         Read image from disk.
         :param filepath: Path to image file.

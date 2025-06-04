@@ -173,19 +173,23 @@ def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarra
     return end
 
 
-def get_trochanter_major(hip_image: Image, femoral_head_centre: np.ndarray) -> np.ndarray:
+def get_trochanter_major(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1) -> np.ndarray:
     """
     Find the trochanter major.
 
     :param hip_image: An Image object of the hip segmentation mask.
     :param femoral_head_centre: The centre of the femoral head.
+    :param segmentation_label: The label of the segmentation mask.
     :return: The coordinates of the trochanter major.
     """
     lateral_extents = np.zeros(hip_image.get_shape()[2])
+    array = hip_image.array.copy()
+    array = np.where(array == segmentation_label, 1, 0)  # convert to binary mask
+
     # iterate from superior to inferior and get the maximum lateral extent of each layer
     for i in range(hip_image.get_shape()[2]):
-        if np.count_nonzero(hip_image.get_array()[:, :, i]):
-            lateral_extents[i] = np.argwhere(hip_image.get_array()[:, :, i])[:, 0].min()
+        if np.count_nonzero(array[:, :, i]):
+            lateral_extents[i] = np.argwhere(array[:, :, i])[:, 0].min()
         else:
             lateral_extents[i] = 1000
 
@@ -209,9 +213,9 @@ def get_trochanter_major(hip_image: Image, femoral_head_centre: np.ndarray) -> n
     while True:
         # on that layer, get the most lateral point, which should be the trochanter major
         try:
-            trochanter_major_s = np.argwhere(hip_image.get_array()[:, :, trochanter_major_layer])[:,
+            trochanter_major_s = np.argwhere(array[:, :, trochanter_major_layer])[:,
                                  0].min()  # get the minimum sagittal coordinate, i.e. most lateral extent of this slice
-            trochanter_major_c = np.median(np.argwhere(hip_image.get_array()[trochanter_major_s, :,
+            trochanter_major_c = np.median(np.argwhere(array[trochanter_major_s, :,
                                                        trochanter_major_layer]))  # select all points with the same sagittal coordinate and get the median coronal coordinate
             trochanter_major = np.array([trochanter_major_s, trochanter_major_c])
         except IndexError:
@@ -226,18 +230,21 @@ def get_trochanter_major(hip_image: Image, femoral_head_centre: np.ndarray) -> n
     return np.array([trochanter_major[0], trochanter_major[1], trochanter_major_layer])
 
 
-def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray) -> np.ndarray:
+def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1) -> np.ndarray:
     """
     Find the trochanter minor.
 
     :param hip_image: An Image object of the hip segmentation mask.
     :param femoral_head_centre: The centre of the femoral head.
+    :param segmentation_label: The label of the segmentation mask.
     :return: The coordinates of the trochanter minor.
     """
     spacing = hip_image.get_spacing()
-    trochanter_major = get_trochanter_major(hip_image, femoral_head_centre)
+    trochanter_major = get_trochanter_major(hip_image, femoral_head_centre, segmentation_label)
     trochanter_major_layer = int(trochanter_major[2])
-    inferior_mask = hip_image.get_array().copy()
+
+    inferior_mask = hip_image.array.copy()
+    inferior_mask = np.where(inferior_mask == segmentation_label, 1, 0)  # convert to binary mask
     inferior_mask[:, :, :trochanter_major_layer] = 0  # null everything superior to the trochanter major
 
     medial_extents = np.zeros(inferior_mask.shape[2])
@@ -287,38 +294,47 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray) -> n
     return np.array([trochanter_minor[0], trochanter_minor[1], trochanter_minor_layer])
 
 
-def get_femoral_neck_base(hip_image: Image, femoral_head_centre: np.ndarray) -> np.ndarray:
+def get_femoral_neck_base(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1) -> np.ndarray:
     """
     Get the centre of the base of the femoral neck as described by Murphy et al.
 
     Alternative implementation where search space is restricted to all slices inferior to torchanter major.
     :param hip_image: An Image object of the hip segmentation mask.
     :param femoral_head_centre: The centre of the femoral head.
+    :param segmentation_label: The label of the segmentation mask.
     :return: The centre of the base of the femoral neck.
     """
-    trochanter_minor = get_trochanter_minor(hip_image, femoral_head_centre)
+    trochanter_minor = get_trochanter_minor(hip_image, femoral_head_centre, segmentation_label)
     trochanter_minor_layer = int(trochanter_minor[2])
-    center = np.array(center_of_mass(hip_image.get_array()[:, :, trochanter_minor_layer])).astype(np.int16)
+
+    array = hip_image.array.copy()
+    array = np.where(array == segmentation_label, 1, 0)
+
+    center = np.array(center_of_mass(array[:, :, trochanter_minor_layer])).astype(np.int16)
     center = np.array([center[0], center[1], trochanter_minor_layer])
     # center = trochanter_minor.astype(np.int16)
     return center
 
 
-def get_trochanter_major_center(hip_image: Image, femoral_head_centre: np.ndarray) -> Tuple[np.ndarray, float]:
+def get_trochanter_major_center(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1) -> Tuple[np.ndarray, float]:
     """
     Get the centre of the trochanter major at neck base level as described by Tomczak et al.
     :param hip_image: An Image object of the hip segmentation mask.
     :param femoral_head_centre: The centre of the femoral head.
+    :param segmentation_label: The label of the segmentation mask.
     :return: The centre and radius of the trochanter major at neck base level.
     """
-    trochanter_major = get_trochanter_major(hip_image, femoral_head_centre)
+    trochanter_major = get_trochanter_major(hip_image, femoral_head_centre, segmentation_label)
     trochanter_major_layer = int(trochanter_major[2])
 
-    lateral_mask_point = np.argwhere(hip_image.get_array()[:, :, trochanter_major_layer])[:, 0].min()
-    medial_mask_point = np.argwhere(hip_image.get_array()[:, :, trochanter_major_layer])[:, 0].max()
+    array = hip_image.array.copy()
+    array = np.where(array == segmentation_label, 1, 0)  # convert to binary mask
+
+    lateral_mask_point = np.argwhere(array[:, :, trochanter_major_layer])[:, 0].min()
+    medial_mask_point = np.argwhere(array[:, :, trochanter_major_layer])[:, 0].max()
 
     split_point = (lateral_mask_point + medial_mask_point) // 2
-    lateral_mask = hip_image.get_array()[:, :, trochanter_major_layer].copy()
+    lateral_mask = array[:, :, trochanter_major_layer].copy()
     lateral_mask[split_point:] = 0  # null everything medial to the split point
     center, radius = circle_fit(lateral_mask)
     center = np.array([center[0], center[1], trochanter_major_layer]).astype(np.int16)
@@ -357,11 +373,13 @@ def get_proximal_reference_line(hip_image: Image, side: str = 'left',
         hip_image = Image.from_nibabel(tmp)
 
     if method == 'lee':
-        end = get_femoral_neck_center_lee(hip_image.get_array(), center, r_fh)
+        array = hip_image.array.copy()
+        array = np.where(array == segmentation_label, 1, 0)
+        end = get_femoral_neck_center_lee(array, center, r_fh)
     elif method == 'murphy':
-        end = get_femoral_neck_base(hip_image, center)
+        end = get_femoral_neck_base(hip_image, center, segmentation_label)
     elif method == 'tomczak':
-        end, r_tm = get_trochanter_major_center(hip_image, center)
+        end, r_tm = get_trochanter_major_center(hip_image, center, segmentation_label)
 
     layer_selected = end[2]
 
