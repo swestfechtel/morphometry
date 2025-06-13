@@ -10,9 +10,13 @@ from morphometry.tibia import calculate_tibial_torsion
 from collections import defaultdict
 
 if __name__ == '__main__':
-    hip_mask = Segmentation.from_nibabel(nib.load('/app/temp/hip.nii.gz'))
-    knee_mask = Segmentation.from_nibabel(nib.load('/app/temp/knee.nii.gz'))
-    ankle_mask = Segmentation.from_nibabel(nib.load('/app/temp/ankle.nii.gz'))
+    hip_mask = Segmentation.from_nibabel(nib.load('/app/temp/hip_segmentation.nii.gz'))
+    knee_mask = Segmentation.from_nibabel(nib.load('/app/temp/knee_segmentation.nii.gz'))
+    ankle_mask = Segmentation.from_nibabel(nib.load('/app/temp/ankle_segmentation.nii.gz'))
+
+    hip_mask.transform_coordinate_system()
+    knee_mask.transform_coordinate_system()
+    ankle_mask.transform_coordinate_system()
 
     x_ratio = abs(hip_mask.spacing[2]) / 2 * abs(hip_mask.spacing[0])
 
@@ -33,7 +37,7 @@ if __name__ == '__main__':
     right_hip = Image.from_nibabel(right_hip)
 
     results = dict()
-    landmarks = defaultdict(dict)
+    landmarks_final = defaultdict(dict)
     errors = list()
 
     try:
@@ -43,7 +47,7 @@ if __name__ == '__main__':
         for k, v in landmarks.items():
             landmarks[k] = v.tolist()
 
-        landmarks['femur']['right'] = landmarks
+        landmarks_final['femur']['right'] = landmarks
 
     except (RuntimeError, AssertionError, ValueError) as e:
         errors.append(traceback.format_exc())
@@ -60,7 +64,7 @@ if __name__ == '__main__':
         for k, v in landmarks.items():
             landmarks[k] = v.tolist()
 
-        landmarks['femur']['left'] = landmarks
+        landmarks_final['femur']['left'] = landmarks
 
     except (RuntimeError, AssertionError, ValueError) as e:
         errors.append(traceback.format_exc())
@@ -72,7 +76,7 @@ if __name__ == '__main__':
         for k, v in landmarks.items():
             landmarks[k] = v.tolist()
 
-        landmarks['tibia']['right'] = landmarks
+        landmarks_final['tibia']['right'] = landmarks
 
     except (RuntimeError, AssertionError, ValueError) as e:
         errors.append(traceback.format_exc())
@@ -89,7 +93,7 @@ if __name__ == '__main__':
         for k, v in landmarks.items():
             landmarks[k] = v.tolist()
 
-        landmarks['tibia']['left'] = landmarks
+        landmarks_final['tibia']['left'] = landmarks
 
     except (RuntimeError, AssertionError, ValueError) as e:
         errors.append(traceback.format_exc())
@@ -98,4 +102,6 @@ if __name__ == '__main__':
 
     json.dump(errors, open('/app/temp/errors.json', 'w'))
     json.dump(results, open('/app/temp/results.json', 'w'))
-    json.dump(landmarks, open('/app/temp/landmarks.json', 'w'))
+    json.dump(landmarks_final, open('/app/temp/landmarks.json', 'w'))
+
+    print(errors)

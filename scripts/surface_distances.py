@@ -4,6 +4,7 @@ import SimpleITK as sitk
 from typing import Tuple
 import numpy as np
 import pandas as pd
+import argparse
 
 
 def compute_metrics(prediction_path: str, gt_path: str, labels: list) -> pd.DataFrame:
@@ -43,32 +44,15 @@ def compute_metrics(prediction_path: str, gt_path: str, labels: list) -> pd.Data
 
 
 if __name__ == '__main__':
-    """
-    # hip
-    prediction_path = '/home/simon/Data/nnUnet_raw/Dataset001_AugsburgHip/labelsTs'
-    gt_path = '/home/simon/Data/nnUnet_raw/Dataset001_AugsburgHip/labelsTr'
-    df = compute_metrics(prediction_path, gt_path)
-    df.to_csv('/home/simon/Data/Augsburg_large/proxy_metrics_hip.csv')
-    print(df.describe())
+    parser = argparse.ArgumentParser(description='Compute surface distances for a dataset.')
+    parser.add_argument('--prediction_path', type=str, required=True, help='Path to the directory containing the predicted masks.')
+    parser.add_argument('--gt_path', type=str, required=True, help='Path to the directory containing the ground truth masks.')
+    parser.add_argument('--labels', nargs='+', type=int, required=True, help='List of labels to compute the metrics for.')
+    parser.add_argument('-o', '--output_path', type=str, required=False, help='Path to save the computed metrics.')
+    args = parser.parse_args()
 
-    # knee
-    prediction_path = '/home/simon/Data/nnUnet_raw/Dataset002_AugsburgKnee/labelsTs'
-    gt_path = '/home/simon/Data/nnUnet_raw/Dataset002_AugsburgKnee/labelsTr'
-    df = compute_metrics(prediction_path, gt_path)
-    df.to_csv('/home/simon/Data/Augsburg_large/proxy_metrics_knee.csv')
-    print(df.describe())
+    df = compute_metrics(args.prediction_path, args.gt_path, args.labels)
 
-    # ankle
-    prediction_path = '/home/simon/Data/nnUnet_raw/Dataset003_AugsburgAnkle/labelsTs'
-    gt_path = '/home/simon/Data/nnUnet_raw/Dataset003_AugsburgAnkle/labelsTr'
-    df = compute_metrics(prediction_path, gt_path)
-    df.to_csv('/home/simon/Data/Augsburg_large/proxy_metrics_ankle.csv')
-    print(df.describe())
-    """
-    prediction_path = '/home/simon/Data/nnUNet_raw/Dataset029_HamburgHip/labels_pred_pp'
-    prediction_path_pretraining = '/home/simon/Data/nnUNet_raw/Dataset029_HamburgHip/labels_pred_pp_pretraining'
-    gt_path = '/home/simon/Data/nnUNet_raw/Dataset029_HamburgHip/labelsTs'
-    df = compute_metrics(prediction_path, gt_path, [1, 2, 3])
-    df_pretraining = compute_metrics(prediction_path_pretraining, gt_path, [1, 2, 3])
     print(df.groupby(level='label').describe().T)
-    print(df_pretraining.groupby(level='label').describe().T)
+    if args.output_path:
+        df.to_csv(args.output_path, index=False)

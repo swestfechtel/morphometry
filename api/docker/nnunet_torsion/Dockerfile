@@ -14,8 +14,6 @@ RUN mkdir -p /app/nnUNet_results/Dataset008_TorsionHipTrainVal/nnUNetTrainer__nn
 RUN mkdir -p /app/nnUNet_results/Dataset021_TorsionKneeTrainVal/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_all
 RUN mkdir -p /app/nnUNet_results/Dataset022_TorsionAnkleTrainVal/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_all
 
-# COPY predict.py /app/
-
 COPY ./checkpoints/hip/fold_all/checkpoint_best.pth /app/nnUNet_results/Dataset008_TorsionHipTrainVal/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_all/
 COPY ./checkpoints/knee/fold_all/checkpoint_best.pth /app/nnUNet_results/Dataset021_TorsionKneeTrainVal/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_all/
 COPY ./checkpoints/ankle/fold_all/checkpoint_best.pth /app/nnUNet_results/Dataset022_TorsionAnkleTrainVal/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_all/
@@ -40,5 +38,4 @@ RUN useradd -m appuser && chown -R appuser:appuser /app
 
 USER appuser
 
-# CMD ["python3", "predict.py"]
 ENTRYPOINT ["/app/entrypoint.sh"]

@@ -1,24 +1,18 @@
-import torch
 import logging
 import traceback
 import tempfile
-import string
-import random
-import uuid
-import asyncio
+import docker
+import json
+import sys
+import subprocess
 
+import pandas as pd
 import nibabel as nib
 
 from api.examination import TorsionExamination
 from api.file_controller import FileController
 
-from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
-from nnunetv2.paths import nnUNet_results
-from batchgenerators.utilities.file_and_folder_operations import join
-
 from morphometry.image_io import Image, Segmentation
-from morphometry.femur import calculate_femoral_torsion
-from morphometry.tibia import calculate_tibial_torsion
 
 
 class ModelJob:
@@ -28,19 +22,15 @@ class ModelJob:
     identifier: str
     running: bool
     file_controller: FileController
+    logger: logging.Logger
+    client: docker.DockerClient
 
     def __init__(self, file_controller: FileController):
         # self.identifier = str(uuid.uuid1())
         self.file_controller = file_controller
         self.running = False
-
-    async def dummy_job(self):
-        import asyncio
-        import time
-        self.running = True
-        # await asyncio.sleep(10)
-        time.sleep(10)
-        self.running = False
+        self.logger = logging.getLogger('api')
+        self.client = docker.from_env()
 
 
 class TorsionModelJob(ModelJob):
@@ -62,62 +52,59 @@ class TorsionModelJob(ModelJob):
         :param examination: A TorsionExamination object to compute segmentations for.
         :return: The job
         """
-        logger = logging.getLogger('api')
-        logger.info(f'Created segmentation job for {examination.identifier} with identifier {self.identifier}.')
+        self.logger.info(f'Created segmentation job for {examination.identifier} with identifier {self.identifier}.')
         self.running = True
         examination.status = 'running'
         self.identifier = examination.identifier  # TODO will become a problem if more than one job is running at the same time for the same examination
 
-        def predict_array(image: Image, model_folder: str) -> Segmentation:
-            """
-            Compute segmentation mask for a single Image.
-
-            :param image: The Image to segment.
-            :param model_folder: The folder containing the trained model.
-            :return: The segmentation mask.
-            """
-            predictor = nnUNetPredictor(
-                tile_step_size=0.5,
-                use_gaussian=True,
-                use_mirroring=True,
-                perform_everything_on_device=True,
-                device=torch.device('cuda', 0),
-                verbose=False,
-                verbose_preprocessing=False,
-                allow_tqdm=True
-            )
-            predictor.initialize_from_trained_model_folder(
-                join(nnUNet_results, model_folder, 'nnUNetTrainer__nnUNetPlans__3d_fullres'), use_folds=('all',),
-                checkpoint_name='checkpoint_best.pth')
-
-            with tempfile.TemporaryDirectory() as tmpdir:  # have to use predict_from_files because predicting from arrays requires SimpleITK axis ordering and I don't want to deal with that
-                # https://github.com/MIC-DKFZ/nnUNet/tree/master/nnunetv2/inference#predicting-a-single-npy-array
-                temp_image = f'{tmpdir}/temp_image.nii.gz'
-                image.save_image(temp_image)
-                predictor.predict_from_files([[temp_image]], [f'{tmpdir}/temp_segmentation.nii.gz'])
-                seg = nib.load(f'{tmpdir}/temp_segmentation.nii.gz')
-                seg = Segmentation.from_nibabel(seg)
-                seg.transform_coordinate_system()
-
-            return seg
-
         examination.split_series()
 
-        hip_mask = predict_array(examination.hip, 'Dataset008_TorsionHipTrainVal')
-        hip_mask.axcodes = examination.hip.axcodes
-        examination.hip_mask = hip_mask
+        with tempfile.TemporaryDirectory() as tempdir:
+            examination.hip.save_image(tempdir + '/hip.nii.gz')
+            examination.knee.save_image(tempdir + '/knee.nii.gz')
+            examination.ankle.save_image(tempdir + '/ankle.nii.gz')
 
-        knee_mask = predict_array(examination.knee, 'Dataset021_TorsionKneeTrainVal')
-        knee_mask.axcodes = examination.knee.axcodes
-        examination.knee_mask = knee_mask
+            docker_cmd = [
+                'docker',
+                'run',
+                '--rm',
+                '--runtime=nvidia',
+                '--gpus', 'all',
+                '--shm-size', '32G',
+                '-v', f'{tempdir}:/app/temp:rw',
+                'swestfechtel/nnunet_torsion:latest'
+            ]
 
-        ankle_mask = predict_array(examination.ankle, 'Dataset022_TorsionAnkleTrainVal')
-        ankle_mask.axcodes = examination.ankle.axcodes
-        examination.ankle_mask = ankle_mask
+            proc = subprocess.run(
+                docker_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT
+            )
+
+            if proc.returncode != 0:
+                self.logger.error(f"Container exited with code {proc.returncode}. Logs: {proc.stdout.decode('utf-8')}")
+                raise RuntimeError(f"Segmentation job failed for {examination.identifier} with exit code {proc.returncode}.")
+
+            self.logger.info(f"Container exited with code {proc.returncode}.")
+
+            tmp = nib.load(tempdir + '/hip.nii.gz')
+            tmp = Segmentation.from_nibabel(tmp)
+            tmp.transform_coordinate_system()
+            examination.hip_mask = tmp
+
+            tmp = nib.load(tempdir + '/knee.nii.gz')
+            tmp = Segmentation.from_nibabel(tmp)
+            tmp.transform_coordinate_system()
+            examination.knee_mask = tmp
+
+            tmp = nib.load(tempdir + '/ankle.nii.gz')
+            tmp = Segmentation.from_nibabel(tmp)
+            tmp.transform_coordinate_system()
+            examination.ankle_mask = tmp
 
         examination.encode_images()
 
-        logger.info(f'Finished segmentation job for {examination.identifier} with identifier {self.identifier}.')
+        self.logger.info(f'Finished segmentation job for {examination.identifier} with identifier {self.identifier}.')
         examination.status = 'segmented'
         self.file_controller.update_examination(examination)
 
@@ -129,81 +116,59 @@ class TorsionModelJob(ModelJob):
         :param examination: A TorsionExamination object to compute torsional alignment for.
         :return: The job.
         """
-        logger = logging.getLogger('api')
-        logger.info(f'Created torsional alignment job for {examination.identifier} with identifier {self.identifier}.')
+        self.logger.info(f'Created torsional alignment job for {examination.identifier} with identifier {self.identifier}.')
         self.running = True
         examination.status = 'running'
         self.identifier = examination.identifier
 
-        x_ratio = abs(examination.hip_mask.spacing[2]) / 2 * abs(examination.hip_mask.spacing[0])
+        with tempfile.TemporaryDirectory() as tempdir:
+            examination.hip_mask.save_image(tempdir + '/hip_segmentation.nii.gz')
+            examination.knee_mask.save_image(tempdir + '/knee_segmentation.nii.gz')
+            examination.ankle_mask.save_image(tempdir + '/ankle_segmentation.nii.gz')
 
-        examination.hip_mask.remove_outliers()
-        examination.knee_mask.remove_outliers()
-        examination.ankle_mask.remove_outliers()
+            container = self.client.containers.run(
+                'swestfechtel/torsion:latest',
+                volumes={tempdir: {'bind': '/app/temp', 'mode': 'rw'}},
+                detach=True
+            )
 
-        hip_mask = examination.hip_mask.array
-        knee_mask = examination.knee_mask.array
-        ankle_mask = examination.ankle_mask.array
+            try:
+                result = container.wait()
+                exit_code = result.get('StatusCode', -1)
 
-        left_hip = hip_mask[:hip_mask.shape[0] // 2]
-        right_hip = hip_mask[hip_mask.shape[0] // 2:]
-        left_knee = knee_mask[:knee_mask.shape[0] // 2]
-        right_knee = knee_mask[knee_mask.shape[0] // 2:]
-        left_ankle = ankle_mask[:ankle_mask.shape[0] // 2]
-        right_ankle = ankle_mask[ankle_mask.shape[0] // 2:]
+                if exit_code != 0:
+                    logs = container.logs(stdout=True, stderr=True)
+                    self.logger.error(f"Container exited with code {exit_code}. Logs: {logs.decode('utf-8')}")
+                    raise RuntimeError(f"Torsional alignment job failed for {examination.identifier} with exit code {exit_code}.")
 
-        left_hip = nib.Nifti1Image(left_hip, examination.hip.affine, examination.hip.header)
-        left_hip = Image.from_nibabel(left_hip)
-        right_hip = nib.Nifti1Image(right_hip, examination.hip.affine, examination.hip.header)
-        right_hip = Image.from_nibabel(right_hip)
+                self.logger.info(f"Container exited with code {exit_code}.")
 
-        try:
-            torsion, landmarks = calculate_femoral_torsion(left_hip, left_knee, side='left', method='lee', x_ratio=x_ratio, plot=False, return_landmarks=True)
-            examination.femoral_torsion_right = torsion
-            for k, v in landmarks.items():
-                landmarks[k] = v.tolist()
-            examination.landmarks['femur']['right'] = landmarks
-        except (RuntimeError, AssertionError, ValueError) as e:
-            logger.error(traceback.format_exc())
+                results = json.load(open(tempdir + '/results.json', 'r'))
+                landmarks = json.load(open(tempdir + '/landmarks.json', 'r'))
+                errors = json.load(open(tempdir + '/errors.json', 'r'))
 
-        try:
-            torsion, landmarks = calculate_femoral_torsion(right_hip, right_knee, side='right', method='lee', x_ratio=x_ratio, plot=False, return_landmarks=True)
-            landmarks['hip_start'][0] += examination.hip_mask.shape[0] // 2  # shift to the right image side
-            landmarks['hip_end'][0] += examination.hip_mask.shape[0] // 2
-            landmarks['knee_start'][0] += examination.knee_mask.shape[0] // 2
-            landmarks['knee_end'][0] += examination.knee_mask.shape[0] // 2
-            examination.femoral_torsion_left = torsion
-            for k, v in landmarks.items():
-                landmarks[k] = v.tolist()
-            examination.landmarks['femur']['left'] = landmarks
-        except (RuntimeError, AssertionError, ValueError) as e:
-            logger.error(traceback.format_exc())
+                examination.femoral_torsion_left = results['femoral_torsion_left']
+                examination.femoral_torsion_right = results['femoral_torsion_right']
+                examination.tibial_torsion_left = results['tibial_torsion_left']
+                examination.tibial_torsion_right = results['tibial_torsion_right']
 
-        try:
-            torsion, landmarks = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left', plot=False, return_landmarks=True)
-            examination.tibial_torsion_right = torsion
-            for k, v in landmarks.items():
-                landmarks[k] = v.tolist()
-            examination.landmarks['tibia']['right'] = landmarks
-        except (RuntimeError, AssertionError, ValueError) as e:
-            logger.error(traceback.format_exc())
+                examination.landmarks = landmarks
 
-        try:
-            torsion, landmarks = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right', plot=False, return_landmarks=True)
-            landmarks['knee_start'][0] += examination.knee_mask.shape[0] // 2
-            landmarks['knee_end'][0] += examination.knee_mask.shape[0] // 2
-            landmarks['ankle_start'][0] += examination.ankle_mask.shape[0] // 2
-            landmarks['ankle_end'][0] += examination.ankle_mask.shape[0] // 2
-            examination.tibial_torsion_left = torsion
-            for k, v in landmarks.items():
-                landmarks[k] = v.tolist()
-            examination.landmarks['tibia']['left'] = landmarks
-        except (RuntimeError, AssertionError, ValueError) as e:
-            logger.error(traceback.format_exc())
+            finally:
+                container.remove()
 
-        logger.info(f'Finished torsional alignment job for {examination.identifier} with identifier {self.identifier}.')
+        self.logger.info(f'Finished torsional alignment job for {examination.identifier} with identifier {self.identifier}.')
 
         examination.status = 'processed'
         self.file_controller.update_examination(examination)
 
         return self
+
+
+class LandmarkJob(ModelJob):
+
+    def __init__(self, file_controller: FileController):
+        super().__init__(file_controller)
+
+    def execute(self):
+        raise NotImplementedError

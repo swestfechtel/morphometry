@@ -27,7 +27,6 @@ ls -l /app/temp/hip/input/
 ls -l /app/temp/knee/input/
 ls -l /app/temp/ankle/input/
 
-# python3 predict.py
 nnUNetv2_predict -i /app/temp/hip/input -o /app/temp/hip/output -d 8 -c 3d_fullres -f all -chk checkpoint_best.pth -device cuda
 nnUNetv2_predict -i /app/temp/knee/input -o /app/temp/knee/output -d 21 -c 3d_fullres -f all -chk checkpoint_best.pth -device cuda
 nnUNetv2_predict -i /app/temp/ankle/input -o /app/temp/ankle/output -d 22 -c 3d_fullres -f all -chk checkpoint_best.pth -device cuda

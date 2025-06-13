@@ -9,8 +9,9 @@ import shutil
 import json
 import threading
 import asyncio
+import pydicom
 
-from api.examination import Examination
+from api.examination import Examination, TorsionExamination, XRayExamination
 
 from morphometry.image_io import Image
 
@@ -19,6 +20,7 @@ from copy import deepcopy
 from pathlib import Path
 from fastapi import UploadFile
 from typing import Callable
+from PIL import Image as PILImage
 
 
 class ReceivedSeriesBuffer:
@@ -27,14 +29,16 @@ class ReceivedSeriesBuffer:
     """
 
     identifier: str
+    type: str
     queue: asyncio.Queue
     timeout: int
     timer: any
     file_controller: 'FileController'
     callback: Callable
 
-    def __init__(self, identifier, file_controller, callback, timeout=10):
+    def __init__(self, identifier, type, file_controller, callback, timeout=10):
         self.identifier = identifier
+        self.type = type
         self.file_controller = file_controller
         self.callback = callback
         self.queue = asyncio.Queue()
@@ -66,7 +70,7 @@ class ReceivedSeriesBuffer:
         if not items:
             return
 
-        examination = self.file_controller.save_files(items, origin='orthanc')
+        examination = self.file_controller.save_files(items, origin='orthanc', type=self.type)
         # Call the callback (if the callback is async, you could await it)
         self.callback(examination)
 
@@ -163,13 +167,6 @@ class FileController(object):
         Add a new examination.
         :param examination: An Examination object to add.
         :return: The added Examination object or False if the examination already exists.
-        """
-        """
-        id_length = 10  # length of the session id
-        letters = string.ascii_lowercase
-        random_file_id = ''.join(random.choice(letters) for i in range(id_length))
-        while random_file_id in self.stored_files:
-            random_file_id = ''.join(random.choice(letters) for i in range(id_length))
         """
         identifier = examination.metadata[0x0008, 0x0050].value  # accession number
 
@@ -272,60 +269,94 @@ class FileController(object):
             finally:
                 upload_file.file.close()
 
-    def save_files(self, files: list[UploadFile | bytes], origin: str) -> Examination | bool:
+    def save_files(self, files: list[UploadFile | bytes], origin: str, type: str) -> Examination | bool:
         """
         Save uploaded files to a temporary directory and create an Examination object.
         :param files: A list of uploaded files.
         :param origin: The origin of the files (e.g. "orthanc").
+        :param type: The type of the examination (e.g. "torsion").
         :return: The created Examination object or False if the examination already exists.
         """
+        self.logger.debug(f'{files}, {origin}, {type}')
         workdir = os.path.dirname(os.path.realpath(__file__))
 
         with (tempfile.TemporaryDirectory(dir=f'{workdir}/uploads/') as temp_dir):
             for i, file in enumerate(files):  # have to re-order layers because pacs export has dumb file naming scheme
                 if origin == 'ui':  # if files were sent via the ui
+                    if type == 'torsion':
+                        dicom_file = re.compile(r'I\d+')
+                        digits = re.compile(r'[1-9]')
+                        double_digits = re.compile(re.compile(r'[1-9]{2}'))
+                        single_digits = re.compile(r'I[1-9]0+$')
+                        multiples_of_ten = re.compile(r'I[1-9]0+1')  # TODO this will likely fail if number of files > 99
 
-                    dicom_file = re.compile(r'I\d+')
-                    digits = re.compile(r'[1-9]')
-                    double_digits = re.compile(re.compile(r'[1-9]{2}'))
-                    single_digits = re.compile(r'I[1-9]0+$')
-                    multiples_of_ten = re.compile(r'I[1-9]0+1')  # TODO this will likely fail if number of files > 99
+                        filename = file.filename.split('/')[-1]
 
-                    filename = file.filename.split('/')[-1]
+                        if re.match(dicom_file, filename) is None:
+                            self.logger.debug(f'Could not match {filename}')
+                            continue  # filter out files we do not want, e.g. VERSION files
 
-                    if re.match(dicom_file, filename) is None:
-                        self.logger.debug(f'Could not match {filename}')
-                        continue  # filter out files we do not want, e.g. VERSION files
+                        if re.match(single_digits, filename):  # layers no.s 1-9
+                            number = re.search(digits, filename)[0]
+                            self.save_upload_file(file, Path(f'{temp_dir}/I00{number}'))
 
-                    if re.match(single_digits, filename):  # layers no.s 1-9
-                        number = re.search(digits, filename)[0]
-                        self.save_upload_file(file, Path(f'{temp_dir}/I00{number}'))
+                        elif re.match(multiples_of_ten, filename):  # layers no.s 10, 20, 30, ...
+                            number = re.search(digits, filename)[0]
+                            self.save_upload_file(file, Path(f'{temp_dir}/I0{number}0'))
 
-                    elif re.match(multiples_of_ten, filename):  # layers no.s 10, 20, 30, ...
-                        number = re.search(digits, filename)[0]
-                        self.save_upload_file(file, Path(f'{temp_dir}/I0{number}0'))
-
-                    else:  # everything else, e.g. 11-19, 21-29, ...
-                        number = re.search(double_digits, filename)[0]
-                        self.save_upload_file(file, Path(f'{temp_dir}/I0{number}'))
+                        else:  # everything else, e.g. 11-19, 21-29, ...
+                            number = re.search(double_digits, filename)[0]
+                            self.save_upload_file(file, Path(f'{temp_dir}/I0{number}'))
+                    elif type == 'x_ray_foot_ap':
+                        self.save_upload_file(file, Path(f'{temp_dir}/{file.filename.split("/")[-1]}'))
 
                 elif origin == 'orthanc':  # if files were sent from orthanc, they are already in the correct order
                     self.save_upload_file(file, Path(f'{temp_dir}/{i}.dcm'))  # so just save them as is
 
-            metdata = Image.read_dicom_metadata(temp_dir)
+            if type != 'x_ray_foot_ap':
+                metadata = Image.read_dicom_metadata(temp_dir)
+            else:
+                metadata = pydicom.Dataset()
+            metadata[0x0008, 0x0020] = pydicom.DataElement(0x00080020, 'LO', '20250101')  # dummy study date
+            metadata[0x0008, 0x0030] = pydicom.DataElement(0x00080030, 'LO', '120000')  # dummy study time
+            metadata[0x0008, 0x1030] = pydicom.DataElement(0x00081030, 'LO', 'Dummy Study Description')
+            metadata[0x0008, 0x0050] = pydicom.DataElement(0x00080050, 'LO', ''.join(random.choices(string.ascii_uppercase + string.digits, k=10)))  # dummy accession number
 
-            nib_image, tmp = Image.dicom_to_nibabel(temp_dir)
+            examination = Examination(identifier=None, metadata=metadata)
 
-            self.logger.debug(f'Loaded image with shape {nib_image.get_fdata().shape}')
+            if type == 'torsion':
+                nib_image, tmp = Image.dicom_to_nibabel(temp_dir)
 
-            image = Image.from_nibabel(nib_image)
+                self.logger.debug(f'Loaded image with shape {nib_image.get_fdata().shape}')
 
-            image.metadata = metdata
+                image = Image.from_nibabel(nib_image)
 
-            transformed_image = image.copy()
-            transformed_image.transform_coordinate_system()
+                image.metadata = metadata
 
-            examination = Examination(identifier=None, original_image=image, transformed_image=transformed_image, metadata=metdata)
-            tmp.cleanup()
+                transformed_image = image.copy()
+                transformed_image.transform_coordinate_system()
+
+                examination = TorsionExamination(examination)
+                examination.original_image = image
+                examination.transformed_image = transformed_image
+
+                tmp.cleanup()
+            elif type == 'x_ray_foot_ap':
+                image = PILImage.open(f'{temp_dir}/{files[0].filename.split("/")[-1]}').convert('RGB')
+                landmarks = {
+                    'longitudinal_firstmetatarsal_axis': {
+                        'start': [50, 50],
+                        'end': [150, 150]
+                    },
+                    'longitudinal_phalanx_axis': {
+                        'start': [100, 100],
+                        'end': [200, 200]
+                    }
+                }
+
+                examination = XRayExamination(examination)
+                examination.image = image
+                examination.landmarks = landmarks
+                examination.status = 'processed'
 
             return self.add_examination(examination)  # if this returns False the examination object should be garbage collected

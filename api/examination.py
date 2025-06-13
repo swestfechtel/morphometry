@@ -6,10 +6,7 @@ import datetime
 
 import nibabel as nib
 import numpy as np
-
-from morphometry.image_io import Image, Segmentation
-
-from io import BytesIO
+import morphometry.image_io as mio
 
 from matplotlib.figure import Figure
 from matplotlib.colors import ListedColormap, BoundaryNorm
@@ -18,6 +15,8 @@ from dataclasses import dataclass
 from copy import deepcopy
 from collections import defaultdict
 from typing import Tuple, Union
+from io import BytesIO
+from PIL import Image as PILImage
 
 masking_value = -1
 
@@ -25,19 +24,13 @@ masking_value = -1
 @dataclass
 class Examination(object):
     identifier: str
-    original_image: Image
-    transformed_image: Image
     metadata: pydicom.FileDataset
     status: str
-    image_b64: list[str]
 
-    def __init__(self, identifier: str = None, original_image: Image = None, transformed_image: Image = None, metadata: pydicom.FileDataset = None):
+    def __init__(self, identifier: str = None, metadata: pydicom.FileDataset = None):
         self.identifier = identifier
-        self.original_image = original_image
-        self.transformed_image = transformed_image
         self.metadata = metadata
         self.status = 'unprocessed'
-        self.image_b64 = None
 
     def copy(self):
         """
@@ -88,30 +81,23 @@ class Examination(object):
         """
         return self.metadata[0x0010, 0x0010].value
 
-    def encode_images(self):
-        """
-        Encode the images and segmentation masks to base64 strings.
-        :return: A list of base64 encoded images and segmentation masks.
-        """
-        layers = [self.transformed_image.array[:, :, i] for i in range(self.transformed_image.shape[-1])]
-
-        with multiprocessing.Pool() as pool:
-            self.image_b64 = pool.map(encode_figure, layers)
-
 
 class TorsionExamination(Examination):
-    hip: Image
-    knee: Image
-    ankle: Image
-    hip_mask: Segmentation
-    knee_mask: Segmentation
-    ankle_mask: Segmentation
+    original_image: mio.Image
+    transformed_image: mio.Image
+    hip: mio.Image
+    knee: mio.Image
+    ankle: mio.Image
+    hip_mask: mio.Segmentation
+    knee_mask: mio.Segmentation
+    ankle_mask: mio.Segmentation
     femoral_torsion_left: float
     femoral_torsion_right: float
     tibial_torsion_left: float
     tibial_torsion_right: float
-    landmarks: defaultdict
+    landmarks: dict
     image_segmentation_b64: list[str]
+    image_b64: list[str]
 
     def __init__(self, examination: Examination):
         super().__init__(examination.identifier, examination.original_image, examination.transformed_image, examination.metadata)
@@ -125,7 +111,7 @@ class TorsionExamination(Examination):
         self.femoral_torsion_right = None
         self.tibial_torsion_left = None
         self.tibial_torsion_right = None
-        self.landmarks = defaultdict(dict)
+        self.landmarks = None
         self.image_segmentation_b64 = None
 
     def split_series(self):
@@ -140,13 +126,13 @@ class TorsionExamination(Examination):
         breakpoints = cpd.fit_predict(num_pixels, 2)  # two breakpoints: ankle-knee, knee-hip
 
         hip = nib.Nifti1Image(self.transformed_image.array[:, :, :breakpoints[0]], affine=self.transformed_image.affine)
-        self.hip = Image.from_nibabel(hip)
+        self.hip = mio.Image.from_nibabel(hip)
 
         knee = nib.Nifti1Image(self.transformed_image.array[:, :, breakpoints[0]:breakpoints[1]], affine=self.transformed_image.affine)
-        self.knee = Image.from_nibabel(knee)
+        self.knee = mio.Image.from_nibabel(knee)
 
         ankle = nib.Nifti1Image(self.transformed_image.array[:, :, breakpoints[1]:], affine=self.transformed_image.affine)
-        self.ankle = Image.from_nibabel(ankle)
+        self.ankle = mio.Image.from_nibabel(ankle)
 
     def get_torsion_values(self) -> dict:
         """
@@ -161,7 +147,10 @@ class TorsionExamination(Examination):
         Encode the images and segmentation masks to base64 strings.
         :return: A list of base64 encoded images and segmentation masks.
         """
-        super().encode_images()
+        layers = [self.transformed_image.array[:, :, i] for i in range(self.transformed_image.shape[-1])]
+
+        with multiprocessing.Pool() as pool:
+            self.image_b64 = pool.map(encode_figure, layers)
 
         tmp = self.ankle_mask.array.copy()
         tmp = np.where(tmp == 2, 3, tmp)
@@ -173,6 +162,39 @@ class TorsionExamination(Examination):
 
         with multiprocessing.Pool() as pool:
             self.image_segmentation_b64 = pool.map(encode_figure, layers)
+
+
+class XRayExamination(Examination):
+    image: PILImage.Image
+    landmarks: dict
+
+    def __init__(self, examination: Examination):
+        super().__init__(examination.identifier, metadata=examination.metadata)
+        self._image = None
+        self._landmarks = None
+
+    @property
+    def image(self):
+        return self._image
+
+    @image.setter
+    def image(self, value: PILImage.Image):
+        self._image = value
+
+    @property
+    def landmarks(self):
+        return self._landmarks
+
+    @landmarks.setter
+    def landmarks(self, value: dict):
+        if not isinstance(value, dict):
+            raise TypeError("Landmarks must be a dictionary.")
+        self._landmarks = value
+
+    def to_base64(self) -> str:
+        buffer = BytesIO()
+        self.image.save(buffer, format='PNG')
+        return base64.b64encode(buffer.getvalue()).decode('ascii')
 
 
 def encode_figure(layer: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]) -> str:

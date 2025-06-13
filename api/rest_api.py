@@ -4,6 +4,7 @@ import os
 import datetime
 import multiprocessing
 import asyncio
+import traceback
 
 import numpy as np
 
@@ -14,9 +15,10 @@ from typing import Annotated, Dict
 from fastapi import FastAPI, UploadFile, status, Response, Form, Request, Body, File
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.config import nnunet_config
 from api.file_controller import FileController, ReceivedSeriesBuffer
 from api.model_controller import ModelJob, TorsionModelJob
-from api.examination import Examination, TorsionExamination, encode_figure
+from api.examination import Examination, TorsionExamination, encode_figure, XRayExamination
 from api.utils import create_directories_and_files, init_logger
 
 
@@ -33,11 +35,12 @@ file_controller = FileController()
 logger.info('FileController started.')
 
 open_jobs = dict()
+failed_jobs = dict()
 open_series_buffers = dict()
 executor = ThreadPoolExecutor()
 
 
-def task_callback(task):
+def task_callback(task: asyncio.Task):
     """
     Callback for asynchronous tasks.
     :param task: A task to run.
@@ -47,9 +50,12 @@ def task_callback(task):
         result = task.result()
         logger.info(f'Task {task} finished with result: {result}')
         result.running = False
-    except:
+    except Exception as e:
         logger.error(f'Task {task} failed with exception: {task.exception()}')
+        traceback_str = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
+        logger.error(f'Stacktrace:\n{traceback_str}')
         del open_jobs[task.get_name()]  # make sure to clean up the job
+        failed_jobs[task.get_name()] = task.exception()
 
     return None
 
@@ -139,25 +145,28 @@ def get_examination_by_id(examination_id: str):
 
     assert d['accession_number'] == examination.accession_number == examination_id  # sanity check
 
-    if examination.image_b64 is None:
-        examination.encode_images()
-        file_controller.update_examination(examination)
-
-    d['image'] = examination.image_b64
-    d['shape'] = examination.transformed_image.shape
-
     if isinstance(examination, TorsionExamination):
-        logger.debug(dict(examination.landmarks))
-        d['landmarks'] = dict(examination.landmarks)
-        d['knee_offset'] = examination.hip.shape[2]
-        d['ankle_offset'] = examination.hip.shape[2] + examination.knee.shape[2]
-        d['torsion'] = examination.get_torsion_values()
+        if examination.image_b64 is None:
+            examination.encode_images()
+            file_controller.update_examination(examination)
 
         if examination.image_segmentation_b64 is None:
             examination.encode_images()
             file_controller.update_examination(examination)
 
+        d['image'] = examination.image_b64
+        d['shape'] = examination.transformed_image.shape
+        d['landmarks'] = dict(examination.landmarks)
+        d['knee_offset'] = examination.hip.shape[2]
+        d['ankle_offset'] = examination.hip.shape[2] + examination.knee.shape[2]
+        d['torsion'] = examination.get_torsion_values()
         d['segmentation'] = examination.image_segmentation_b64
+        d['type'] = 'torsion'
+
+    elif isinstance(examination, XRayExamination):
+        d['image'] = examination.to_base64()
+        d['landmarks'] = examination.landmarks
+        d['type'] = 'xray'
 
     return d
 
@@ -200,20 +209,18 @@ def delete_file_by_id(examination_id: str):
 
 
 @app.post('/upload/', status_code=status.HTTP_201_CREATED)
-async def files_from_html_form(request: Request):
+async def files_from_html_form(request: Request, examination_type: str = Form(...)):
     """
     Upload files to the server via HTML form.
     :param request: A list of files to upload.
+    :param examination_type: The type of examination to create.
     :return:
     """
     data = await request.form()
 
-    for k in data:
-        files = data.getlist(k)
-        if isinstance(files[0], UploadFile):
-            break
+    files = data.getlist('files')
 
-    examination = file_controller.save_files(files, 'ui')
+    examination = file_controller.save_files(files, 'ui', type=examination_type)
 
     if examination is False:
         return Response(status_code=status.HTTP_400_BAD_REQUEST)
@@ -261,7 +268,7 @@ async def files_from_orthanc(file: Annotated[bytes, File(...)], metadata: str = 
         q.add(file)
     else:
         callback = partial(buffer_callback, model_job=model_job, examination_type=examination_type)
-        q = ReceivedSeriesBuffer(identifier=identifier, file_controller=file_controller, callback=callback)
+        q = ReceivedSeriesBuffer(identifier=identifier, type=examination_type, file_controller=file_controller, callback=callback)
         q.add(file)
         open_series_buffers[identifier] = q
 
@@ -346,6 +353,11 @@ def get_job_by_id(job_id: str):
     :param job_id: The identifier of the job to retrieve.
     :return:
     """
+    if job_id in failed_jobs.keys():
+        error = str(failed_jobs[job_id])
+        del failed_jobs[job_id]
+        return Response(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=json.dumps({'error': error}))
+
     if job_id not in open_jobs.keys():
         return Response(status_code=status.HTTP_404_NOT_FOUND)
 

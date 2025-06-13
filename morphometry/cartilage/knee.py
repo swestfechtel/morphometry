@@ -3,8 +3,10 @@ import pyvista as pv
 import numpy as np
 from typing import Tuple
 from scipy.spatial import KDTree
-from sklearn.cluster import KMeans
+from scipy.ndimage import center_of_mass
+from sklearn.cluster import KMeans, DBSCAN
 from morphometry.image_io import Image
+from matplotlib import pyplot as plt
 
 
 class Tibia:
@@ -32,11 +34,48 @@ class Tibia:
         """
         Calculate the landmarks that define the different regions of the tibia.
         """
-        cluster = KMeans(n_clusters=1).fit(self.point_cloud)
-        self.center = cluster.cluster_centers_[0]
+        # --- Connected Component Analysis to split into two parts ---
+        kdtree = KDTree(self.point_cloud)
+        n_points = self.point_cloud.shape[0]
+        visited = np.zeros(n_points, dtype=bool)
+        labels = np.full(n_points, -1, dtype=int)
+        component_id = 0
+        neighbor_radius = 2.5  # adjust as needed for your data's scale
 
-        left_plate = self.point_cloud[self.point_cloud[:, 0] > self.center[0]]  # left side = left patient side, i.e. right side of image
-        right_plate = self.point_cloud[self.point_cloud[:, 0] <= self.center[0]]  # right side = right patient side, i.e. left side of image
+        for idx in range(n_points):
+            if not visited[idx]:
+                queue = [idx]
+                visited[idx] = True
+                labels[idx] = component_id
+                while queue:
+                    current = queue.pop(0)
+                    neighbors = kdtree.query_ball_point(self.point_cloud[current], r=neighbor_radius)
+                    for nb in neighbors:
+                        if not visited[nb]:
+                            visited[nb] = True
+                            labels[nb] = component_id
+                            queue.append(nb)
+                component_id += 1
+
+        # Find sizes of all components
+        unique, counts = np.unique(labels, return_counts=True)
+        if len(unique) < 2:
+            raise ValueError(f"Expected at least 2 connected components, found {len(unique)}")
+        # Keep only the two largest components
+        largest_two = unique[np.argsort(counts)[-2:]]
+        mask = np.isin(labels, largest_two)
+        filtered_points = self.point_cloud[mask]
+        filtered_labels = labels[mask]
+        # Remap labels to 0 and 1
+        new_label_map = {old: new for new, old in enumerate(largest_two)}
+        filtered_labels = np.vectorize(new_label_map.get)(filtered_labels)
+
+        left_plate = filtered_points[filtered_labels == 0]
+        right_plate = filtered_points[filtered_labels == 1]
+
+        # Ensure left/right assignment is consistent with image orientation
+        if left_plate[:, 0].mean() < right_plate[:, 0].mean():
+            left_plate, right_plate = right_plate, left_plate
 
         left_plate_center = KMeans(n_clusters=1).fit(left_plate).cluster_centers_[0]
         right_plate_center = KMeans(n_clusters=1).fit(right_plate).cluster_centers_[0]
@@ -44,13 +83,14 @@ class Tibia:
         left_ellipse = calculate_ellipse(left_plate, left_plate_center)
         right_ellipse = calculate_ellipse(right_plate, right_plate_center)
 
-        left_plate_corners = get_plate_corners(left_plate)  # upper right (LP), lower right (LA), upper left (RP), lower left (RA)
+        left_plate_corners = get_plate_corners(left_plate)
         left_plate_corners = {'upper_right': left_plate_corners[0], 'lower_right': left_plate_corners[1], 'upper_left': left_plate_corners[2], 'lower_left': left_plate_corners[3]}
         right_plate_corners = get_plate_corners(right_plate)
         right_plate_corners = {'upper_right': right_plate_corners[0], 'lower_right': right_plate_corners[1], 'upper_left': right_plate_corners[2], 'lower_left': right_plate_corners[3]}
 
         self.left_landmarks = {'center': left_plate_center, 'ellipse': left_ellipse, 'corners': left_plate_corners}
         self.right_landmarks = {'center': right_plate_center, 'ellipse': right_ellipse, 'corners': right_plate_corners}
+        self.center = (left_plate_center + right_plate_center) / 2
 
     def classify_point(self, point: np.ndarray) -> str:
         """
@@ -243,16 +283,69 @@ class Femur:
     def __init__(self, image: Image, cartilage_label: int):
         self.image = image
         self.cartilage_label = cartilage_label
+        self.left_part, right_part = None, None
         self.left_cwbz, self.right_cwbz = None, None
         self.left_anterior_zone, self.right_anterior_zone = None, None
         self.left_posterior_zone, self.right_posterior_zone = None, None
         self.eclf, self.iclf, self.cclf, self.ecrf, self.icrf, self.ccrf = None, None, None, None, None, None
         self.alf, self.arf, self.plf, self.prf = None, None, None, None
 
-        image_array = self.image.get_array()
-        cartilage = np.where(image_array == self.cartilage_label, 1, 0)
-        cartilage = np.argwhere(cartilage)
-        self.point_cloud = cartilage.astype(float)
+        cartilage = np.where(self.image.array == self.cartilage_label, 1, 0)
+        self.point_cloud = np.argwhere(cartilage).astype(float)
+
+        c = np.max(self.point_cloud[:, 1])  # max posterior extent
+        c = int(c)
+        n = num_connected_components(cartilage[:, c, :])
+        while n != 2:
+            c -= 1
+            n = num_connected_components(cartilage[:, c, :])
+
+        while n != 1:
+            c -= 1
+            n = num_connected_components(cartilage[:, c, :])
+
+        fig, ax = plt.subplots(ncols=2, figsize=(20, 10))
+        ax[0].imshow(cartilage[:, c, :].T)
+
+        pts = np.argwhere(cartilage[:, c, :])
+        min_t = min(pts[:, 1])
+        tmp = pts[pts[:, 1] == min_t]
+        mean_s = int(np.mean(tmp[:, 0]))
+        notch_p = np.array([mean_s, c, min_t])
+
+        c = np.min(self.point_cloud[:, 1])  # max anterior extent
+        c = int(c)
+        n = num_connected_components(cartilage[:, c, :])
+        while n != 2:
+            c += 1
+            n = num_connected_components(cartilage[:, c, :])
+
+        while n != 1:
+            c += 1
+            n = num_connected_components(cartilage[:, c, :])
+
+        ax[1].imshow(cartilage[:, c, :].T)
+        plt.show()
+
+        notch_a = center_of_mass(cartilage[:, c, :])
+        notch_a = np.array([notch_a[0], c, notch_a[1]])
+
+        dividing_vector = notch_a - notch_p
+        print(notch_a, notch_p, dividing_vector)
+
+        self.left_part = list()
+        self.right_part = list()
+
+        for point in self.point_cloud:
+            tmp = notch_a[:2] - point[:2]
+            tmp = np.cross(tmp, dividing_vector[:2])
+            if tmp > 0:
+                self.left_part.append(point)
+            else:
+                self.right_part.append(point)
+
+        self.left_part = np.array(self.left_part)
+        self.right_part = np.array(self.right_part)
 
     def extract_central_weightbearing_zone(self, tibia: Tibia, side: str = 'left'):
         """
@@ -346,8 +439,10 @@ class Femur:
         Extract the anterior and posterior zones of the cartilage.
         :param side: The side (patient) of the cartilage.
         """
-        split_axis = np.median(self.point_cloud[:, 0])
-        cartilage = self.point_cloud[self.point_cloud[:, 0] < split_axis] if side == 'right' else self.point_cloud[self.point_cloud[:, 0] > split_axis]
+        # split_axis = np.median(self.point_cloud[:, 0])
+        # cartilage = self.point_cloud[self.point_cloud[:, 0] < split_axis] if side == 'right' else self.point_cloud[self.point_cloud[:, 0] > split_axis]
+        cartilage = self.left_part if side == 'left' else self.right_part
+
         cwbz = self.left_cwbz if side == 'left' else self.right_cwbz
         cwbz_most_anterior = cwbz[:, 1].min()
         cwbz_most_posterior = cwbz[:, 1].max()
@@ -619,3 +714,35 @@ def get_plate_corners(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.nd
     lower_left = np.array([left_image_boundary, lower_image_boundary])
 
     return upper_right, lower_right, upper_left, lower_left
+
+
+def num_connected_components(x: np.ndarray) -> int:
+    """
+    Counts the number of connected components in a 2D image.
+    :param x: A 2D numpy array where each pixel is either 0 or 1.
+    :return: The number of connected components in the image.
+    """
+    visited = np.zeros_like(x, dtype=bool)
+    nrows, ncols = x.shape
+    count = 0
+
+    def neighbors(r, c):
+        for dr, dc in [(-1,0), (1,0), (0,-1), (0,1)]:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < nrows and 0 <= nc < ncols:
+                yield nr, nc
+
+    for i in range(nrows):
+        for j in range(ncols):
+            if x[i, j] and not visited[i, j]:
+                # Start BFS/DFS
+                stack = [(i, j)]
+                visited[i, j] = True
+                while stack:
+                    r, c = stack.pop()
+                    for nr, nc in neighbors(r, c):
+                        if x[nr, nc] and not visited[nr, nc]:
+                            visited[nr, nc] = True
+                            stack.append((nr, nc))
+                count += 1
+    return count
