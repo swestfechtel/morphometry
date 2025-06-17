@@ -1,5 +1,6 @@
 from surface_distance.metrics import compute_surface_distances, compute_average_surface_distance, compute_dice_coefficient, compute_robust_hausdorff
 from pathlib import Path
+from tqdm import tqdm
 import SimpleITK as sitk
 from typing import Tuple
 import numpy as np
@@ -20,7 +21,7 @@ def compute_metrics(prediction_path: str, gt_path: str, labels: list) -> pd.Data
                         if x.suffix != '.json']
     index = pd.MultiIndex.from_product([filenames, labels], names=['filename', 'label'])
     df = pd.DataFrame(columns = ['asd', 'hd', 'dice'], index=index, dtype=float)
-    for filename in filenames:
+    for filename in tqdm(filenames):
         prediction = sitk.ReadImage(str(Path(prediction_path) / filename))
         reference = sitk.ReadImage(str(Path(gt_path) / filename))
         pred_numpy = sitk.GetArrayFromImage(prediction)
@@ -55,4 +56,4 @@ if __name__ == '__main__':
 
     print(df.groupby(level='label').describe().T)
     if args.output_path:
-        df.to_csv(args.output_path, index=False)
+        df.to_csv(args.output_path, index=True)

@@ -189,6 +189,7 @@ def update_examination(examination_id: str, examination_json: str = Body(...)):
         if hasattr(examination, k):
             setattr(examination, k, v)
 
+
     file_controller.update_examination(examination)
     return {'status': 'updated'}
 
