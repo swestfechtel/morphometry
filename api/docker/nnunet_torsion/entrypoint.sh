@@ -6,35 +6,15 @@ export nnUNet_results="/app/nnUNet_results"
 
 export MKL_SERVICE_FORCE_INTEL=1
 
-echo "Creating directories..."
-mkdir -p /app/temp/hip/input
-mkdir -p /app/temp/hip/output
-mkdir -p /app/temp/knee/input
-mkdir -p /app/temp/knee/output
-mkdir -p /app/temp/ankle/input
-mkdir -p /app/temp/ankle/output
+echo "/app/mnt contents:"
+ls -l /app/mnt
 
-echo "/temp/ contents:"
-ls -l /app/temp/
+ls -l /app/mnt/hip/input/
+ls -l /app/mnt/knee/input/
+ls -l /app/mnt/ankle/input/
 
-echo "Moving input files to input directories..."
+nnUNetv2_predict -i /app/mnt/hip/input -o /app/mnt/hip/output -d 8 -c 3d_fullres -f all -chk checkpoint_best.pth -device cuda
+nnUNetv2_predict -i /app/mnt/knee/input -o /app/mnt/knee/output -d 21 -c 3d_fullres -f all -chk checkpoint_best.pth -device cuda
+nnUNetv2_predict -i /app/mnt/ankle/input -o /app/mnt/ankle/output -d 22 -c 3d_fullres -f all -chk checkpoint_best.pth -device cuda
 
-cp /app/temp/hip.nii.gz /app/temp/hip/input/hip_0000.nii.gz
-cp /app/temp/knee.nii.gz /app/temp/knee/input/knee_0000.nii.gz
-cp /app/temp/ankle.nii.gz /app/temp/ankle/input/ankle_0000.nii.gz
-
-ls -l /app/temp/hip/input/
-ls -l /app/temp/knee/input/
-ls -l /app/temp/ankle/input/
-
-nnUNetv2_predict -i /app/temp/hip/input -o /app/temp/hip/output -d 8 -c 3d_fullres -f all -chk checkpoint_best.pth -device cuda
-nnUNetv2_predict -i /app/temp/knee/input -o /app/temp/knee/output -d 21 -c 3d_fullres -f all -chk checkpoint_best.pth -device cuda
-nnUNetv2_predict -i /app/temp/ankle/input -o /app/temp/ankle/output -d 22 -c 3d_fullres -f all -chk checkpoint_best.pth -device cuda
-
-echo "Prediction completed successfully. Moving files to /app/"
-
-cp /app/temp/hip/output/* /app/temp/
-cp /app/temp/knee/output/* /app/temp/
-cp /app/temp/ankle/output/* /app/temp/
-
-ls -l /app/temp/
+echo "Prediction completed for hip, knee, and ankle datasets."
