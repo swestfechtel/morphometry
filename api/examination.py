@@ -100,7 +100,7 @@ class TorsionExamination(Examination):
     image_b64: list[str]
 
     def __init__(self, examination: Examination):
-        super().__init__(examination.identifier, examination.original_image, examination.transformed_image, examination.metadata)
+        super().__init__(examination.identifier, metadata=examination.metadata)
         self.hip = None
         self.knee = None
         self.ankle = None
@@ -139,8 +139,12 @@ class TorsionExamination(Examination):
         Get the computed torsion values.
         :return: A dictionary containing the torsion values.
         """
-        return {'femoral_torsion_left': self.femoral_torsion_left, 'femoral_torsion_right': self.femoral_torsion_right,
-                'tibial_torsion_left': self.tibial_torsion_left, 'tibial_torsion_right': self.tibial_torsion_right}
+        return {
+            'femoral_torsion_left': 0 if np.isnan(self.femoral_torsion_left) else self.femoral_torsion_left,
+            'femoral_torsion_right': 0 if np.isnan(self.femoral_torsion_right) else self.femoral_torsion_right,
+            'tibial_torsion_left': 0 if np.isnan(self.tibial_torsion_left) else self.tibial_torsion_left,
+            'tibial_torsion_right': 0 if np.isnan(self.tibial_torsion_right) else self.tibial_torsion_right
+        }
 
     def encode_images(self):
         """

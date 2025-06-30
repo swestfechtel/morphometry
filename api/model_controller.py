@@ -5,6 +5,7 @@ import docker
 import json
 import sys
 import subprocess
+import os
 
 import pandas as pd
 import nibabel as nib
@@ -13,6 +14,8 @@ from api.examination import TorsionExamination
 from api.file_controller import FileController
 
 from morphometry.image_io import Image, Segmentation
+
+from pathlib import Path
 
 
 class ModelJob:
@@ -60,9 +63,17 @@ class TorsionModelJob(ModelJob):
         examination.split_series()
 
         with tempfile.TemporaryDirectory() as tempdir:
-            examination.hip.save_image(tempdir + '/hip.nii.gz')
-            examination.knee.save_image(tempdir + '/knee.nii.gz')
-            examination.ankle.save_image(tempdir + '/ankle.nii.gz')
+            Path(f'{tempdir}/hip/input').mkdir(parents=True)
+            Path(f'{tempdir}/hip/output').mkdir(parents=True)
+            Path(f'{tempdir}/knee/input').mkdir(parents=True)
+            Path(f'{tempdir}/knee/output').mkdir(parents=True)
+            Path(f'{tempdir}/ankle/input').mkdir(parents=True)
+            Path(f'{tempdir}/ankle/output').mkdir(parents=True)
+
+
+            examination.hip.save_image(tempdir + '/hip/input/hip_0000.nii.gz')
+            examination.knee.save_image(tempdir + '/knee/input/knee_0000.nii.gz')
+            examination.ankle.save_image(tempdir + '/ankle/input/ankle_0000.nii.gz')
 
             docker_cmd = [
                 'docker',
@@ -71,7 +82,9 @@ class TorsionModelJob(ModelJob):
                 '--runtime=nvidia',
                 '--gpus', 'all',
                 '--shm-size', '32G',
-                '-v', f'{tempdir}:/app/temp:rw',
+                '--user', f'{os.getuid()}:{os.getgid()}',
+                '--group-add', 'root',
+                '-v', f'{tempdir}:/app/mnt:rw,Z',
                 'swestfechtel/nnunet_torsion:latest'
             ]
 
@@ -87,17 +100,17 @@ class TorsionModelJob(ModelJob):
 
             self.logger.info(f"Container exited with code {proc.returncode}.")
 
-            tmp = nib.load(tempdir + '/hip.nii.gz')
+            tmp = nib.load(tempdir + '/hip/output/hip.nii.gz')
             tmp = Segmentation.from_nibabel(tmp)
             tmp.transform_coordinate_system()
             examination.hip_mask = tmp
 
-            tmp = nib.load(tempdir + '/knee.nii.gz')
+            tmp = nib.load(tempdir + '/knee/output/knee.nii.gz')
             tmp = Segmentation.from_nibabel(tmp)
             tmp.transform_coordinate_system()
             examination.knee_mask = tmp
 
-            tmp = nib.load(tempdir + '/ankle.nii.gz')
+            tmp = nib.load(tempdir + '/ankle/output/ankle.nii.gz')
             tmp = Segmentation.from_nibabel(tmp)
             tmp.transform_coordinate_system()
             examination.ankle_mask = tmp
@@ -126,36 +139,44 @@ class TorsionModelJob(ModelJob):
             examination.knee_mask.save_image(tempdir + '/knee_segmentation.nii.gz')
             examination.ankle_mask.save_image(tempdir + '/ankle_segmentation.nii.gz')
 
-            container = self.client.containers.run(
-                'swestfechtel/torsion:latest',
-                volumes={tempdir: {'bind': '/app/temp', 'mode': 'rw'}},
-                detach=True
+            docker_cmd = [
+                'docker',
+                'run',
+                '--rm',
+                '--shm-size', '32G',
+                '-u', 'root',
+                '-v', f'{tempdir}:/app/temp:rw,z',
+                'swestfechtel/torsion:latest'
+            ]
+
+            proc = subprocess.run(
+                docker_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT
             )
 
-            try:
-                result = container.wait()
-                exit_code = result.get('StatusCode', -1)
+            if proc.returncode != 0:
+                self.logger.error(
+                    f"Container exited with code {proc.returncode}. Logs: {proc.stdout.decode('utf-8')}")
+                raise RuntimeError(
+                    f"Torsion job failed for {examination.identifier} with exit code {proc.returncode}.")
 
-                if exit_code != 0:
-                    logs = container.logs(stdout=True, stderr=True)
-                    self.logger.error(f"Container exited with code {exit_code}. Logs: {logs.decode('utf-8')}")
-                    raise RuntimeError(f"Torsional alignment job failed for {examination.identifier} with exit code {exit_code}.")
+            self.logger.info(f"Container exited with code {proc.returncode}.")
 
-                self.logger.info(f"Container exited with code {exit_code}.")
+            results = json.load(open(tempdir + '/results.json', 'r'))
+            landmarks = json.load(open(tempdir + '/landmarks.json', 'r'))
+            errors = json.load(open(tempdir + '/errors.json', 'r'))
 
-                results = json.load(open(tempdir + '/results.json', 'r'))
-                landmarks = json.load(open(tempdir + '/landmarks.json', 'r'))
-                errors = json.load(open(tempdir + '/errors.json', 'r'))
+            if len(errors['errors']) > 0:
+                self.logger.error(f"Errors occurred during torsional alignment computation for {examination.identifier}: {errors['errors']}")
+                # raise RuntimeError(f"Torsion job failed for {examination.identifier} with errors: {errors['errors']}")
 
-                examination.femoral_torsion_left = results['femoral_torsion_left']
-                examination.femoral_torsion_right = results['femoral_torsion_right']
-                examination.tibial_torsion_left = results['tibial_torsion_left']
-                examination.tibial_torsion_right = results['tibial_torsion_right']
+            examination.femoral_torsion_left = results['femoral_torsion_left']
+            examination.femoral_torsion_right = results['femoral_torsion_right']
+            examination.tibial_torsion_left = results['tibial_torsion_left']
+            examination.tibial_torsion_right = results['tibial_torsion_right']
 
-                examination.landmarks = landmarks
-
-            finally:
-                container.remove()
+            examination.landmarks = landmarks
 
         self.logger.info(f'Finished torsional alignment job for {examination.identifier} with identifier {self.identifier}.')
 

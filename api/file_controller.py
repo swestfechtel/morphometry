@@ -313,6 +313,7 @@ class FileController(object):
                 elif origin == 'orthanc':  # if files were sent from orthanc, they are already in the correct order
                     self.save_upload_file(file, Path(f'{temp_dir}/{i}.dcm'))  # so just save them as is
 
+            self.logger.debug(f'Saved {len([f for f in os.listdir(temp_dir)])} files to {temp_dir}.')
             if type != 'x_ray_foot_ap':
                 metadata = Image.read_dicom_metadata(temp_dir)
             else:

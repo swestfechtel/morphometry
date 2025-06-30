@@ -221,7 +221,7 @@ async def files_from_html_form(request: Request, examination_type: str = Form(..
 
     files = data.getlist('files')
 
-    examination = file_controller.save_files(files, 'ui', type=examination_type)
+    examination = file_controller.save_files(files, 'ui', type=examination_type.lower())
 
     if examination is False:
         return Response(status_code=status.HTTP_400_BAD_REQUEST)

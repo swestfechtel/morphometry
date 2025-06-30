@@ -2,6 +2,7 @@ import traceback
 import json
 
 import nibabel as nib
+import numpy as np
 
 from morphometry.image_io import Image, Segmentation
 from morphometry.femur import calculate_femoral_torsion
@@ -37,7 +38,16 @@ if __name__ == '__main__':
     right_hip = Image.from_nibabel(right_hip)
 
     results = dict()
-    landmarks_final = defaultdict(dict)
+    landmarks_final = {
+        'femur': {
+            'left': defaultdict(list),
+            'right': defaultdict(list)
+        },
+        'tibia': {
+            'left': defaultdict(list),
+            'right': defaultdict(list)
+        }
+    }
     errors = list()
 
     try:
@@ -51,6 +61,11 @@ if __name__ == '__main__':
 
     except (RuntimeError, AssertionError, ValueError) as e:
         errors.append(traceback.format_exc())
+        results['femoral_torsion_right'] = np.nan
+        landmarks_final['femur']['right']['hip_start'] = [0, 0, 0]
+        landmarks_final['femur']['right']['hip_end'] = [0, 0, 0]
+        landmarks_final['femur']['right']['knee_start'] = [0, 0, 0]
+        landmarks_final['femur']['right']['knee_end'] = [0, 0, 0]
 
     try:
         torsion, landmarks = calculate_femoral_torsion(right_hip, right_knee, side='right', method='lee', x_ratio=x_ratio, plot=False, return_landmarks=True)
@@ -68,6 +83,11 @@ if __name__ == '__main__':
 
     except (RuntimeError, AssertionError, ValueError) as e:
         errors.append(traceback.format_exc())
+        results['femoral_torsion_left'] = np.nan
+        landmarks_final['femur']['left']['hip_start'] = [0, 0, 0]
+        landmarks_final['femur']['left']['hip_end'] = [0, 0, 0]
+        landmarks_final['femur']['left']['knee_start'] = [0, 0, 0]
+        landmarks_final['femur']['left']['knee_end'] = [0, 0, 0]
 
     try:
         torsion, landmarks = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left', plot=False, return_landmarks=True)
@@ -80,6 +100,11 @@ if __name__ == '__main__':
 
     except (RuntimeError, AssertionError, ValueError) as e:
         errors.append(traceback.format_exc())
+        results['tibial_torsion_right'] = np.nan
+        landmarks_final['tibia']['right']['knee_start'] = [0, 0, 0]
+        landmarks_final['tibia']['right']['knee_end'] = [0, 0, 0]
+        landmarks_final['tibia']['right']['ankle_start'] = [0, 0, 0]
+        landmarks_final['tibia']['right']['ankle_end'] = [0, 0, 0]
 
     try:
         torsion, landmarks = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right', plot=False, return_landmarks=True)
@@ -97,6 +122,11 @@ if __name__ == '__main__':
 
     except (RuntimeError, AssertionError, ValueError) as e:
         errors.append(traceback.format_exc())
+        results['tibial_torsion_left'] = np.nan
+        landmarks_final['tibia']['left']['knee_start'] = [0, 0, 0]
+        landmarks_final['tibia']['left']['knee_end'] = [0, 0, 0]
+        landmarks_final['tibia']['left']['ankle_start'] = [0, 0, 0]
+        landmarks_final['tibia']['left']['ankle_end'] = [0, 0, 0]
 
     errors = {'errors': errors}
 
