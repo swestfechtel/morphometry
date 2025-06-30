@@ -33,13 +33,18 @@ def compute_metrics(prediction_path: str, gt_path: str, labels: list) -> pd.Data
             pred_numpy_ = np.where(pred_numpy == label, pred_numpy, 0).astype(bool)
             ref_numpy_ = np.where(ref_numpy == label, ref_numpy, 0).astype(bool)
 
-            surface_distances = compute_surface_distances(ref_numpy_, pred_numpy_, spacing)
-            hausdorff_distance = compute_robust_hausdorff(surface_distances, 95)
-            hausdorff_distance = 0 if np.isinf(hausdorff_distance) else hausdorff_distance
-            avg_surface_distance = compute_average_surface_distance(surface_distances)
-            avg_surface_distance = (avg_surface_distance[0] + avg_surface_distance[1]) / 2
-            dice_coefficient = compute_dice_coefficient(ref_numpy_, pred_numpy_)
-            df.loc[(filename, label)] = [avg_surface_distance, hausdorff_distance, dice_coefficient]
+            try:
+
+                surface_distances = compute_surface_distances(ref_numpy_, pred_numpy_, spacing)
+                hausdorff_distance = compute_robust_hausdorff(surface_distances, 95)
+                hausdorff_distance = 0 if np.isinf(hausdorff_distance) else hausdorff_distance
+                avg_surface_distance = compute_average_surface_distance(surface_distances)
+                avg_surface_distance = (avg_surface_distance[0] + avg_surface_distance[1]) / 2
+                dice_coefficient = compute_dice_coefficient(ref_numpy_, pred_numpy_)
+                df.loc[(filename, label)] = [avg_surface_distance, hausdorff_distance, dice_coefficient]
+            except ValueError as e:
+                print(filename, e)
+                print(ref_numpy.shape, pred_numpy.shape)
 
     return df
 
@@ -54,6 +59,7 @@ if __name__ == '__main__':
 
     df = compute_metrics(args.prediction_path, args.gt_path, args.labels)
 
+    print(df)
     print(df.groupby(level='label').describe().T)
     if args.output_path:
         df.to_csv(args.output_path, index=True)

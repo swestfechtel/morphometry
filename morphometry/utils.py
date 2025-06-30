@@ -80,6 +80,26 @@ def circle_fit(mask: np.array) -> Tuple[np.array, float]:
     return np.flip(center), radius
 
 
+def circumference_points(array: np.ndarray, r: float, c: tuple, tol: float = 0.5):
+    """
+    Find indices of array that lie on the circumference of a circle.
+
+    Parameters:
+        array: 2D numpy array (shape only used)
+        r: radius of the circle
+        c: center of the circle (tuple: (row, col))
+        tol: tolerance for how close a point must be to the circumference
+
+    Returns:
+        indices: Nx2 numpy array of (row, col) indices
+    """
+    rows, cols = array.shape
+    rr, cc = np.ogrid[:rows, :cols]
+    dist = np.sqrt((rr - c[0]) ** 2 + (cc - c[1]) ** 2)
+    mask = np.abs(dist - r) <= tol
+    return np.column_stack(np.nonzero(mask))
+
+
 def combine_masks(mask1: np.ndarray, mask2: np.ndarray) -> np.ndarray:
     """
     Combine two masks.
@@ -352,17 +372,71 @@ def get_side_contour_points(mask: np.ndarray, c: int) -> Tuple[int, int]:
     return nonzero_sagittal_coordinates.min(), nonzero_sagittal_coordinates.max()
 
 
-def get_vector_through_point_perpendicular_to_line(u: np.ndarray, v: np.ndarray, p: np.ndarray) -> np.ndarray:
+def get_vector_through_point_perpendicular_to_line(u: np.ndarray, v: np.ndarray, p: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Get a vector that goes through a point p and is perpendicular to the line defined by u + lambda * v.
     https://math.stackexchange.com/questions/1398634/finding-a-perpendicular-vector-from-a-line-to-a-point
     :param u: The origin vector of the line.
     :param v: The directional vector of the line.
     :param p: The point the perpendicular vector goes through.
-    :return: A vector that goes through p and is perpendicular to the line defined by u + lambda * v.
+    :return: A vector that goes through p and is perpendicular to the line defined by u + lambda * v, and the projection of p onto the line (i.e. the start of the vector).
     """
     p_ = np.dot(np.dot((p - u), v) / np.dot(v, v), v) + u
-    return p - p_
+    return p - p_, p_
+
+
+def intersect_ndarrays(a: np.ndarray, b: np.ndarray):
+    """
+    Returns the intersecting elements of two n-dimensional arrays.
+    For 1D arrays, returns common elements.
+    For nD arrays, returns common rows (tuples of values).
+
+    :param a: First n-dimensional array.
+    :param b: Second n-dimensional array.
+    """
+    if a.ndim == 1 and b.ndim == 1:
+        return np.intersect1d(a, b)
+
+    a_ = a.reshape(-1, a.shape[-1])
+    b_ = b.reshape(-1, b.shape[-1])
+    dtype = np.dtype((np.void, a_.dtype.itemsize * a_.shape[1]))
+    a_view = np.ascontiguousarray(a_).view(dtype)
+    b_view = np.ascontiguousarray(b_).view(dtype)
+    intersected = np.intersect1d(a_view, b_view)
+    return intersected.view(a_.dtype).reshape(-1, a_.shape[1])
+
+
+def num_connected_components(x: np.ndarray) -> int:
+    """
+    Counts the number of connected components in a 2D image.
+    :param x: A 2D numpy array where each pixel is either 0 or 1.
+    :return: The number of connected components in the image.
+    """
+    visited = np.zeros_like(x, dtype=bool)
+    nrows, ncols = x.shape
+    count = 0
+
+    def neighbors(r, c):
+        # 8-connectivity: include diagonals
+        for dr, dc in [(-1,0), (1,0), (0,-1), (0,1), (-1,-1), (-1,1), (1,-1), (1,1)]:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < nrows and 0 <= nc < ncols:
+                yield nr, nc
+
+    for i in range(nrows):
+        for j in range(ncols):
+            if x[i, j] and not visited[i, j]:
+                # Start BFS/DFS
+                stack = [(i, j)]
+                visited[i, j] = True
+                while stack:
+                    r, c = stack.pop()
+                    for nr, nc in neighbors(r, c):
+                        if x[nr, nc] and not visited[nr, nc]:
+                            visited[nr, nc] = True
+                            stack.append((nr, nc))
+                count += 1
+    return count
 
 
 def num_mask_points_on_line(mask: np.ndarray, start: np.ndarray, end: np.ndarray, thresh_pt: np.ndarray = None) -> int:
@@ -589,3 +663,18 @@ def transform_point(point: np.ndarray, origin: np.ndarray, angle: float, offset:
         new_point = new_point + offset
 
     return new_point
+
+
+def extract_connected_components_2d(mask: np.ndarray) -> list:
+    """
+    Extract all connected components from a 2D binary segmentation mask.
+
+    :param mask: 2D numpy array (binary mask)
+    :return: List of 2D numpy arrays (binary masks), one per connected component
+    """
+    labeled, num = label(mask, connectivity=1, return_num=True)
+    components = []
+    for i in range(1, num + 1):
+        comp_mask = (labeled == i).astype(np.uint8)
+        components.append(comp_mask)
+    return components

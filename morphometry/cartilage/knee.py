@@ -6,6 +6,7 @@ from scipy.spatial import KDTree
 from scipy.ndimage import center_of_mass
 from sklearn.cluster import KMeans, DBSCAN
 from morphometry.image_io import Image
+from morphometry.utils import num_connected_components
 from matplotlib import pyplot as plt
 
 
@@ -714,35 +715,3 @@ def get_plate_corners(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.nd
     lower_left = np.array([left_image_boundary, lower_image_boundary])
 
     return upper_right, lower_right, upper_left, lower_left
-
-
-def num_connected_components(x: np.ndarray) -> int:
-    """
-    Counts the number of connected components in a 2D image.
-    :param x: A 2D numpy array where each pixel is either 0 or 1.
-    :return: The number of connected components in the image.
-    """
-    visited = np.zeros_like(x, dtype=bool)
-    nrows, ncols = x.shape
-    count = 0
-
-    def neighbors(r, c):
-        for dr, dc in [(-1,0), (1,0), (0,-1), (0,1)]:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < nrows and 0 <= nc < ncols:
-                yield nr, nc
-
-    for i in range(nrows):
-        for j in range(ncols):
-            if x[i, j] and not visited[i, j]:
-                # Start BFS/DFS
-                stack = [(i, j)]
-                visited[i, j] = True
-                while stack:
-                    r, c = stack.pop()
-                    for nr, nc in neighbors(r, c):
-                        if x[nr, nc] and not visited[nr, nc]:
-                            visited[nr, nc] = True
-                            stack.append((nr, nc))
-                count += 1
-    return count

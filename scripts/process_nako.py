@@ -7,7 +7,9 @@ import numpy as np
 import nibabel as nib
 
 from pathlib import Path
-from morphometry.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, calculate_alpha_angle, calculate_acetabular_depth, calculate_center_edge_angle, calculate_cartilage_thickness_knn
+from morphometry.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
+    calculate_alpha_angle, calculate_acetabular_depth, calculate_center_edge_angle, \
+    calculate_cartilage_thickness_knn, calculate_femoral_offset
 from morphometry.image_io import Segmentation
 from matplotlib import pyplot as plt
 
@@ -63,18 +65,25 @@ def f(patient):
     fig.savefig(f'/home/simon/Data/NaKo_sample/plots/anteversion/{patient.name}.png')
     plt.close(fig)
 
+    fig, ax = plt.subplots(ncols=2, figsize=(20, 10))
+
     try:
-        aa_left = calculate_alpha_angle(mask_left.array, 'left', 1, isotropic=True)
-    except Exception as e:
+        aa_left = calculate_alpha_angle(mask_left.array, 'left', 1, isotropic=True, plot=ax[0])
+    except NotImplementedError as e:
         print(f"Error calculating AA for left side of patient {patient.name}: {e}")
-        aa_left = np.nan
+        aa_left = (np.nan, np.nan)
     # calculate_alpha_angle(mask_left.array, 'left', 1, isotropic=True)
 
     try:
-        aa_right = calculate_alpha_angle(mask_right.array, 'right', 1, isotropic=True)
+        aa_right = calculate_alpha_angle(mask_right.array, 'right', 1, isotropic=True, plot=ax[1])
     except Exception as e:
         print(f"Error calculating AA for right side of patient {patient.name}: {e}")
-        aa_right = np.nan
+        aa_right = (np.nan, np.nan)
+
+    ax[0].set_title(f'Alpha angle right: {aa_left}°')
+    ax[1].set_title(f'Alpha angle left: {aa_right}°')
+    fig.savefig(f'/home/simon/Data/NaKo_sample/plots/alpha_angle/{patient.name}.png')
+    plt.close(fig)
 
     try:
         aav = calculate_acetabular_anteversion(mask.array, 1, 3, isotropic=True, plot=True,
@@ -89,16 +98,29 @@ def f(patient):
         print(f"Error calculating CEA for left side of patient {patient.name}: {e}")
         cea = [np.nan, np.nan]
 
+    try:
+        offset_left = calculate_femoral_offset(mask_left, None, 'left', 1, isotropic=True)
+    except Exception as e:
+        print(f"Error calculating femoral offset for left side of patient {patient.name}: {e}")
+        offset_left = np.nan
+
+    try:
+        offset_right = calculate_femoral_offset(mask_right, None, 'right', 1, isotropic=True)
+    except Exception as e:
+        print(f"Error calculating femoral offset for right side of patient {patient.name}: {e}")
+        offset_right = np.nan
+
     return {'patient': patient.name.split('.')[0], 'ccd_left': ccd_left, 'ccd_right': ccd_right,'fat_left': fat_left, 'fat_right': fat_right,
             'aa_left': aa_left, 'aa_right': aa_right, 'aav_left': aav[0], 'aav_right': aav[1],
-            'cea_left': cea[0], 'cea_right': cea[1]}
+            'cea_left': cea[0], 'cea_right': cea[1], 'offset_left': offset_left, 'offset_right': offset_right}
+
 
 
 if __name__ == '__main__':
     patients = [x.name.split('.')[0] for x in os.scandir('/home/simon/Data/NaKo_sample/segmentations')]
     iterables = [patients, ['right', 'left']]
     index = pd.MultiIndex.from_product(iterables, names=['Patient', 'Side'])
-    df = pd.DataFrame(columns=['CCD', 'FAT', 'AA', 'AAV', 'CEA'], index=index)
+    df = pd.DataFrame(columns=['CCD', 'AT_murphy', 'AA_anterior', 'AA_posterior', 'AAV', 'CE', 'Offset'], index=index)
     patients = [patient for patient in Path('/home/simon/Data/NaKo_sample/segmentations').iterdir() if patient.suffix == '.gz']
 
     with multiprocessing.Pool() as pool:
@@ -108,14 +130,18 @@ if __name__ == '__main__':
         patient = x['patient']
         df.loc[(patient, 'right'), 'CCD'] = round(x['ccd_left'], 1)
         df.loc[(patient, 'left'), 'CCD'] = round(x['ccd_right'], 1)
-        df.loc[(patient, 'right'), 'FAT'] = round(x['fat_left'], 1)
-        df.loc[(patient, 'left'), 'FAT'] = round(x['fat_right'], 1)
-        df.loc[(patient, 'right'), 'AA'] = round(x['aa_left'], 1)
-        df.loc[(patient, 'left'), 'AA'] = round(x['aa_right'], 1)
+        df.loc[(patient, 'right'), 'AT_murphy'] = round(x['fat_left'], 1)
+        df.loc[(patient, 'left'), 'AT_murphy'] = round(x['fat_right'], 1)
+        df.loc[(patient, 'right'), 'AA_anterior'] = round(x['aa_left'][0], 1)
+        df.loc[(patient, 'left'), 'AA_anterior'] = round(x['aa_right'][0], 1)
+        df.loc[(patient, 'left'), 'AA_posterior'] = round(x['aa_right'][1], 1)
+        df.loc[(patient, 'right'), 'AA_posterior'] = round(x['aa_left'][1], 1)
         df.loc[(patient, 'right'), 'AAV'] = round(x['aav_left'], 1)
         df.loc[(patient, 'left'), 'AAV'] = round(x['aav_right'], 1)
-        df.loc[(patient, 'right'), 'CEA'] = round(x['cea_left'], 1)
-        df.loc[(patient, 'left'), 'CEA'] = round(x['cea_right'], 1)
+        df.loc[(patient, 'right'), 'CE'] = round(x['cea_left'], 1)
+        df.loc[(patient, 'left'), 'CE'] = round(x['cea_right'], 1)
+        df.loc[(patient, 'right'), 'Offset'] = round(x['offset_left'], 1)
+        df.loc[(patient, 'left'), 'Offset'] = round(x['offset_right'], 1)
 
     print(df)
     df.to_excel('/home/simon/Data/NaKo_sample/eval.xlsx')

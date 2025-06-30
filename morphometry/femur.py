@@ -8,7 +8,7 @@ from skimage.measure import find_contours
 from morphometry.hip import get_femoral_head_center
 from morphometry.knee import get_knee_reference_line
 from morphometry.utils import rotate_mask_dorsal_points, find_notch, transform_point, points_on_circle, \
-    get_contour, calculate_angle_between_vectors, circle_fit, draw_circle, draw_line
+    get_contour, calculate_angle_between_vectors, circle_fit, draw_circle, draw_line, extract_connected_components_2d
 from morphometry.image_io import Image
 from typing import Tuple
 
@@ -230,37 +230,24 @@ def get_trochanter_major(hip_image: Image, femoral_head_centre: np.ndarray, segm
     return np.array([trochanter_major[0], trochanter_major[1], trochanter_major_layer])
 
 
-def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1) -> np.ndarray:
+def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, side: str = 'left', segmentation_label: int = 1) -> np.ndarray:
     """
     Find the trochanter minor.
 
     :param hip_image: An Image object of the hip segmentation mask.
     :param femoral_head_centre: The centre of the femoral head.
+    :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the segmentation mask.
     :return: The coordinates of the trochanter minor.
     """
-    spacing = hip_image.get_spacing()
-    trochanter_major = get_trochanter_major(hip_image, femoral_head_centre, segmentation_label)
-    trochanter_major_layer = int(trochanter_major[2])
 
-    inferior_mask = hip_image.array.copy()
-    inferior_mask = np.where(inferior_mask == segmentation_label, 1, 0)  # convert to binary mask
-    inferior_mask[:, :, :trochanter_major_layer] = 0  # null everything superior to the trochanter major
-
-    medial_extents = np.zeros(inferior_mask.shape[2])
-    for i in range(inferior_mask.shape[2]):
-        if np.count_nonzero(inferior_mask[:, :, i]):
-            medial_extents[i] = np.argwhere(inferior_mask[:, :, i])[:, 0].max()
-        else:
-            medial_extents[i] = 0
-
-    def check_plausibility() -> bool:
+    def check_plausibility(trochanter_minor) -> bool:
         """
         Check if the trochanter minor on the given layer is plausible.
 
         :return: Whether the trochanter minor is plausible.
         """
-        tm = (int(trochanter_minor[0]), int(trochanter_minor[1]), trochanter_minor_layer)
+        tm = (int(trochanter_minor[0]), int(trochanter_minor[1]), int(trochanter_minor[2]))
         fh = (int(femoral_head_centre[0]), int(femoral_head_centre[1]), int(femoral_head_centre[2]))
 
         tm_world = hip_image.transform_index_to_physical_point(tm)
@@ -272,26 +259,39 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, segm
 
         return True if distance_world > 43 else False
 
-    trochanter_minor_layer = np.argmax(medial_extents)
+    hip_mask = hip_image.array.copy()
+    hip_mask = np.where(hip_mask == segmentation_label, 1, 0)  # convert to binary mask
 
-    while True:
-        # on that layer, get the most medial point, which should be the trochanter minor
-        try:
-            trochanter_minor_s = np.argwhere(inferior_mask[:, :, trochanter_minor_layer])[:, 0].max()  # get the maximum sagittal coordinate, i.e. most medial extent of this slice
-            trochanter_minor_c = np.median(np.argwhere(inferior_mask[trochanter_minor_s, :,
-                                                       trochanter_minor_layer]))  # select all points with the same sagittal coordinate and get the median coronal coordinate
-            trochanter_minor = np.array([trochanter_minor_s, trochanter_minor_c])
-        except (IndexError, ValueError):
-            print(trochanter_minor_layer, np.argwhere(inferior_mask[:, :, trochanter_minor_layer]), np.unique(inferior_mask[:, :, trochanter_minor_layer]))
-            raise RuntimeError('Could not find a plausible trochanter minor.')
+    # start, stop, step = (hip_mask.shape[0], 0, -1) if side == 'right' else (0, hip_mask.shape[0], 1)
+    start, stop, step = (hip_mask.shape[0] - 1, -1, -1)
+    for layer in range(start, stop, step):
+        connected_components = extract_connected_components_2d(hip_mask[layer])
+        if len(connected_components) == 2:
+            if (np.count_nonzero(connected_components[0]) < 10) or (np.count_nonzero(connected_components[1]) < 10):
+                continue
 
-        if check_plausibility():
+            com_1 = center_of_mass(connected_components[0])
+            com_2 = center_of_mass(connected_components[1])
+
+            candidate_1 = np.array([layer, com_1[0], com_1[1]])
+            candidate_2 = np.array([layer, com_2[0], com_2[1]])
+
+            if not check_plausibility(candidate_1) and not check_plausibility(candidate_2):
+                continue
+
             break
+    else:
+        raise RuntimeError('Could not find a plausible trochanter minor.')
 
-        # if the trochanter minor is not plausible, continue with the next layer
-        trochanter_minor_layer += 1
+    smaller_component = min(connected_components, key=lambda x: np.count_nonzero(x))
+    #plt.imshow(hip_mask[layer])
+    #plt.show()
+    #plt.close()
+    com = center_of_mass(smaller_component)
+    axial_layer = int(com[1])
+    axial_layer_com = center_of_mass(hip_mask[:, :, axial_layer])
 
-    return np.array([trochanter_minor[0], trochanter_minor[1], trochanter_minor_layer])
+    return np.array([axial_layer_com[0], axial_layer_com[0], axial_layer])
 
 
 def get_femoral_neck_base(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1) -> np.ndarray:
