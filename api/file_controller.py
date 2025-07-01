@@ -318,10 +318,10 @@ class FileController(object):
                 metadata = Image.read_dicom_metadata(temp_dir)
             else:
                 metadata = pydicom.Dataset()
-            metadata[0x0008, 0x0020] = pydicom.DataElement(0x00080020, 'LO', '20250101')  # dummy study date
-            metadata[0x0008, 0x0030] = pydicom.DataElement(0x00080030, 'LO', '120000')  # dummy study time
-            metadata[0x0008, 0x1030] = pydicom.DataElement(0x00081030, 'LO', 'Dummy Study Description')
-            metadata[0x0008, 0x0050] = pydicom.DataElement(0x00080050, 'LO', ''.join(random.choices(string.ascii_uppercase + string.digits, k=10)))  # dummy accession number
+                metadata[0x0008, 0x0020] = pydicom.DataElement(0x00080020, 'LO', '20250101')  # dummy study date
+                metadata[0x0008, 0x0030] = pydicom.DataElement(0x00080030, 'LO', '120000')  # dummy study time
+                metadata[0x0008, 0x1030] = pydicom.DataElement(0x00081030, 'LO', 'Dummy Study Description')
+                metadata[0x0008, 0x0050] = pydicom.DataElement(0x00080050, 'LO', ''.join(random.choices(string.ascii_uppercase + string.digits, k=10)))  # dummy accession number
 
             examination = Examination(identifier=None, metadata=metadata)
 
