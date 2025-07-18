@@ -257,7 +257,14 @@ class FileController(object):
             return False
 
     @staticmethod
-    def save_upload_file(upload_file: UploadFile | bytes, destination: Path) -> None:
+    def save_upload_file(upload_file: UploadFile | bytes, destination: Path, rename: bool = False) -> None:
+        """
+        Save an uploaded file to the specified destination.
+        :param upload_file: The uploaded file, either as an UploadFile object or as bytes.
+        :param destination: The destination path where the file should be saved.
+        :param rename: Whether to change the filename to its instance number.
+        :return:
+        """
         if type(upload_file) == bytes:
             with destination.open("wb") as buffer:
                 buffer.write(upload_file)
@@ -268,6 +275,11 @@ class FileController(object):
                     shutil.copyfileobj(upload_file.file, buffer)
             finally:
                 upload_file.file.close()
+
+        if rename:
+            ds = pydicom.dcmread(destination)
+            instance_number = ds.InstanceNumber
+            shutil.move(destination, destination.parent / f"{instance_number}.dcm")  # rename the file to its instance number
 
     def save_files(self, files: list[UploadFile | bytes], origin: str, type: str) -> Examination | bool:
         """
@@ -283,32 +295,11 @@ class FileController(object):
         with (tempfile.TemporaryDirectory(dir=f'{workdir}/uploads/') as temp_dir):
             for i, file in enumerate(files):  # have to re-order layers because pacs export has dumb file naming scheme
                 if origin == 'ui':  # if files were sent via the ui
-                    if type == 'torsion':
-                        dicom_file = re.compile(r'I\d+')
-                        digits = re.compile(r'[1-9]')
-                        double_digits = re.compile(re.compile(r'[1-9]{2}'))
-                        single_digits = re.compile(r'I[1-9]0+$')
-                        multiples_of_ten = re.compile(r'I[1-9]0+1')  # TODO this will likely fail if number of files > 99
+                    filename = file.filename.split('/')[-1]
+                    if filename == 'VERSION':
+                        continue
 
-                        filename = file.filename.split('/')[-1]
-
-                        if re.match(dicom_file, filename) is None:
-                            self.logger.debug(f'Could not match {filename}')
-                            continue  # filter out files we do not want, e.g. VERSION files
-
-                        if re.match(single_digits, filename):  # layers no.s 1-9
-                            number = re.search(digits, filename)[0]
-                            self.save_upload_file(file, Path(f'{temp_dir}/I00{number}'))
-
-                        elif re.match(multiples_of_ten, filename):  # layers no.s 10, 20, 30, ...
-                            number = re.search(digits, filename)[0]
-                            self.save_upload_file(file, Path(f'{temp_dir}/I0{number}0'))
-
-                        else:  # everything else, e.g. 11-19, 21-29, ...
-                            number = re.search(double_digits, filename)[0]
-                            self.save_upload_file(file, Path(f'{temp_dir}/I0{number}'))
-                    elif type == 'x_ray_foot_ap':
-                        self.save_upload_file(file, Path(f'{temp_dir}/{file.filename.split("/")[-1]}'))
+                    self.save_upload_file(file, Path(f'{temp_dir}/{file.filename.split("/")[-1]}'), rename=(type=='torsion'))
 
                 elif origin == 'orthanc':  # if files were sent from orthanc, they are already in the correct order
                     self.save_upload_file(file, Path(f'{temp_dir}/{i}.dcm'))  # so just save them as is
@@ -316,6 +307,9 @@ class FileController(object):
             self.logger.debug(f'Saved {len([f for f in os.listdir(temp_dir)])} files to {temp_dir}.')
             if type != 'x_ray_foot_ap':
                 metadata = Image.read_dicom_metadata(temp_dir)
+                if metadata.AccessionNumber == '':
+                    self.logger.warning(f'Accession number not found in metadata for {temp_dir}. Using dummy values.')
+                    metadata.AccessionNumber = ''.join(random.choices(string.ascii_uppercase + string.digits, k=10))
             else:
                 metadata = pydicom.Dataset()
                 metadata[0x0008, 0x0020] = pydicom.DataElement(0x00080020, 'LO', '20250101')  # dummy study date

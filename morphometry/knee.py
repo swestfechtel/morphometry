@@ -59,13 +59,17 @@ def get_knee_reference_line(mask: np.ndarray, bone: str, thresh: int = 2, step_s
         percentage = 0.5
         notch_threshold = 2
 
-    notch = find_notch(mask_layer, percentage=percentage, thresh=notch_threshold).astype(np.int16)
+    notch = find_notch(mask_layer, percentage=percentage, thresh=notch_threshold)
+    if notch is not None:
+        notch = notch.astype(np.int16)
 
-    if notch[1] is None:
+    if notch is None:
         rotated_mask, ang1 = rotate_tibia(mask_layer)
         rot_thresh = find_notch(rotated_mask, percentage=percentage, thresh=2)
-        if rot_thresh[1] is None:
+        if rot_thresh is None:
             rot_thresh = np.array(center_of_mass(rotated_mask)).astype(np.int16)
+        else:
+            rot_thresh = rot_thresh.astype(np.int16)
         rotated_mask, ang2 = rotate_mask_dorsal_points(
             rotated_mask, rot_thresh)
         angle = ang1 + ang2
@@ -82,7 +86,7 @@ def get_knee_reference_line(mask: np.ndarray, bone: str, thresh: int = 2, step_s
         (rotated_mask.shape[0] - 1) / 2), int((rotated_mask.shape[1] - 1) / 2)])
 
     # notch found
-    if notch[0] is not None:
+    if notch is not None:
         # transform notch in coordinate frame of rotated image
         notch_rot = transform_point(notch, np.array([int(
             (mask_layer.shape[0] - 1) / 2), int((mask_layer.shape[1] - 1) / 2)]),
@@ -90,6 +94,8 @@ def get_knee_reference_line(mask: np.ndarray, bone: str, thresh: int = 2, step_s
                                     offset=rot_offset / 2)
     # rotated notch found
     else:
+        if notch_rot is None:
+            raise RuntimeError('No notch found.')
         # transform rotated notch back in original coordinate frame
         notch = transform_point(notch_rot,
                                 rot_center,

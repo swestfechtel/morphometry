@@ -105,14 +105,16 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
     if proximal_angle > 90:
         proximal_angle = 180 - proximal_angle
 
-    proximal_orientation = knee_end[1] - knee_start[1]
+    proximal_orientation = (knee_end[1] - knee_start[1]) if side == 'left' else (knee_start[1] - knee_end[1])  # positive if knee_end is posterior to knee_start
 
+    """
     if side == 'left':
         if proximal_orientation < 0:  # lateral condyle is anterior to medial condyle
             proximal_angle = -proximal_angle
     else:
         if proximal_orientation > 0:  # lateral condyle is anterior to medial condyle
             proximal_angle = -proximal_angle
+    """
 
 
     # get distal reference line
@@ -125,10 +127,15 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
         distal_angle = 180 - distal_angle
 
     distal_orientation = ankle_end[1] - ankle_start[1]
+    """
     if distal_orientation < 0:  # fibula is anterior to tibia
         distal_angle = -distal_angle
+    """
 
-    angle = distal_angle - proximal_angle
+    if np.sign(proximal_orientation) != np.sign(distal_orientation):  # add angles
+        angle = distal_angle + proximal_angle
+    else:
+        angle = distal_angle - proximal_angle
 
     if not return_landmarks and not plot:
         return angle

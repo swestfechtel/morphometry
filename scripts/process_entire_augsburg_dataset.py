@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import nibabel as nib
 import traceback
+import pyvista as pv
 from pathlib import Path
 from morphometry.femur import calculate_femoral_torsion
 from morphometry.tibia import calculate_tibial_torsion
@@ -71,7 +72,7 @@ def process_patient(patient):
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate femoral torsion (lee) for the left side.', e)
-        print(traceback.format_exc())
+        # print(traceback.format_exc())
         at_lee_left = np.nan
 
     try:
@@ -80,7 +81,7 @@ def process_patient(patient):
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate femoral torsion (lee) for the right side.', e)
-        print(traceback.format_exc())
+        # print(traceback.format_exc())
         at_lee_right = np.nan
 
     try:
@@ -90,7 +91,7 @@ def process_patient(patient):
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate femoral torsion (murphy) for the left side.', e)
-        print(traceback.format_exc())
+        # print(traceback.format_exc())
         at_murphy_left = np.nan
 
     try:
@@ -100,7 +101,7 @@ def process_patient(patient):
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate femoral torsion (murphy) for the right side.', e)
-        print(traceback.format_exc())
+        # print(traceback.format_exc())
         at_murphy_right = np.nan
 
     try:
@@ -123,26 +124,35 @@ def process_patient(patient):
         print(patient, f'Failed to calculate tibial torsion for the right side.', e)
         tt_right = np.nan
 
-    fig, ax = plt.subplots(ncols=2, figsize=(20, 10))
+    # fig, ax = plt.subplots(ncols=2, figsize=(20, 10))
+    p = pv.Plotter(off_screen=True)
 
     try:
-        ccd_left_actual, ccd_left_projected = calculate_ccd(left_hip, left_knee, 'left', 1, False, x_ratio, plot=ax[0])
+        ccd_left_actual, ccd_left_projected = calculate_ccd(left_hip, left_knee, 'left', 1, False, x_ratio, plot=p)
         ccd_left = (ccd_left_actual, ccd_left_projected)
-    except (ValueError, IndexError, RuntimeError) as e:
+    except (NotImplementedError) as e:
         print(patient, f'Failed to calculate CCD for the left side.', e)
         ccd_left = (np.nan, np.nan)
 
     try:
-        ccd_left_actual, ccd_left_projected = calculate_ccd(right_hip, right_knee, 'right', 1, False, x_ratio, plot=ax[1])
+        ccd_left_actual, ccd_left_projected = calculate_ccd(right_hip, right_knee, 'right', 1, False, x_ratio, plot=p)
         ccd_right = (ccd_left_actual, ccd_left_projected)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate CCD for the right side.', e)
         ccd_right = (np.nan, np.nan)
 
+    """
     ax[0].set_title(f'CCD right: {ccd_left[0]:.1f}°')
     ax[1].set_title(f'CCD left: {ccd_right[0]:.1f}°')
     fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/ccd/{patient}_ccd.png')
     plt.close(fig)
+    """
+    p.add_text(f'CCD right: {ccd_left[0]:.1f}°', position='upper_left', font_size=20, color='black')
+    p.add_text(f'CCD left: {ccd_right[0]:.1f}°', position='upper_right', font_size=20, color='black')
+    # p.save_graphic(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/ccd/{patient}_ccd.png')
+    p.export_html(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/ccd/{patient}_ccd.html')
+    p.screenshot(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/ccd/{patient}_ccd.png')
+    p.close()
 
     try:
         kra_left, fig = calculate_knee_rotation_angle(left_knee.array, 1, 2, 'left', True)

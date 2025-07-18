@@ -30,11 +30,11 @@ if __name__ == '__main__':
     ankle.read_image(args.ankle_mask)
     ankle.transform_coordinate_system()
 
-    x_ratio = abs(hip.get_spacing()[2]) / 2 * abs(hip.get_spacing()[0])
+    x_ratio = abs(hip.spacing[2]) / 2 * abs(hip.spacing[0])
 
-    hip_mask = hip.get_array()
-    knee_mask = knee.get_array()
-    ankle_mask = ankle.get_array()
+    hip_mask = hip.array
+    knee_mask = knee.array
+    ankle_mask = ankle.array
 
     left_hip = hip_mask[:hip_mask.shape[0] // 2]  # wtf, the sagittal axis seems to be flipped with the new coordinate system??
     right_hip = hip_mask[hip_mask.shape[0] // 2:]
@@ -43,9 +43,9 @@ if __name__ == '__main__':
     left_ankle = ankle_mask[:ankle_mask.shape[0] // 2]
     right_ankle = ankle_mask[ankle_mask.shape[0] // 2:]
 
-    left_hip = nib.Nifti1Image(left_hip, hip.get_affine(), hip.get_header())
+    left_hip = nib.Nifti1Image(left_hip, hip.affine, hip.header)
     left_hip = Image.from_nibabel(left_hip)
-    right_hip = nib.Nifti1Image(right_hip, hip.get_affine(), hip.get_header())
+    right_hip = nib.Nifti1Image(right_hip, hip.affine, hip.header)
     right_hip = Image.from_nibabel(right_hip)
 
     if args.plot:

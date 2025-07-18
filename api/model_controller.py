@@ -82,7 +82,7 @@ class TorsionModelJob(ModelJob):
                 '--runtime=nvidia',
                 '--gpus', 'all',
                 '--shm-size', '32G',
-                '--user', f'{os.getuid()}:{os.getgid()}',
+                # '--user', f'{os.getuid()}:{os.getgid()}',
                 '--group-add', 'root',
                 '-v', f'{tempdir}:/app/mnt:rw,Z',
                 'swestfechtel/nnunet_torsion:latest'
@@ -99,20 +99,21 @@ class TorsionModelJob(ModelJob):
                 raise RuntimeError(f"Segmentation job failed for {examination.identifier} with exit code {proc.returncode}.")
 
             self.logger.info(f"Container exited with code {proc.returncode}.")
+            self.logger.debug(f'Container logs: {proc.stdout.decode("utf-8")}')
 
             tmp = nib.load(tempdir + '/hip/output/hip.nii.gz')
             tmp = Segmentation.from_nibabel(tmp)
-            tmp.transform_coordinate_system()
+            tmp.transform_coordinate_system(flip=False)
             examination.hip_mask = tmp
 
             tmp = nib.load(tempdir + '/knee/output/knee.nii.gz')
             tmp = Segmentation.from_nibabel(tmp)
-            tmp.transform_coordinate_system()
+            tmp.transform_coordinate_system(flip=False)
             examination.knee_mask = tmp
 
             tmp = nib.load(tempdir + '/ankle/output/ankle.nii.gz')
             tmp = Segmentation.from_nibabel(tmp)
-            tmp.transform_coordinate_system()
+            tmp.transform_coordinate_system(flip=False)
             examination.ankle_mask = tmp
 
         examination.encode_images()
@@ -135,6 +136,7 @@ class TorsionModelJob(ModelJob):
         self.identifier = examination.identifier
 
         with tempfile.TemporaryDirectory() as tempdir:
+            self.logger.debug(tempdir)
             examination.hip_mask.save_image(tempdir + '/hip_segmentation.nii.gz')
             examination.knee_mask.save_image(tempdir + '/knee_segmentation.nii.gz')
             examination.ankle_mask.save_image(tempdir + '/ankle_segmentation.nii.gz')

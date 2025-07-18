@@ -46,13 +46,13 @@ def calculate_mikulicz_deviation(hip_image: Image, knee_image: Image, ankle_imag
     :return: The deviation of the center of the knee from the Mikulicz line.
     """
     # prepare masks
-    hip_mask = np.where(hip_image.get_array() == proximal_femur_label, 1, 0)
+    hip_mask = np.where(hip_image.array == proximal_femur_label, 1, 0)
 
-    knee_mask = np.where(knee_image.get_array() == distal_femur_label, 1, knee_image.get_array())  # set distal femur to 1
+    knee_mask = np.where(knee_image.array == distal_femur_label, 1, knee_image.array)  # set distal femur to 1
     knee_mask = np.where(knee_mask == proximal_tibia_label, 1, knee_mask)  # set proximal tibia to 1
     knee_mask = np.where(knee_mask == 1, 1, 0)  # null everything else
 
-    ankle_mask = np.where(ankle_image.get_array() == distal_tibia_label, 1, ankle_image.get_array())  # set distal tibia to 1
+    ankle_mask = np.where(ankle_image.array == distal_tibia_label, 1, ankle_image.array)  # set distal tibia to 1
     ankle_mask = np.where(ankle_mask == distal_fibula_label, 1, ankle_mask)  # set distal fibula to 1
     ankle_mask = np.where(ankle_mask == 1, 1, 0)  # null everything else
 
@@ -101,13 +101,13 @@ def calculate_bone_length(proximal_image: Image, distal_image: Image) -> floatin
     :param distal_image: An Image object of the distal segmentation mask.
     :return: The length of the bone.
     """
-    most_proximal_layer = np.min(np.argwhere(proximal_image.get_array())[:, 0])
-    most_distal_layer = np.max(np.argwhere(distal_image.get_array())[:, 0])
+    most_proximal_layer = np.min(np.argwhere(proximal_image.array)[:, 0])
+    most_distal_layer = np.max(np.argwhere(distal_image.array)[:, 0])
 
-    proximal_layer_centroid = center_of_mass(proximal_image.get_array()[most_proximal_layer])
+    proximal_layer_centroid = center_of_mass(proximal_image.array[most_proximal_layer])
     proximal_layer_centroid = (most_proximal_layer, proximal_layer_centroid[0], proximal_layer_centroid[1])
 
-    distal_layer_centroid = center_of_mass(distal_image.get_array()[most_distal_layer])
+    distal_layer_centroid = center_of_mass(distal_image.array[most_distal_layer])
     distal_layer_centroid = (most_distal_layer, distal_layer_centroid[0], distal_layer_centroid[1])
 
     proximal_world = proximal_image.transform_index_to_physical_point(proximal_layer_centroid)

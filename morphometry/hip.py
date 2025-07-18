@@ -6,7 +6,8 @@ import pyvista as pv
 from morphometry.utils import sphere_fit, get_contour_points, calculate_angle_between_vectors, \
     calculate_min_distance_between_point_clouds, get_vector_through_point_perpendicular_to_line, \
     get_minimum_distance_between_line_and_point, get_contour_points, num_connected_components, \
-    extract_connected_components_2d, circumference_points, intersect_ndarrays
+    extract_connected_components_2d, circumference_points, intersect_ndarrays, \
+    sort_points_clockwise, sort_points_by_x, fit_circle_to_points
 from morphometry.image_io import Image
 
 from scipy.ndimage import center_of_mass, label, rotate
@@ -186,26 +187,6 @@ def get_femoral_shaft_axis(hip_mask: np.ndarray, knee_mask: np.ndarray = None, f
     com_low_hip = center_of_mass(hip_mask[:, :, layer_low_hip])
     com_low_hip = (int(com_low_hip[0]), int(com_low_hip[1]), layer_low_hip)
 
-    # find the most proximal layer of the greater trochanter, which will serve as the high point of the femoral shaft axis
-    connected_components = list()
-
-    for layer in range(hip_mask.shape[2]):
-        connected_components = extract_connected_components_2d(hip_mask[:, :, layer])
-        if len(connected_components) == 2:
-            if (np.count_nonzero(connected_components[0]) < 10) or (np.count_nonzero(connected_components[1]) < 10):  # avoid small components that belong to the femoral head
-                continue
-
-            break
-    else:
-        raise RuntimeError('Tip of greater trochanter not found in segmentation mask')
-
-    layer_high_hip = layer  # the layer with two connected components is the one we want
-    # get the center of mass of the smaller component
-    smaller_component = min(connected_components, key=lambda x: np.count_nonzero(x))
-    com_high_hip = center_of_mass(smaller_component)
-
-    com_high_hip = (int(com_high_hip[0]), int(com_high_hip[1]), layer_high_hip)
-
     if knee_mask is not None:
         knee_mask = np.where(knee_mask == femur_label, 1, 0)
         point_cloud_knee = np.argwhere(knee_mask)
@@ -214,12 +195,43 @@ def get_femoral_shaft_axis(hip_mask: np.ndarray, knee_mask: np.ndarray = None, f
         com_high_knee = center_of_mass(knee_mask[:, :, layer_high_knee])
         com_high_knee = (int(com_high_knee[0]), int(com_high_knee[1]), layer_high_knee)
 
-        return np.array(com_high_knee), np.array(com_high_hip)
+        return np.array(com_high_knee), np.array(com_low_hip)
+
+    # find the most proximal layer of the greater trochanter, which will serve as the high point of the femoral shaft axis
+    connected_components = list()
+
+    two_components_found = False
+    components_large_enough = False
+    for layer in range(hip_mask.shape[2]):
+        connected_components = extract_connected_components_2d(hip_mask[:, :, layer])
+        if len(connected_components) == 2:
+            two_components_found = True
+
+            if isotropic and (np.count_nonzero(connected_components[0]) < 10 or np.count_nonzero(connected_components[1]) < 10):  # avoid small components that belong to the femoral head
+                continue
+
+            components_large_enough = True
+
+            break
+    else:
+        if not two_components_found:
+            raise RuntimeError('No two connected components found in segmentation mask')
+        elif not components_large_enough:
+            raise RuntimeError('Connected components are too small in segmentation mask')
+        else:
+            raise RuntimeError('Tip of greater trochanter not found in segmentation mask')
+
+    layer_high_hip = layer  # the layer with two connected components is the one we want
+    # get the center of mass of the smaller component
+    smaller_component = min(connected_components, key=lambda x: np.count_nonzero(x))
+    com_high_hip = center_of_mass(smaller_component)
+
+    com_high_hip = (int(com_high_hip[0]), int(com_high_hip[1]), layer_high_hip)
 
     return np.array(com_low_hip), np.array(com_high_hip)  # return the two points as the femoral shaft axis
 
 
-def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1., debug: bool = False, plot: plt.Axes = None) -> Tuple[float, float] | Tuple[float, float, plt.Figure]:
+def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1., debug: bool = False, plot: plt.Axes | pv.Plotter = None) -> Tuple[float, float] | Tuple[float, float, plt.Figure]:
     """
     Calculate the CCD angle from the femoral head center, femoral neck axis and femoral shaft axis.
     :param hip_image: A segmentation mask of the proximal femur.
@@ -235,11 +247,11 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
-    hip_mask = hip_image.get_array()
+    hip_mask = hip_image.array
     r, femoral_head_center = get_femoral_head_center(hip_mask, side=side, segmentation_label=segmentation_label, x_ratio=x_ratio, isotropic=isotropic)
     femoral_neck_points, femoral_neck_center = get_femoral_neck_center(hip_mask, (r, femoral_head_center), side=side, segmentation_label=segmentation_label, x_ratio=x_ratio)
 
-    knee_mask = knee_image.get_array() if knee_image else None
+    knee_mask = knee_image.array if knee_image else None
 
     shaft_axis_low, shaft_axis_high = get_femoral_shaft_axis(hip_mask, knee_mask, femur_label=segmentation_label,
                                                              isotropic=isotropic)
@@ -282,17 +294,52 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
 
     if plot:
         if knee_image is not None:
-            plot.imshow(hip_mask[:, int(femoral_head_center_orig[1]), :].T)
+            """
+            # plot.imshow(hip_mask[:, int(femoral_head_center_orig[1]), :].T)
+            comb = np.concatenate((hip_mask, knee_mask), axis=2)
+            plt.imshow(comb[:, int(femoral_head_center_orig[1]), :].T)
             plot.plot([femoral_head_center_orig[0], femoral_neck_center_orig[0]], [femoral_head_center_orig[2], femoral_neck_center_orig[2]],
                     'r-')
-            # ax.plot([shaft_axis_high_orig[0], shaft_axis_low_orig[0]], [shaft_axis_high_orig[2], shaft_axis_low_orig[2]], 'g-')
+            plot.plot([shaft_axis_high_orig[0], shaft_axis_low_orig[0]], [shaft_axis_high_orig[2] + hip_mask.shape[2], shaft_axis_low_orig[2] + hip_mask.shape[2]], 'g-')
+            """
+
+            proximal_femur_coords = np.argwhere(hip_mask == segmentation_label).astype(object)
+            distal_femur_coords = np.argwhere(knee_mask == segmentation_label).astype(object)
+
+            # print(proximal_femur_coords[0], hip_image.transform_index_to_physical_point(proximal_femur_coords[0]))
+
+            # proximal_femur_coords = np.vectorize(hip_image.transform_index_to_physical_point)(proximal_femur_coords)
+            # distal_femur_coords = np.vectorize(knee_image.transform_index_to_physical_point)(distal_femur_coords)
+            for i, coord in enumerate(proximal_femur_coords):
+                proximal_femur_coords[i] = hip_image.transform_index_to_physical_point(coord)
+                if side == 'right':
+                    proximal_femur_coords[i, 0] += hip_mask.shape[0]  # adjust for right side
+
+            for i, coord in enumerate(distal_femur_coords):
+                distal_femur_coords[i] = knee_image.transform_index_to_physical_point(coord)
+                if side == 'right':
+                    distal_femur_coords[i, 0] += knee_mask.shape[0]
+
+            if side == 'right':
+                femoral_head_center[0] += hip_mask.shape[0]  # adjust for right side
+                femoral_neck_center[0] += hip_mask.shape[0]
+                shaft_axis_high[0] += hip_mask.shape[0]
+                shaft_axis_low[0] += hip_mask.shape[0]
+
+            plot.add_mesh(pv.PolyData(proximal_femur_coords.astype(np.float32)), color='g', opacity=.5)
+            plot.add_mesh(pv.PolyData(distal_femur_coords.astype(np.float32)), color='b', opacity=.5)
+            plot.add_lines(np.array([femoral_head_center, femoral_neck_center + neck_vector * 2]), color='r')
+            plot.add_lines(np.array([shaft_axis_high + shaft_vector * .5, shaft_axis_low]), color='r')
+            plot.camera.azimuth = 45
+            plot.camera.elevation = -25
+
         else:
             plot.imshow(hip_mask[:, int(femoral_head_center[1]), :].T)
             plot.plot([shaft_axis_high[0], shaft_axis_low[0]], [shaft_axis_high[2], shaft_axis_low[2]], 'g-')
             plot.plot([femoral_head_center[0], femoral_neck_center[0]], [femoral_head_center[2], femoral_neck_center[2]],
                     'r-')
 
-        plot.set_aspect(x_ratio)
+            plot.set_aspect(x_ratio)
 
     return ccd, projected_ccd
 
@@ -422,37 +469,44 @@ def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', seg
     coords = np.argwhere(tmp == 1)
     femoral_neck_center_rotated = np.array([np.round(np.mean(coords[:, 0])), np.round(np.mean(coords[:, 1])), np.round(np.mean(coords[:, 2]))], dtype=np.int16)
 
-    # incrementally increase the radius of the femoral head circle until it intersects with the femur only once
-    # i.e. the circle only intersects with the femoral neck
-    r_ = r
-    i, max_iter = 0, 1000
-    while True:
-        r_ += .1
+    femur = np.where(rotated_image == 1, 1, 0)
+    contour_points = get_contour_points(femur[:, :, femoral_head_center_rotated[2]])
 
-        circle_points = circumference_points(rotated_image[:, :, femoral_head_center_rotated[2]], r=r_, c=femoral_head_center_rotated[:2])
-        femur_points = np.argwhere(rotated_image[:, :, femoral_head_center_rotated[2]] == segmentation_label)
-        intersection = intersect_ndarrays(circle_points, femur_points)
+    anterior_contour = contour_points[contour_points[:, 1] < femoral_head_center_rotated[1]]
+    posterior_contour = contour_points[contour_points[:, 1] > femoral_head_center_rotated[1]]
 
-        tmp = np.zeros_like(rotated_image[:, :, femoral_head_center_rotated[2]])
-        tmp[intersection[:, 0], intersection[:, 1]] = 1
+    anterior_points_sorted = sort_points_clockwise(anterior_contour, femoral_head_center_rotated[:2])
+    posterior_points_sorted = sort_points_clockwise(posterior_contour, femoral_head_center_rotated[:2], counter_clockwise=True)
 
-        if num_connected_components(tmp) == 1:
+    anterior_points_sorted = sort_points_by_x(anterior_points_sorted, descending=True)
+    posterior_points_sorted = sort_points_by_x(posterior_points_sorted, descending=True)
+
+    tol = 2
+    tmp = contour_points[contour_points[:, 0] > femoral_head_center_rotated[0] - r]
+
+    center, radius = fit_circle_to_points(tmp)
+
+    anterior_point = np.array([0, 0])
+    posterior_point = np.array([0, 0])
+
+    for p in anterior_points_sorted:
+        d = np.linalg.norm(p - center)
+        if d > radius + tol:
+            anterior_point = p
             break
 
-        i += 1
+    for p in posterior_points_sorted:
+        d = np.linalg.norm(p - center)
+        if d > radius + tol:
+            posterior_point = p
+            break
 
-        if i > max_iter:
-            raise RuntimeError('Maximum number of iterations reached.')
+    neck_axis_rotated = femoral_neck_center_rotated[:2] - center
+    anterior_axis = anterior_point - center
+    posterior_axis = posterior_point - center
 
-    anterior_point = intersection[intersection[:, 1].argmin()]
-    posterior_point = intersection[intersection[:, 1].argmax()]
-
-    anterior_axis = anterior_point - femoral_head_center_rotated[:2]
-    posterior_axis = posterior_point - femoral_head_center_rotated[:2]
-    neck_axis = femoral_neck_center_rotated[:2] - femoral_head_center_rotated[:2]
-
-    anterior_angle = calculate_angle_between_vectors(anterior_axis, neck_axis)
-    posterior_angle = calculate_angle_between_vectors(posterior_axis, neck_axis)
+    anterior_angle = calculate_angle_between_vectors(neck_axis_rotated.astype('float32'), anterior_axis.astype('float32'))
+    posterior_angle = calculate_angle_between_vectors(neck_axis_rotated.astype('float32'), posterior_axis.astype('float32'))
 
     if plot is not None:
         if side == 'right':
@@ -461,11 +515,16 @@ def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', seg
             femoral_neck_center_rotated = np.array([rotated_image.shape[0], 0, 0]) - femoral_neck_center_rotated * np.array([1, -1, -1])  # adjust for flipping
             anterior_point = np.array([rotated_image.shape[0], 0]) - anterior_point * np.array([1, -1])  # adjust for flipping
             posterior_point = np.array([rotated_image.shape[0], 0]) - posterior_point * np.array([1, -1])  # adjust for flipping
+            center = np.array([rotated_image.shape[0], 0]) - center * np.array([1, -1])  # adjust for flipping
 
         plot.imshow(rotated_image[:, :, femoral_head_center_rotated[2]].T, cmap='gray')
-        plot.plot([femoral_head_center_rotated[0], femoral_neck_center_rotated[0]], [femoral_head_center_rotated[1], femoral_neck_center_rotated[1]], 'r-')
-        plot.plot([anterior_point[0], femoral_head_center_rotated[0]], [anterior_point[1], femoral_head_center_rotated[1]], 'g-')
-        plot.plot([posterior_point[0], femoral_head_center_rotated[0]], [posterior_point[1], femoral_head_center_rotated[1]], 'b-')
+        # plot.plot([femoral_head_center_rotated[0], femoral_neck_center_rotated[0]], [femoral_head_center_rotated[1], femoral_neck_center_rotated[1]], 'r-')
+        # plot.plot([anterior_point[0], femoral_head_center_rotated[0]], [anterior_point[1], femoral_head_center_rotated[1]], 'g-')
+        # plot.plot([posterior_point[0], femoral_head_center_rotated[0]], [posterior_point[1], femoral_head_center_rotated[1]], 'b-')
+        plot.plot([center[0], femoral_neck_center_rotated[0]], [center[1], femoral_neck_center_rotated[1]], 'r-')
+        plot.plot([center[0], anterior_point[0]], [center[1], anterior_point[1]], 'g-')
+        plot.plot([center[0], posterior_point[0]], [center[1], posterior_point[1]], 'b-')
+        plot.add_patch(plt.Circle(center, r, color='r', fill=False))
         plot.set_aspect('equal')
 
     return anterior_angle, posterior_angle

@@ -204,10 +204,33 @@ def find_notch(mask: np.ndarray, most_ventral: int = None, percentage: float = 0
 
         most_dorsal = most_dorsal - 1  # shift in ventral (anterior) direction
 
-    if notch is None:
-        raise RuntimeError('No notch found.')
+    # if notch is None:
+    #    raise RuntimeError('No notch found.')
 
     return notch  # notch is always in form (sagittal, coronal)
+
+
+def fit_circle_to_points(points: np.ndarray):
+    """
+    Fit a circle to 2D points using least squares.
+
+    :param points: Nx2 array of (x, y) coordinates.
+    :return: (center_x, center_y), radius
+    """
+    x = points[:, 0]
+    y = points[:, 1]
+
+    def calc_r(c):
+        return np.sqrt((x - c[0])**2 + (y - c[1])**2)
+
+    def f_2(c):
+        ri = calc_r(c)
+        return ri - ri.mean()
+
+    center_estimate = np.mean(x), np.mean(y)
+    center, _ = optimize.leastsq(f_2, center_estimate)
+    radius = calc_r(center).mean()
+    return center, radius
 
 
 def get_contour(segmentation_mask: np.array) -> np.array:
@@ -579,6 +602,32 @@ def shrink_points_to_mask(mask: np.ndarray, start_pt: np.ndarray, end_pt: np.nda
             break
 
     return shrinked_start, shrinked_end
+
+
+def sort_points_by_x(points: np.ndarray, descending: bool = False) -> np.ndarray:
+    """
+    Sorts 2D points by their x-coordinate.
+
+    :param points: Nx2 array of (x, y) coordinates.
+    :param descending: If True, sorts in descending order.
+    :return: Nx2 array of points sorted by x-coordinate.
+    """
+    return points[np.argsort(-points[:, 0] if descending else points[:, 0])]
+
+
+def sort_points_clockwise(points: np.ndarray, centroid: np.ndarray, counter_clockwise: bool = False) -> np.ndarray:
+    """
+    Sorts 2D points in clockwise order around their centroid.
+
+    :param points: Nx2 array of (x, y) coordinates.
+    :param centroid: 1D array of the centroid coordinates (x, y).
+    :param counter_clockwise: If True, sorts points in counter-clockwise order.
+    :return: Nx2 array of points sorted clockwise.
+    """
+    # centroid = np.mean(points, axis=0)
+    angles = np.arctan2(points[:,1] - centroid[1], points[:,0] - centroid[0])
+    sort_order = np.argsort((angles if counter_clockwise else -angles))  # negative for clockwise
+    return points[sort_order]
 
 
 def sphere_fit(point_cloud: np.ndarray) -> Tuple[float, np.ndarray]:

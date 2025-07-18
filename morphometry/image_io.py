@@ -111,185 +111,13 @@ class Image(object):
     def direction(self):
         return self.image.affine[:3, :3] if self.type == 'nibabel' else self.image.GetDirection()
 
-    @deprecated
-    def get_array(self):
-        """
-        Get image data as numpy array.
-        :return:
-        """
-        if self.type == 'nibabel':
-            return self.image.get_fdata()
-        else:
-            return sitk.GetArrayFromImage(self.image)
-
-    @deprecated
-    def get_affine(self):
-        """
-        Get image affine.
-        :return:
-        """
-        if self.type == 'nibabel':
-            return self.image.affine
-        else:
-            return self.image.GetDirection()
-
-    @deprecated
-    def get_header(self):
-        """
-        Get image header.
-        :return:
-        """
-        if self.type == 'nibabel':
-            return self.image.header
-        else:
-            return {k: self.image.GetMetaData(k) for k in self.image.GetMetaDataKeys()}
-
-    @deprecated
-    def get_shape(self):
-        """
-        Get image size.
-        :return:
-        """
-        if self.type == 'nibabel':
-            return self.image.shape
-        else:
-            return self.image.GetSize()
-
-    @deprecated
-    def get_spacing(self):
-        """
-        Get image spacing.
-        :return:
-        """
-        if self.type == 'nibabel':
-            return self.image.header.get_zooms()
-        else:
-            return self.image.GetSpacing()
-
-    @deprecated
-    def get_origin(self):
-        """
-        Get image origin.
-        :return:
-        """
-        if self.type == 'nibabel':
-            return self.image.affine[:3, 3]
-        else:
-            return self.image.GetOrigin()
-
-    @deprecated
-    def get_direction(self):
-        """
-        Get image direction.
-        :return:
-        """
-        if self.type == 'nibabel':
-            return self.image.affine[:3, :3]
-        else:
-            return self.image.GetDirection()
-
-    @deprecated
-    def get_transversal_axis(self) -> int:
-        """
-        Get the dimension (axis) of the image that corresponds to the transversal plane.
-        :return: The dimension of the image that corresponds to the transversal plane.
-        """
-        assert self.axcodes is not None, 'Image has no coordinate system.'
-        assert 'I' in self.axcodes or 'S' in self.axcodes, f'Image has invalid coordinate system: {self.axcodes}'
-
-        axstring = ''.join(self.axcodes)
-        if (pos:=axstring.find('I')) < 0:  # if 'I' is not in axcodes, look for S
-            pos = axstring.find('S')
-
-        return pos
-
-    @deprecated
-    def get_coronal_axis(self) -> int:
-        """
-        Get the dimension (axis) of the image that corresponds to the coronal plane.
-        :return: The dimension of the image that corresponds to the coronal plane.
-        """
-        assert self.axcodes is not None, 'Image has no coordinate system.'
-        assert 'A' in self.axcodes or 'P' in self.axcodes, f'Image has invalid coordinate system: {self.axcodes}'
-
-        axstring = ''.join(self.axcodes)
-        if (pos:=axstring.find('A')) < 0:  # if 'A' is not in axcodes, look for P
-            pos = axstring.find('P')
-
-        return pos
-
-    @deprecated
-    def get_sagittal_axis(self) -> int:
-        """
-        Get the dimension (axis) of the image that corresponds to the sagittal plane.
-        :return: The dimension of the image that corresponds to the sagittal plane.
-        """
-        assert self.axcodes is not None, 'Image has no coordinate system.'
-        assert 'L' in self.axcodes or 'R' in self.axcodes, f'Image has invalid coordinate system: {self.axcodes}'
-
-        axstring = ''.join(self.axcodes)
-        if (pos:=axstring.find('L')) < 0:  # if 'L' is not in axcodes, look for R
-            pos = axstring.find('R')
-
-        return pos
-
-    @deprecated
-    def get_transversal_axis_direction(self) -> int:
-        """
-        Get the direction of the transversal plane, i.e. if indices increase from superior to inferior or vice versa.
-        :return: +1 if indices increase from superior to inferior, -1 if indices increase from inferior to superior.
-        """
-        assert self.axcodes is not None, 'Image has no coordinate system.'
-        assert 'I' in self.axcodes or 'S' in self.axcodes, f'Image has invalid coordinate system: {self.axcodes}'
-
-        axstring = ''.join(self.axcodes)
-        return 1 if axstring.find('S') < 0 else -1
-
-    @deprecated
-    def get_coronal_axis_direction(self) -> int:
-        """
-        Get the direction of the coronal plane, i.e. if indices increase from anterior to posterior or vice versa.
-        :return: +1 if indices increase from anterior to posterior, -1 if indices increase from posterior to anterior.
-        """
-        assert self.axcodes is not None, 'Image has no coordinate system.'
-        assert 'A' in self.axcodes or 'P' in self.axcodes, f'Image has invalid coordinate system: {self.axcodes}'
-
-        axstring = ''.join(self.axcodes)
-        return 1 if axstring.find('A') < 0 else -1
-
-    @deprecated
-    def get_sagittal_axis_direction(self) -> int:
-        """
-        Get the direction of the sagittal plane, i.e. if indices increase from left to right patient side or vice versa.
-        :return: +1 if indices increase from right to left patient side, -1 if indices increase from left to right patient side.
-        """
-        assert self.axcodes is not None, 'Image has no coordinate system.'
-        assert 'L' in self.axcodes or 'R' in self.axcodes, f'Image has invalid coordinate system: {self.axcodes}'
-
-        axstring = ''.join(self.axcodes)
-        return 1 if axstring.find('R') < 0 else -1
-
-    def get_axes(self) -> dict:
-        """
-        Get axis indices and directions
-
-        :return: A dictionary with the axes and their directions.
-        """
-        d = dict()
-        d['transversal'] = self.get_transversal_axis()
-        d['coronal'] = self.get_coronal_axis()
-        d['sagittal'] = self.get_sagittal_axis()
-        d['transversal_direction'] = self.get_transversal_axis_direction()
-        d['coronal_direction'] = self.get_coronal_axis_direction()
-        d['sagittal_direction'] = self.get_sagittal_axis_direction()
-        return d
-
-    def transform_coordinate_system(self, axcodes: tuple = ('R', 'P', 'I')):
+    def transform_coordinate_system(self, axcodes: tuple = ('R', 'P', 'I'), flip: bool = True):
         """
         Transform the image into a standard coordinate system.
         Currently, this is 'LPI', i.e. the first axis is right-left (patient side!), the second axis is anterior-posterior
         and the third axis is superior-inferior.
         :param axcodes: Axes codes to transform.
+        :param flip: Whether to flip the image along the first axis (right-left).
         :return:
         """
         assert 'I' in axcodes or 'S' in axcodes, f'Axcodes must contain either "I"(nferior) or "S"(uperior), got {axcodes} instead.'
@@ -304,6 +132,10 @@ class Image(object):
 
             transform = nib.orientations.ornt_transform(orientation, std_orientation)
             reoriented_data = nib.orientations.apply_orientation(data, transform)
+
+            if flip:
+                reoriented_data = np.flip(reoriented_data, axis=0)  # for some reason, the image is flipped during the transformation, so we need to flip it back
+
             new_affine = affine @ nib.orientations.inv_ornt_aff(transform, data.shape)
             self.image = nib.Nifti1Image(reoriented_data, new_affine)
         else:
@@ -382,7 +214,7 @@ class Segmentation(Image):
         :return:
         """
         if self.type == 'nibabel':
-            data = self.get_array()
+            data = self.array
             structure = np.ones((3, 3, 3), dtype=bool)
             cleaned_data = np.zeros_like(data)
             unique_labels = np.unique(data)
@@ -399,6 +231,6 @@ class Segmentation(Image):
                 large_components = sizes > threshold
                 cleaned_data[large_components[labeled_array]] = label_value
 
-            self.image = nib.Nifti1Image(cleaned_data, self.get_affine())
+            self.image = nib.Nifti1Image(cleaned_data, self.affine)
         else:
             raise NotImplementedError('SimpleITK not implemented yet.')
