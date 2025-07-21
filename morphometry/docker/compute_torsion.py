@@ -15,9 +15,9 @@ if __name__ == '__main__':
     knee_mask = Segmentation.from_nibabel(nib.load('/app/temp/knee_segmentation.nii.gz'))
     ankle_mask = Segmentation.from_nibabel(nib.load('/app/temp/ankle_segmentation.nii.gz'))
 
-    hip_mask.transform_coordinate_system(flip=False)
-    knee_mask.transform_coordinate_system(flip=False)
-    ankle_mask.transform_coordinate_system(flip=False)
+    hip_mask.transform_coordinate_system()
+    knee_mask.transform_coordinate_system()
+    ankle_mask.transform_coordinate_system()
 
     x_ratio = abs(hip_mask.spacing[2]) / 2 * abs(hip_mask.spacing[0])
 

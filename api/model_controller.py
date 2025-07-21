@@ -103,17 +103,17 @@ class TorsionModelJob(ModelJob):
 
             tmp = nib.load(tempdir + '/hip/output/hip.nii.gz')
             tmp = Segmentation.from_nibabel(tmp)
-            tmp.transform_coordinate_system(flip=False)
+            tmp.transform_coordinate_system()
             examination.hip_mask = tmp
 
             tmp = nib.load(tempdir + '/knee/output/knee.nii.gz')
             tmp = Segmentation.from_nibabel(tmp)
-            tmp.transform_coordinate_system(flip=False)
+            tmp.transform_coordinate_system()
             examination.knee_mask = tmp
 
             tmp = nib.load(tempdir + '/ankle/output/ankle.nii.gz')
             tmp = Segmentation.from_nibabel(tmp)
-            tmp.transform_coordinate_system(flip=False)
+            tmp.transform_coordinate_system()
             examination.ankle_mask = tmp
 
         examination.encode_images()

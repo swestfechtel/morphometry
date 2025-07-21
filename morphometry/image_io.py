@@ -111,13 +111,12 @@ class Image(object):
     def direction(self):
         return self.image.affine[:3, :3] if self.type == 'nibabel' else self.image.GetDirection()
 
-    def transform_coordinate_system(self, axcodes: tuple = ('R', 'P', 'I'), flip: bool = True):
+    def transform_coordinate_system(self, axcodes: tuple = ('L', 'P', 'I')):
         """
         Transform the image into a standard coordinate system.
         Currently, this is 'LPI', i.e. the first axis is right-left (patient side!), the second axis is anterior-posterior
         and the third axis is superior-inferior.
         :param axcodes: Axes codes to transform.
-        :param flip: Whether to flip the image along the first axis (right-left).
         :return:
         """
         assert 'I' in axcodes or 'S' in axcodes, f'Axcodes must contain either "I"(nferior) or "S"(uperior), got {axcodes} instead.'
@@ -132,9 +131,6 @@ class Image(object):
 
             transform = nib.orientations.ornt_transform(orientation, std_orientation)
             reoriented_data = nib.orientations.apply_orientation(data, transform)
-
-            if flip:
-                reoriented_data = np.flip(reoriented_data, axis=0)  # for some reason, the image is flipped during the transformation, so we need to flip it back
 
             new_affine = affine @ nib.orientations.inv_ornt_aff(transform, data.shape)
             self.image = nib.Nifti1Image(reoriented_data, new_affine)
