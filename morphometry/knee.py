@@ -192,6 +192,7 @@ def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: in
     proximal_angle = calculate_angle_between_vectors(proximal_line, x)
     distal_angle = calculate_angle_between_vectors(distal_line, x)
 
+    """
     proximal_orientation = femur_end[1] - femur_start[1]
     distal_orientation = tibia_end[1] - tibia_start[1]
 
@@ -207,6 +208,25 @@ def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: in
             distal_angle = -distal_angle
 
     angle = proximal_angle - distal_angle
+    """
+    proximal_orientation = (femur_end[1] - femur_start[1]) if side == 'left' else (femur_start[1] - femur_end[1])  # positive if femur_end is posterior to femur_start
+    distal_orientation = (tibia_end[1] - tibia_start[1]) if side == 'left' else (tibia_start[1] - tibia_end[1])
+
+    """
+    if side == 'left':
+        if distal_orientation < 0:  # lateral condyle is anterior to medial condyle
+            distal_angle = -distal_angle
+    else:
+        if distal_orientation > 0:  # lateral condyle is anterior to medial condyle
+            distal_angle = -distal_angle
+
+    angle = proximal_angle - distal_angle
+    """
+
+    if np.sign(proximal_orientation) != np.sign(distal_orientation):  # add angles
+        angle = proximal_angle + distal_angle
+    else:
+        angle = proximal_angle - distal_angle
 
     if angle == 180:
         angle = 0
@@ -216,8 +236,13 @@ def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: in
         fig, ax = plt.subplots(1, 2)
         ax[0].imshow(segmentation_mask[:, :, proximal_layer].T)
         ax[0].plot([femur_start[0], femur_end[0]], [femur_start[1], femur_end[1]], color='red')
+        ax[0].text(10, 10, f'Proximal angle: {proximal_angle:.2f}°', color='red', fontsize='small')
+        ax[0].text(10, 30, f'Proximal orientation: {np.sign(proximal_orientation):.2f}', color='red', fontsize='small')
+        ax[0].set_title(f'Angle: {angle:.2f}°')
         ax[1].imshow(segmentation_mask[:, :, distal_layer].T)
         ax[1].plot([tibia_start[0], tibia_end[0]], [tibia_start[1], tibia_end[1]], color='red')
+        ax[1].text(10, 10, f'Distal angle: {distal_angle:.2f}°', color='red', fontsize='small')
+        ax[1].text(10, 30, f'Distal orientation: {np.sign(distal_orientation):.2f}', color='red', fontsize='small')
         return angle, fig
 
     return angle

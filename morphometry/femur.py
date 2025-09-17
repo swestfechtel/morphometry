@@ -259,7 +259,7 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, segm
 
         distance_world = np.linalg.norm(np.array(tm_world) - np.array(fh_world))
 
-        return True if 80 > distance_world > 40 else distance_world
+        return True if 75 > distance_world > 40 else distance_world
 
     hip_mask = hip_image.array.copy()
     hip_mask = np.where(hip_mask == segmentation_label, 1, 0)  # convert to binary mask
@@ -303,12 +303,26 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, segm
             raise RuntimeError('Could not find a plausible trochanter minor.')
 
     smaller_component = min(connected_components, key=lambda x: np.count_nonzero(x))
-    #plt.imshow(hip_mask[layer])
-    #plt.show()
-    #plt.close()
+
+    start = layer
+
+    for layer in range(start, stop, step):
+        sagittal_layer = hip_mask[layer]
+
+        most_distal_segmented_point = np.max(np.argwhere(sagittal_layer == 1)[:, 1])
+
+        if most_distal_segmented_point == hip_mask.shape[2] - 1:  # if the point is at the bottom of the image, we have found the shaft
+            break
+    else:
+        raise RuntimeError('Could not find the femoral shaft')
+
     com = center_of_mass(smaller_component)
     axial_layer = int(com[1])
-    axial_layer_com = center_of_mass(hip_mask[:, :, axial_layer])
+    femur_shaft = hip_mask[:, :, axial_layer].copy()
+    femur_shaft[:layer] = 0
+
+    # axial_layer_com = center_of_mass(hip_mask[:, :, axial_layer])
+    axial_layer_com = center_of_mass(femur_shaft)
 
     return np.array([axial_layer_com[0], axial_layer_com[0], axial_layer])
 

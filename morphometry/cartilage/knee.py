@@ -296,40 +296,50 @@ class Femur:
 
         c = np.max(self.point_cloud[:, 1])  # max posterior extent
         c = int(c)
-        n = num_connected_components(cartilage[:, c, :])
+        n = num_connected_components(cartilage[:, c, :], min_size=40)
         while n != 2:
             c -= 1
-            n = num_connected_components(cartilage[:, c, :])
+            n = num_connected_components(cartilage[:, c, :], min_size=40)
 
         while n != 1:
             c -= 1
-            n = num_connected_components(cartilage[:, c, :])
+            n = num_connected_components(cartilage[:, c, :], min_size=40)
 
-        fig, ax = plt.subplots(ncols=2, figsize=(20, 10))
-        ax[0].imshow(cartilage[:, c, :].T)
+        # fig, ax = plt.subplots(ncols=2, figsize=(20, 10))
+        # ax[0].imshow(cartilage[:, c, :].T)
 
         pts = np.argwhere(cartilage[:, c, :])
-        min_t = min(pts[:, 1])
-        tmp = pts[pts[:, 1] == min_t]
-        mean_s = int(np.mean(tmp[:, 0]))
+        mean_s = int(np.mean(pts[:, 0]))
+        tmp = pts[pts[:, 0] == mean_s]
+        min_t = min(tmp[:, 0])
         notch_p = np.array([mean_s, c, min_t])
 
         c = np.min(self.point_cloud[:, 1])  # max anterior extent
         c = int(c)
-        n = num_connected_components(cartilage[:, c, :])
+        n = num_connected_components(cartilage[:, c, :], min_size=40)
         while n != 2:
             c += 1
-            n = num_connected_components(cartilage[:, c, :])
+            n = num_connected_components(cartilage[:, c, :], min_size=40)
 
         while n != 1:
             c += 1
-            n = num_connected_components(cartilage[:, c, :])
+            n = num_connected_components(cartilage[:, c, :], min_size=40)
 
+        """
+        ax[0].imshow(cartilage[:, c - 1, :].T)
         ax[1].imshow(cartilage[:, c, :].T)
-        plt.show()
+        fig.show()
+        plt.close(fig)
+        """
 
-        notch_a = center_of_mass(cartilage[:, c, :])
-        notch_a = np.array([notch_a[0], c, notch_a[1]])
+        pts = np.argwhere(cartilage[:, c, :])
+        mean_s = int(np.mean(pts[:, 0]))
+        tmp = pts[pts[:, 0] == mean_s]
+        min_t = min(tmp[:, 0])
+
+        # notch_a = center_of_mass(cartilage[:, c, :])
+        # notch_a = np.array([notch_a[0], c, notch_a[1]])
+        notch_a = np.array([mean_s + 10, c, min_t])
 
         dividing_vector = notch_a - notch_p
         print(notch_a, notch_p, dividing_vector)

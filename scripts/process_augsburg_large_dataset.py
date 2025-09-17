@@ -23,11 +23,11 @@ from multiprocessing import Pool
 def process_patient(patient):
     try:
         hip = Segmentation('nibabel')
-        hip.read_image(f'/home/simon/Data/Augsburg_large/reader_study_augsburg/{patient}/hip_seg_test.nii.gz')
+        hip.read_image(f'/home/simon/Data/Augsburg_large/preprocessed/{patient}/hip_seg.nii.gz')
         knee = Segmentation('nibabel')
-        knee.read_image(f'/home/simon/Data/Augsburg_large/reader_study_augsburg/{patient}/knee_seg_test.nii.gz')
+        knee.read_image(f'/home/simon/Data/Augsburg_large/preprocessed/{patient}/knee_seg.nii.gz')
         ankle = Segmentation('nibabel')
-        ankle.read_image(f'/home/simon/Data/Augsburg_large/reader_study_augsburg/{patient}/ankle_seg_test.nii.gz')
+        ankle.read_image(f'/home/simon/Data/Augsburg_large/preprocessed/{patient}/ankle_seg.nii.gz')
     except FileNotFoundError as e:
         print(f'Patient {patient} could not be found.')
         return {'patient': patient}
@@ -68,7 +68,7 @@ def process_patient(patient):
 
     try:
         at_lee_left, fig = calculate_femoral_torsion(left_hip, left_knee.array, side='left', x_ratio=x_ratio, plot=True)
-        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/femoral_torsion/{patient}_lee_left.png')
+        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/large_cohort/femoral_torsion/{patient}_lee_left.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate femoral torsion (lee) for the left side.', e)
@@ -77,7 +77,7 @@ def process_patient(patient):
 
     try:
         at_lee_right, fig = calculate_femoral_torsion(right_hip, right_knee.array, side='right', x_ratio=x_ratio, plot=True)
-        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/femoral_torsion/{patient}_lee_right.png')
+        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/large_cohort/femoral_torsion/{patient}_lee_right.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate femoral torsion (lee) for the right side.', e)
@@ -87,7 +87,7 @@ def process_patient(patient):
     try:
         at_murphy_left, fig = calculate_femoral_torsion(left_hip, left_knee.array, 'left', 'murphy', x_ratio=x_ratio,
                                                  plot=True)
-        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/femoral_torsion/{patient}_murphy_left.png')
+        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/large_cohort/femoral_torsion/{patient}_murphy_left.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate femoral torsion (murphy) for the left side.', e)
@@ -97,7 +97,7 @@ def process_patient(patient):
     try:
         at_murphy_right, fig = calculate_femoral_torsion(right_hip, right_knee.array, 'right', 'murphy', x_ratio=x_ratio,
                                                     plot=True)
-        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/femoral_torsion/{patient}_murphy_right.png')
+        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/large_cohort/femoral_torsion/{patient}_murphy_right.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate femoral torsion (murphy) for the right side.', e)
@@ -108,7 +108,7 @@ def process_patient(patient):
         tt_left, fig = calculate_tibial_torsion(left_knee.array, left_ankle.array, tibia_label_knee=2,
                                            tibia_label_ankle=1,
                                            fibula_label=2, side='left', plot=True)
-        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/tibial_torsion/{patient}_tt_left.png')
+        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/large_cohort/tibial_torsion/{patient}_tt_left.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate tibial torsion for the left side.', e)
@@ -118,7 +118,7 @@ def process_patient(patient):
         tt_right, fig = calculate_tibial_torsion(right_knee.array, right_ankle.array, tibia_label_knee=2,
                                             tibia_label_ankle=1, fibula_label=2, side='right',
                                             plot=True)
-        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/tibial_torsion/{patient}_tt_right.png')
+        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/large_cohort/tibial_torsion/{patient}_tt_right.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate tibial torsion for the right side.', e)
@@ -130,7 +130,7 @@ def process_patient(patient):
     try:
         ccd_left_actual, ccd_left_projected = calculate_ccd(left_hip, left_knee, 'left', 1, False, x_ratio, plot=p)
         ccd_left = (ccd_left_actual, ccd_left_projected)
-    except (NotImplementedError) as e:
+    except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate CCD for the left side.', e)
         ccd_left = (np.nan, np.nan)
 
@@ -144,19 +144,19 @@ def process_patient(patient):
     """
     ax[0].set_title(f'CCD right: {ccd_left[0]:.1f}°')
     ax[1].set_title(f'CCD left: {ccd_right[0]:.1f}°')
-    fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/ccd/{patient}_ccd.png')
+    fig.savefig(f'/home/simon/Data/Augsburg_large/figures/large_cohort/ccd/{patient}_ccd.png')
     plt.close(fig)
     """
     p.add_text(f'CCD right: {ccd_left[0]:.1f}°', position='upper_left', font_size=20, color='black')
     p.add_text(f'CCD left: {ccd_right[0]:.1f}°', position='upper_right', font_size=20, color='black')
-    # p.save_graphic(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/ccd/{patient}_ccd.png')
-    p.export_html(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/ccd/{patient}_ccd.html')
-    p.screenshot(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/ccd/{patient}_ccd.png')
+    # p.save_graphic(f'/home/simon/Data/Augsburg_large/figures/large_cohort/ccd/{patient}_ccd.png')
+    p.export_html(f'/home/simon/Data/Augsburg_large/figures/large_cohort/ccd/{patient}_ccd.html')
+    p.screenshot(f'/home/simon/Data/Augsburg_large/figures/large_cohort/ccd/{patient}_ccd.png')
     p.close()
 
     try:
         kra_left, fig = calculate_knee_rotation_angle(left_knee.array, 1, 2, 'left', True)
-        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/kra/{patient}_kra_left.png')
+        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/large_cohort/kra/{patient}_kra_left.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate KRA for the left side.', e)
@@ -164,44 +164,44 @@ def process_patient(patient):
 
     try:
         kra_right, fig = calculate_knee_rotation_angle(right_knee.array, 1, 2, 'right', True)
-        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/kra/{patient}_kra_right.png')
+        fig.savefig(f'/home/simon/Data/Augsburg_large/figures/large_cohort/kra/{patient}_kra_right.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate KRA for the right side.', e)
         kra_right = np.nan
 
     try:
-        ll_left = calculate_bone_length(left_hip, left_ankle)
+        ll_left = calculate_bone_length(left_hip, left_ankle, proximal_label=1, distal_label=1, tibia=True)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate leg length for the left side.', e)
         ll_left = np.nan
 
     try:
-        ll_right = calculate_bone_length(right_hip, right_ankle)
+        ll_right = calculate_bone_length(right_hip, right_ankle, proximal_label=1, distal_label=1, tibia=True)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate leg length for the right side.', e)
         ll_right = np.nan
 
     try:
-        fl_left = calculate_bone_length(left_hip, left_knee)
+        fl_left = calculate_bone_length(left_hip, left_knee, proximal_label=1, distal_label=1)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate femur length for the left side.', e)
         fl_left = np.nan
 
     try:
-        fl_right = calculate_bone_length(right_hip, right_knee)
+        fl_right = calculate_bone_length(right_hip, right_knee, proximal_label=1, distal_label=1)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate femur length for the right side.', e)
         fl_right = np.nan
 
     try:
-        tl_left = calculate_bone_length(left_knee, left_ankle)
+        tl_left = calculate_bone_length(left_knee, left_ankle, proximal_label=2, distal_label=1, tibia=True)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate tibia length for the left side.', e)
         tl_left = np.nan
 
     try:
-        tl_right = calculate_bone_length(right_knee, right_ankle)
+        tl_right = calculate_bone_length(right_knee, right_ankle, proximal_label=2, distal_label=1, tibia=True)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate tibia length for the right side.', e)
         tl_right = np.nan
@@ -224,13 +224,13 @@ def process_patient(patient):
 
 if __name__ == '__main__':
     plot = False
-    patients = [x.name for x in Path('/home/simon/Data/Augsburg_large/reader_study_augsburg/').iterdir()]
+    patients = [x.name for x in Path('/home/simon/Data/Augsburg_large/preprocessed/').iterdir()]
 
     with Pool() as pool:
         res = pool.map(process_patient, patients)
 
     index = pd.MultiIndex.from_product([patients, ['right', 'left']], names=['Patient', 'Side'])
-    df = pd.DataFrame(columns=['CCD (actual)', 'CCD (projected)', 'AT (Lee)', 'AT (Murphy)', 'TT', 'KRA', 'LL', 'FL', 'TL', 'LLD', 'MLD'], index=index)
+    df = pd.DataFrame(columns=['CCD (actual)', 'CCD (projected)', 'AT (Lee)', 'AT (Murphy)', 'TT', 'KRA', 'LL', 'FL', 'TL', 'LLD', 'FTD', 'MLD'], index=index)
 
     for r in tqdm(res):
         patient = r['patient']
@@ -255,11 +255,13 @@ if __name__ == '__main__':
         df.loc[(patient, 'right'), 'FL'] = r['fl_left']
         df.loc[(patient, 'left'), 'TL'] = r['tl_right']
         df.loc[(patient, 'right'), 'TL'] = r['tl_left']
-        df.loc[(patient, 'left'), 'LLD'] = r['ll_right'] - r['ll_left']
-        df.loc[(patient, 'right'), 'LLD'] = r['ll_right'] - r['ll_left']  # convention: if left patient leg is longer, LLD is positive
+        df.loc[(patient, 'left'), 'LLD'] = r['ll_right'] - r['ll_left']  # negative value = side is shorter
+        df.loc[(patient, 'right'), 'LLD'] = r['ll_left'] - r['ll_right']
+        df.loc[(patient, 'left'), 'FTD'] = r['fl_right'] - r['tl_right']  # negative value = femur is shorter
+        df.loc[(patient, 'right'), 'FTD'] = r['fl_left'] - r['tl_left']
         df.loc[(patient, 'left'), 'MLD'] = r['mld_right']
         df.loc[(patient, 'right'), 'MLD'] = r['mld_left']
 
     df = df.apply(lambda x: np.round(x, 1))
-    df.to_excel('/home/simon/Data/Augsburg_large/results_no_finetuning.xlsx')
+    df.to_excel('/home/simon/Data/Augsburg_large/results_large_cohort.xlsx')
     print(f'{df.shape[0] - df.dropna().shape[0]} patients have missing values.')

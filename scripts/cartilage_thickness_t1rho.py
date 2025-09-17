@@ -48,7 +48,7 @@ def process_patient(row_identifier: str, unloaded_image: Image, med_to_lat_image
         plt.colorbar(scatter, ax=ax[0, 0])
 
         scatter = plot_subregions(tibia, ax2[0, 0])
-        plt.colorbar(scatter, ax=ax2[0, 0])
+
 
     if femur_success:
         for subregion in femur_results.keys():
@@ -57,19 +57,25 @@ def process_patient(row_identifier: str, unloaded_image: Image, med_to_lat_image
 
         femur.extract_subregions()
         scatter = plot_subregions(femur, ax2[1, 0])
-        plt.colorbar(scatter, ax=ax2[1, 0])
+
+
 
     row = dict()
     row['Patient'] = row_identifier
-    for region in ['iclf', 'cclf', 'eclf', 'plf', 'alf', 'icrf', 'ccrf', 'ecrf', 'prf', 'arf']:
-        array = np.array(list(femur_results[map[region]].values()))
-        row[region] = f'{np.nanmean(array):.2f}'
-        row[f'{region}.std'] = f'{np.nanstd(array):.2f}'
 
-    for region in ['clt', 'ilt', 'elt', 'alt', 'plt', 'crt', 'irt', 'ert', 'art', 'prt']:
-        array = np.array(list(tibia_results[region].values()))
-        row[region] = f'{np.nanmean(array):.2f}'
-        row[f'{region}.std'] = f'{np.nanstd(array):.2f}'
+    try:
+        for region in ['iclf', 'cclf', 'eclf', 'plf', 'alf', 'icrf', 'ccrf', 'ecrf', 'prf', 'arf']:
+            array = np.array(list(femur_results[map[region]].values()))
+            row[region] = f'{np.nanmean(array):.2f}'
+            row[f'{region}.std'] = f'{np.nanstd(array):.2f}'
+
+        for region in ['clt', 'ilt', 'elt', 'alt', 'plt', 'crt', 'irt', 'ert', 'art', 'prt']:
+            array = np.array(list(tibia_results[region].values()))
+            row[region] = f'{np.nanmean(array):.2f}'
+            row[f'{region}.std'] = f'{np.nanstd(array):.2f}'
+    except KeyError:
+        ax2[1, 0].scatter(x=femur.left_part[:, 0], y=femur.left_part[:, 1], c='blue')
+        ax2[1, 0].scatter(x=femur.right_part[:, 0], y=femur.right_part[:, 1], c='red')
 
     dataframe_unloaded = pd.concat([dataframe_unloaded, pd.DataFrame([row])])
 
@@ -98,7 +104,7 @@ def process_patient(row_identifier: str, unloaded_image: Image, med_to_lat_image
         plt.colorbar(scatter, ax=ax[0, 1])
 
         scatter = plot_subregions(tibia, ax2[0, 1])
-        plt.colorbar(scatter, ax=ax2[0, 1])
+
 
     if femur_success:
         for subregion in femur_results.keys():
@@ -107,19 +113,23 @@ def process_patient(row_identifier: str, unloaded_image: Image, med_to_lat_image
 
         femur.extract_subregions()
         scatter = plot_subregions(femur, ax2[1, 1])
-        plt.colorbar(scatter, ax=ax2[1, 1])
+
 
     row = dict()
     row['Patient'] = row_identifier
-    for region in ['iclf', 'cclf', 'eclf', 'plf', 'alf', 'icrf', 'ccrf', 'ecrf', 'prf', 'arf']:
-        array = np.array(list(femur_results[map[region]].values()))
-        row[region] = f'{np.nanmean(array):.2f}'
-        row[f'{region}.std'] = f'{np.nanstd(array):.2f}'
+    try:
+        for region in ['iclf', 'cclf', 'eclf', 'plf', 'alf', 'icrf', 'ccrf', 'ecrf', 'prf', 'arf']:
+            array = np.array(list(femur_results[map[region]].values()))
+            row[region] = f'{np.nanmean(array):.2f}'
+            row[f'{region}.std'] = f'{np.nanstd(array):.2f}'
 
-    for region in ['clt', 'ilt', 'elt', 'alt', 'plt', 'crt', 'irt', 'ert', 'art', 'prt']:
-        array = np.array(list(tibia_results[region].values()))
-        row[region] = f'{np.nanmean(array):.2f}'
-        row[f'{region}.std'] = f'{np.nanstd(array):.2f}'
+        for region in ['clt', 'ilt', 'elt', 'alt', 'plt', 'crt', 'irt', 'ert', 'art', 'prt']:
+            array = np.array(list(tibia_results[region].values()))
+            row[region] = f'{np.nanmean(array):.2f}'
+            row[f'{region}.std'] = f'{np.nanstd(array):.2f}'
+    except KeyError:
+        ax2[1, 1].scatter(x=femur.left_part[:, 0], y=femur.left_part[:, 1], c='blue')
+        ax2[1, 1].scatter(x=femur.right_part[:, 0], y=femur.right_part[:, 1], c='red')
 
     dataframe_med_to_lat = pd.concat([dataframe_med_to_lat, pd.DataFrame([row])])
 
@@ -149,32 +159,36 @@ def process_patient(row_identifier: str, unloaded_image: Image, med_to_lat_image
         plt.colorbar(scatter, ax=ax[0, 2])
 
         scatter = plot_subregions(tibia, ax2[0, 2])
-        plt.colorbar(scatter, ax=ax2[0, 2])
 
     if femur_success:
         for subregion in femur_results.keys():
             scatter = plot_heatmap(femur_results[subregion], ax[1, 2], ul=ul)
-        plt.colorbar(scatter, ax=ax[1, 2])
 
         femur.extract_subregions()
         scatter = plot_subregions(femur, ax2[1, 2])
-        plt.colorbar(scatter, ax=ax2[1, 2])
 
     row = dict()
     row['Patient'] = row_identifier
-    for region in ['iclf', 'cclf', 'eclf', 'plf', 'alf', 'icrf', 'ccrf', 'ecrf', 'prf', 'arf']:
-        array = np.array(list(femur_results[map[region]].values()))
-        row[region] = f'{np.nanmean(array):.2f}'
-        row[f'{region}.std'] = f'{np.nanstd(array):.2f}'
+    try:
+        for region in ['iclf', 'cclf', 'eclf', 'plf', 'alf', 'icrf', 'ccrf', 'ecrf', 'prf', 'arf']:
+            array = np.array(list(femur_results[map[region]].values()))
+            row[region] = f'{np.nanmean(array):.2f}'
+            row[f'{region}.std'] = f'{np.nanstd(array):.2f}'
 
-    for region in ['clt', 'ilt', 'elt', 'alt', 'plt', 'crt', 'irt', 'ert', 'art', 'prt']:
-        array = np.array(list(tibia_results[region].values()))
-        row[region] = f'{np.nanmean(array):.2f}'
-        row[f'{region}.std'] = f'{np.nanstd(array):.2f}'
+        for region in ['clt', 'ilt', 'elt', 'alt', 'plt', 'crt', 'irt', 'ert', 'art', 'prt']:
+            array = np.array(list(tibia_results[region].values()))
+            row[region] = f'{np.nanmean(array):.2f}'
+            row[f'{region}.std'] = f'{np.nanstd(array):.2f}'
+    except KeyError:
+        ax2[1, 2].scatter(x=femur.left_part[:, 0], y=femur.left_part[:, 1], c='blue')
+        ax2[1, 2].scatter(x=femur.right_part[:, 0], y=femur.right_part[:, 1], c='red')
 
     dataframe_lat_to_med = pd.concat([dataframe_lat_to_med, pd.DataFrame([row])])
 
+    fig.show()
     fig2.show()
+    plt.close(fig)
+    plt.close(fig2)
     return dataframe_unloaded, dataframe_med_to_lat, dataframe_lat_to_med
 
 

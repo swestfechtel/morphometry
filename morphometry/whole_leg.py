@@ -25,7 +25,11 @@ def get_mikulicz_line(hip_mask: np.ndarray, ankle_mask: np.ndarray, side: str = 
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
     r, femoral_head_center = get_femoral_head_center(hip_mask, side=side, x_ratio=x_ratio, isotropic=isotropic)
-    ankle_center = np.array(center_of_mass(ankle_mask))
+    # ankle_center = np.array(center_of_mass(ankle_mask))
+    ankle_mask_cleaned = np.where(ankle_mask == 1, 1, 0)  # null everything else
+    ankle_center_index = get_distal_articulating_surface(ankle_mask_cleaned, 1)
+    ankle_center = np.array(center_of_mass(ankle_mask_cleaned[:, :, ankle_center_index]))
+    ankle_center = np.array([ankle_center[0], ankle_center[1], ankle_center_index])
 
     return femoral_head_center, ankle_center
 
@@ -72,12 +76,17 @@ def calculate_mikulicz_deviation(hip_image: Image, knee_image: Image, ankle_imag
 
     # print(f'd = {d}, kc-l = {np.linalg.norm(kc_world - l)}')
 
-    if side == 'left':
-        if l[2] < kc_world[2]:  # if the mikulicz line lateral to the knee, it is a negative deviation
+    """
+    World coordinates are positive on the left image side (right patient side)
+    and negative on the right image side (left patient side).
+    """
+
+    if side == 'left':  # remember here side refers to image side
+        if l[2] > kc_world[2]:  # if the mikulicz line is lateral to the knee, it is a medial deviation, which is encoded as a negative value
             return -d
 
     if side == 'right':
-        if l[2] > kc_world[2]:
+        if l[2] < kc_world[2]:
             return -d
 
     return d
@@ -94,23 +103,90 @@ def calculate_mikulicz_deviation(hip_image: Image, knee_image: Image, ankle_imag
     return get_minimum_distance_between_line_and_point(fhc_world_2d, ac_world_2d, kc_world_2d)
 
 
-def calculate_bone_length(proximal_image: Image, distal_image: Image) -> floating[Any]:
+def get_distal_articulating_surface(ankle_image: np.ndarray, tibia_label: int = 1) -> int:
+    """
+    Get the slice index of the distal articulating surface of the tibia.
+    :param ankle_image: A 3D segmentation mask of the ankle.
+    :param tibia_label: The segmentation label of the tibia.
+    :return: The slice index of the distal articulating surface of the tibia.
+    """
+    changes = list()
+    previous_slice_size = 0
+    first_slice_found = False
+
+    for i in range(ankle_image.shape[2]):
+        slice_mod = np.where(ankle_image[:, :, i] == tibia_label, 1, 0)
+
+        if np.count_nonzero(slice_mod) == 0:
+            if not first_slice_found:
+                changes.append(0)
+                continue
+            else:
+                break
+
+        if not first_slice_found:
+            first_slice_found = True
+            previous_slice_size = np.count_nonzero(slice_mod)
+
+        slice_size = np.count_nonzero(slice_mod)
+
+        changes.append(np.abs(slice_size - previous_slice_size))
+        previous_slice_size = slice_size
+
+    changes = np.array(changes)
+    largest_change = np.argmax(changes)
+
+    return largest_change - 1  # -1 because we want the slice before the change, which is the distal articulating surface
+
+
+def calculate_bone_length(proximal_image: Image, distal_image: Image, proximal_label: int, distal_label: int, tibia=False) -> floating[Any]:
     """
     Calculate the length of the femur, tibia or whole leg.
     :param proximal_image: An Image object of the proximal segmentation mask.
     :param distal_image: An Image object of the distal segmentation mask.
+    :param proximal_label: The segmentation label of the bone in the proximal image.
+    :param distal_label: The segmentation label of the bone in the distal image.
+    :param tibia: Whether to calculate the length of the tibia (True).
     :return: The length of the bone.
     """
-    most_proximal_layer = np.min(np.argwhere(proximal_image.array)[:, 0])
-    most_distal_layer = np.max(np.argwhere(distal_image.array)[:, 0])
+    proximal_cleaned = np.where(proximal_image.array == proximal_label, 1, 0)
+    distal_cleaned = np.where(distal_image.array == distal_label, 1, 0)
 
-    proximal_layer_centroid = center_of_mass(proximal_image.array[most_proximal_layer])
-    proximal_layer_centroid = (most_proximal_layer, proximal_layer_centroid[0], proximal_layer_centroid[1])
+    most_proximal_layer = np.min(np.argwhere(proximal_cleaned)[:, 2])
+    if not tibia:
+        most_distal_layer = np.max(np.argwhere(distal_cleaned)[:, 2])
+    else:
+        most_distal_layer = get_distal_articulating_surface(distal_cleaned)
 
-    distal_layer_centroid = center_of_mass(distal_image.array[most_distal_layer])
-    distal_layer_centroid = (most_distal_layer, distal_layer_centroid[0], distal_layer_centroid[1])
+    proximal_layer_centroid = center_of_mass(proximal_cleaned[:, :, most_proximal_layer])
+    proximal_layer_centroid = (proximal_layer_centroid[0], proximal_layer_centroid[1], most_proximal_layer)
+
+    distal_layer_centroid = center_of_mass(distal_cleaned[:, :, most_distal_layer])
+    distal_layer_centroid = (distal_layer_centroid[0], distal_layer_centroid[1], most_distal_layer)
 
     proximal_world = proximal_image.transform_index_to_physical_point(proximal_layer_centroid)
     distal_world = distal_image.transform_index_to_physical_point(distal_layer_centroid)
 
     return np.linalg.norm(np.array(proximal_world) - np.array(distal_world))
+
+
+if __name__ == '__main__':
+    from morphometry.image_io import Image
+    from matplotlib import pyplot as plt
+
+    image = Image('nibabel')
+    image.read_image('/home/simon/Data/Augsburg_large/preprocessed/PA000001/ankle_seg.nii.gz')
+    image.transform_coordinate_system()
+
+    distal_articulating_surface_left = get_distal_articulating_surface(image.array[:image.array.shape[0]//2], 1)
+    distal_articulating_surface_right = get_distal_articulating_surface(image.array[image.array.shape[0]//2:], 1)
+
+    fig, ax = plt.subplots(ncols=2)
+    ax[0].imshow(image.array[:, :, distal_articulating_surface_left].T, cmap='gray')
+    ax[0].set_title(f'Distal articulating surface at slice {distal_articulating_surface_left}')
+    ax[0].axis('off')
+    ax[1].imshow(image.array[:, :, distal_articulating_surface_right].T, cmap='gray')
+    ax[1].set_title(f'Distal articulating surface at slice {distal_articulating_surface_right}')
+    ax[1].axis('off')
+    plt.tight_layout()
+    plt.show()

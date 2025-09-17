@@ -429,10 +429,11 @@ def intersect_ndarrays(a: np.ndarray, b: np.ndarray):
     return intersected.view(a_.dtype).reshape(-1, a_.shape[1])
 
 
-def num_connected_components(x: np.ndarray) -> int:
+def num_connected_components(x: np.ndarray, min_size: int = 0) -> int:
     """
     Counts the number of connected components in a 2D image.
     :param x: A 2D numpy array where each pixel is either 0 or 1.
+    :param min_size: Minimum size of connected components to be counted.
     :return: The number of connected components in the image.
     """
     visited = np.zeros_like(x, dtype=bool)
@@ -449,16 +450,21 @@ def num_connected_components(x: np.ndarray) -> int:
     for i in range(nrows):
         for j in range(ncols):
             if x[i, j] and not visited[i, j]:
-                # Start BFS/DFS
+                # Start BFS/DFS to find component size
                 stack = [(i, j)]
                 visited[i, j] = True
+                component_size = 1
                 while stack:
                     r, c = stack.pop()
                     for nr, nc in neighbors(r, c):
                         if x[nr, nc] and not visited[nr, nc]:
                             visited[nr, nc] = True
                             stack.append((nr, nc))
-                count += 1
+                            component_size += 1
+
+                # Only count component if it meets minimum size requirement
+                if component_size >= min_size:
+                    count += 1
     return count
 
 

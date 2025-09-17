@@ -256,6 +256,10 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
     shaft_axis_low, shaft_axis_high = get_femoral_shaft_axis(hip_mask, knee_mask, femur_label=segmentation_label,
                                                              isotropic=isotropic)
 
+    if not isotropic:
+        # femoral_neck_center[2] -= 1  # correction because algorithm seems to over-estimate the femoral neck center by one voxel in z direction
+        pass
+
     if knee_image is not None:
         femoral_head_center_orig = femoral_head_center.copy()
         femoral_neck_center_orig = femoral_neck_center.copy()
@@ -313,20 +317,20 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
             for i, coord in enumerate(proximal_femur_coords):
                 proximal_femur_coords[i] = hip_image.transform_index_to_physical_point(coord)
                 if side == 'right':
-                    proximal_femur_coords[i, 0] += hip_mask.shape[0]  # adjust for right side
+                    proximal_femur_coords[i, 0] -= hip_mask.shape[0]  # adjust for right side
 
             for i, coord in enumerate(distal_femur_coords):
                 distal_femur_coords[i] = knee_image.transform_index_to_physical_point(coord)
                 if side == 'right':
-                    distal_femur_coords[i, 0] += knee_mask.shape[0]
+                    distal_femur_coords[i, 0] -= knee_mask.shape[0]
 
             if side == 'right':
-                femoral_head_center[0] += hip_mask.shape[0]  # adjust for right side
-                femoral_neck_center[0] += hip_mask.shape[0]
-                shaft_axis_high[0] += hip_mask.shape[0]
-                shaft_axis_low[0] += hip_mask.shape[0]
+                femoral_head_center[0] -= hip_mask.shape[0]  # adjust for right side
+                femoral_neck_center[0] -= hip_mask.shape[0]
+                shaft_axis_high[0] -= hip_mask.shape[0]
+                shaft_axis_low[0] -= hip_mask.shape[0]
 
-            plot.add_mesh(pv.PolyData(proximal_femur_coords.astype(np.float32)), color='g', opacity=.5)
+            plot.add_mesh(pv.PolyData(proximal_femur_coords.astype(np.float32)), color=('g' if side == 'left' else 'y'), opacity=.5)
             plot.add_mesh(pv.PolyData(distal_femur_coords.astype(np.float32)), color='b', opacity=.5)
             plot.add_lines(np.array([femoral_head_center, femoral_neck_center + neck_vector * 2]), color='r')
             plot.add_lines(np.array([shaft_axis_high + shaft_vector * .5, shaft_axis_low]), color='r')
