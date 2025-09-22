@@ -305,13 +305,14 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, segm
     smaller_component = min(connected_components, key=lambda x: np.count_nonzero(x))
 
     start = layer
+    most_distal_segmented_point_global = np.max(np.argwhere(hip_mask == segmentation_label)[:, 1])
 
     for layer in range(start, stop, step):
         sagittal_layer = hip_mask[layer]
 
         most_distal_segmented_point = np.max(np.argwhere(sagittal_layer == 1)[:, 1])
 
-        if most_distal_segmented_point == hip_mask.shape[2] - 1:  # if the point is at the bottom of the image, we have found the shaft
+        if most_distal_segmented_point >= (most_distal_segmented_point_global - (1 if not isotropic else 10)):  # if the point is at the bottom of the image, we have found the shaft
             break
     else:
         raise RuntimeError('Could not find the femoral shaft')

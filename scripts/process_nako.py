@@ -5,6 +5,7 @@ import multiprocessing
 import pandas as pd
 import numpy as np
 import nibabel as nib
+import pyvista as pv
 
 from pathlib import Path
 from morphometry.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
@@ -28,24 +29,33 @@ def f(patient):
     mask_right = nib.Nifti1Image(mask_right, mask.affine, mask.header)
     mask_right = Segmentation.from_nibabel(mask_right)
 
-    fig, ax = plt.subplots(ncols=2, figsize=(20, 10))
+    p = pv.Plotter(off_screen=True)
 
     try:
-        ccd_left, _ = calculate_ccd(mask_left, None, 'left', 1, isotropic=True, plot=ax[0])
+        ccd_left, _ = calculate_ccd(mask_left, None, 'left', 1, isotropic=True, plot=p)
     except Exception as e:
         print(f"Error calculating CCD for left side of patient {patient.name}: {e}")
         ccd_left = np.nan
 
     try:
-        ccd_right, _ = calculate_ccd(mask_right, None, 'right', 1, isotropic=True, plot=ax[1])
+        ccd_right, _ = calculate_ccd(mask_right, None, 'right', 1, isotropic=True, plot=p)
     except Exception as e:
         print(f"Error calculating CCD for right side of patient {patient.name}: {e}")
         ccd_right = np.nan
 
+    p.camera.azimuth = 45
+    p.camera.elevation = -25
+    p.add_text(f'CCD right: {ccd_left:.1f}°', position='upper_left', font_size=20, color='black')
+    p.add_text(f'CCD left: {ccd_right:.1f}°', position='upper_right', font_size=20, color='black')
+    p.export_html(f'/home/simon/Data/NaKo_sample/plots/ccd/{patient.name}_ccd.html')
+    p.screenshot(f'/home/simon/Data/NaKo_sample/plots/ccd/{patient.name}_ccd.png')
+    p.close()
+    """
     ax[0].set_title(f'CCD right: {ccd_left:.1f}°')
     ax[1].set_title(f'CCD left: {ccd_right:.1f}°')
     fig.savefig(f'/home/simon/Data/NaKo_sample/plots/ccd/{patient.name}.png')
     plt.close(fig)
+    """
 
     fig, ax = plt.subplots(nrows=2, ncols=2, figsize=(20, 10))
     try:
@@ -69,7 +79,7 @@ def f(patient):
 
     try:
         aa_left = calculate_alpha_angle(mask_left.array, 'left', 1, isotropic=True, plot=ax[0])
-    except NotImplementedError as e:
+    except Exception as e:
         print(f"Error calculating AA for left side of patient {patient.name}: {e}")
         aa_left = (np.nan, np.nan)
     # calculate_alpha_angle(mask_left.array, 'left', 1, isotropic=True)
@@ -98,17 +108,27 @@ def f(patient):
         print(f"Error calculating CEA for left side of patient {patient.name}: {e}")
         cea = [np.nan, np.nan]
 
+    p = pv.Plotter(off_screen=True)
+
     try:
-        offset_left = calculate_femoral_offset(mask_left, None, 'left', 1, isotropic=True)
+        offset_left = calculate_femoral_offset(mask_left, None, 'left', 1, isotropic=True, plot=p)
     except Exception as e:
         print(f"Error calculating femoral offset for left side of patient {patient.name}: {e}")
         offset_left = np.nan
 
     try:
-        offset_right = calculate_femoral_offset(mask_right, None, 'right', 1, isotropic=True)
+        offset_right = calculate_femoral_offset(mask_right, None, 'right', 1, isotropic=True, plot=p)
     except Exception as e:
         print(f"Error calculating femoral offset for right side of patient {patient.name}: {e}")
         offset_right = np.nan
+
+    p.camera.azimuth = 45
+    p.camera.elevation = -25
+    p.add_text(f'Offset right: {offset_left:.1f}mm', position='upper_left', font_size=20, color='black')
+    p.add_text(f'Offset left: {offset_right:.1f}mm', position='upper_right', font_size=20, color='black')
+    p.export_html(f'/home/simon/Data/NaKo_sample/plots/offset/{patient.name}_offset.html')
+    p.screenshot(f'/home/simon/Data/NaKo_sample/plots/offset/{patient.name}_offset.png')
+    p.close()
 
     return {'patient': patient.name.split('.')[0], 'ccd_left': ccd_left, 'ccd_right': ccd_right,'fat_left': fat_left, 'fat_right': fat_right,
             'aa_left': aa_left, 'aa_right': aa_right, 'aav_left': aav[0], 'aav_right': aav[1],
