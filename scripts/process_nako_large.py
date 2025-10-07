@@ -2,8 +2,9 @@ import os
 import re
 import multiprocessing
 import sys
+import argparse
 
-sys.path.append('/home/simon/Work/morphometry')
+sys.path.append('/home/sw521914/Work/morphometry')
 
 import pandas as pd
 import numpy as np
@@ -50,15 +51,9 @@ def f(patient):
     p.camera.elevation = -25
     p.add_text(f'CCD right: {ccd_left:.1f}°', position='upper_left', font_size=20, color='black')
     p.add_text(f'CCD left: {ccd_right:.1f}°', position='upper_right', font_size=20, color='black')
-    p.export_html(f'/home/simon/Data/NaKo_sample/plots/ccd/{patient.name}_ccd.html')
-    p.screenshot(f'/home/simon/Data/NaKo_sample/plots/ccd/{patient.name}_ccd.png')
+    p.export_html(f'/home/sw521914/Data/nako/plots/ccd/{patient.name}_ccd.html')
+    # p.screenshot(f'/home/sw521914/Data/nako/plots/ccd/{patient.name}_ccd.png')
     p.close()
-    """
-    ax[0].set_title(f'CCD right: {ccd_left:.1f}°')
-    ax[1].set_title(f'CCD left: {ccd_right:.1f}°')
-    fig.savefig(f'/home/simon/Data/NaKo_sample/plots/ccd/{patient.name}.png')
-    plt.close(fig)
-    """
 
     fig, ax = plt.subplots(nrows=2, ncols=2, figsize=(20, 10))
     try:
@@ -75,7 +70,7 @@ def f(patient):
 
     ax[0,0].set_title(f'Antetorsion right: {fat_left:.1f}°')
     ax[0,1].set_title(f'Antetorsion left: {fat_right:.1f}°')
-    fig.savefig(f'/home/simon/Data/NaKo_sample/plots/anteversion/{patient.name}.png')
+    # fig.savefig(f'/home/sw521914/Data/nako/plots/anteversion/{patient.name}.png')
     plt.close(fig)
 
     fig, ax = plt.subplots(ncols=2, figsize=(20, 10))
@@ -95,18 +90,18 @@ def f(patient):
 
     ax[0].set_title(f'Alpha angle right: {aa_left}°')
     ax[1].set_title(f'Alpha angle left: {aa_right}°')
-    fig.savefig(f'/home/simon/Data/NaKo_sample/plots/alpha_angle/{patient.name}.png')
+    # fig.savefig(f'/home/sw521914/Data/nako/plots/alpha_angle/{patient.name}.png')
     plt.close(fig)
 
     try:
-        aav = calculate_acetabular_anteversion(mask.array, 1, 3, isotropic=True, plot=True,
-                                               fp=f'/home/simon/Data/NaKo_sample/plots/acetabular_anteversion/{patient.name}.png')
+        aav = calculate_acetabular_anteversion(mask.array, 1, 3, isotropic=False, plot=True,
+                                               fp=f'/home/sw521914/Data/nako/plots/acetabular_anteversion/{patient.name}.png')
     except Exception as e:
         print(f"Error calculating AAV for patient {patient.name}: {e}")
         aav = [np.nan, np.nan]
 
     try:
-        cea = calculate_center_edge_angle(mask.array, 1, 3, isotropic=True, plot=True, fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png')
+        cea = calculate_center_edge_angle(mask.array, 1, 3, isotropic=True, plot=False, fp=f'/home/sw521914/Data/nako/plots/center_edge/{patient.name}.png')
     except Exception as e:
         print(f"Error calculating CEA for left side of patient {patient.name}: {e}")
         cea = [np.nan, np.nan]
@@ -129,8 +124,8 @@ def f(patient):
     p.camera.elevation = -25
     p.add_text(f'Offset right: {offset_left:.1f}mm', position='upper_left', font_size=20, color='black')
     p.add_text(f'Offset left: {offset_right:.1f}mm', position='upper_right', font_size=20, color='black')
-    p.export_html(f'/home/simon/Data/NaKo_sample/plots/offset/{patient.name}_offset.html')
-    p.screenshot(f'/home/simon/Data/NaKo_sample/plots/offset/{patient.name}_offset.png')
+    p.export_html(f'/home/sw521914/Data/nako/plots/offset/{patient.name}_offset.html')
+    # p.screenshot(f'/home/sw521914/Data/nako/plots/offset/{patient.name}_offset.png')
     p.close()
 
     return {'patient': patient.name.split('.')[0], 'ccd_left': ccd_left, 'ccd_right': ccd_right,'fat_left': fat_left, 'fat_right': fat_right,
@@ -138,13 +133,17 @@ def f(patient):
             'cea_left': cea[0], 'cea_right': cea[1], 'offset_left': offset_left, 'offset_right': offset_right}
 
 
-
 if __name__ == '__main__':
-    patients = [x.name.split('.')[0] for x in os.scandir('/home/simon/Data/NaKo_sample/segmentations')]
+    parser = argparse.ArgumentParser(description='Process Nako Large image')
+    parser.add_argument('--chunk', type=int, default=0, help='Chunk number to process')
+    args = parser.parse_args()
+    chunk = args.chunk
+
+    patients = [x.name.split('.')[0] for x in os.scandir(f'/hpcwork/p0021834/workspace_simon/nako/chunk_{chunk}_segmentations')]
     iterables = [patients, ['right', 'left']]
     index = pd.MultiIndex.from_product(iterables, names=['Patient', 'Side'])
     df = pd.DataFrame(columns=['CCD', 'AT_murphy', 'AA_anterior', 'AA_posterior', 'AAV', 'CE', 'Offset'], index=index)
-    patients = [patient for patient in Path('/home/simon/Data/NaKo_sample/segmentations').iterdir() if patient.suffix == '.gz']
+    patients = [patient for patient in Path(f'/hpcwork/p0021834/workspace_simon/nako/chunk_{chunk}_segmentations').iterdir() if patient.suffix == '.gz']
     pv.start_xvfb()
 
     with multiprocessing.Pool() as pool:
@@ -167,5 +166,5 @@ if __name__ == '__main__':
         df.loc[(patient, 'right'), 'Offset'] = round(x['offset_left'], 1)
         df.loc[(patient, 'left'), 'Offset'] = round(x['offset_right'], 1)
 
-    print(df)
-    df.to_excel('/home/simon/Data/NaKo_sample/eval.xlsx')
+    df.to_excel('/home/sw521914/Data/nako/eval.xlsx')
+    df.to_csv('/home/sw521914/Data/nako/eval.csv')

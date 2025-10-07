@@ -509,13 +509,15 @@ def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', seg
 
     for p in anterior_points_sorted:
         d = np.linalg.norm(p - center)
-        if d > radius + tol:
+        if (1.2 * radius > d > radius + tol) and (p[0] < center[0]):  # restrict the search space to everything lateral of the center
+                                                        # should always be < since the image is flipped for right side
             anterior_point = p
             break
 
     for p in posterior_points_sorted:
         d = np.linalg.norm(p - center)
-        if d > radius + tol:
+        if (1.2 * radius > d > radius + tol) and (p[0] < center[0]):  # restrict the search space to everything lateral of the center
+                                                        # should always be < since the image is flipped for right side
             posterior_point = p
             break
 

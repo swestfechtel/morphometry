@@ -156,10 +156,18 @@ def get_examination_by_id(examination_id: str):
 
         d['image'] = examination.image_b64
         d['shape'] = examination.transformed_image.shape
-        d['landmarks'] = dict(examination.landmarks)
+        
+        tmp = dict(examination.landmarks)
+        for bone in tmp.keys():
+            for side in tmp[bone].keys():
+                for k, v in tmp[bone][side].items():
+                    tmp[bone][side][k] = [0 if np.isnan(x) else x for x in v]
+        
+        d['landmarks'] = tmp
         d['knee_offset'] = examination.hip.shape[2]
         d['ankle_offset'] = examination.hip.shape[2] + examination.knee.shape[2]
         d['torsion'] = examination.get_torsion_values()
+        
         d['segmentation'] = examination.image_segmentation_b64
         d['type'] = 'torsion'
 
