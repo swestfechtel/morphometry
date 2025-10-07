@@ -1,7 +1,6 @@
 import numpy as np
 import pyvista as pv
 import pandas as pd
-import pyvista as pv
 
 from morphometry.utils import sphere_fit, get_contour_points, calculate_angle_between_vectors, \
     calculate_min_distance_between_point_clouds, get_vector_through_point_perpendicular_to_line, \

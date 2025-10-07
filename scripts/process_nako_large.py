@@ -166,5 +166,5 @@ if __name__ == '__main__':
         df.loc[(patient, 'right'), 'Offset'] = round(x['offset_left'], 1)
         df.loc[(patient, 'left'), 'Offset'] = round(x['offset_right'], 1)
 
-    df.to_excel('/home/sw521914/Data/nako/eval.xlsx')
-    df.to_csv('/home/sw521914/Data/nako/eval.csv')
+    # df.to_excel('/home/sw521914/Data/nako/eval.xlsx')
+    df.to_csv(f'/home/sw521914/Data/nako/results_chunk_{chunk}.csv')
