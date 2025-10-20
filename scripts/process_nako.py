@@ -13,7 +13,7 @@ import pyvista as pv
 from pathlib import Path
 from morphometry.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
     calculate_alpha_angle, calculate_acetabular_depth, calculate_center_edge_angle, \
-    calculate_cartilage_thickness_knn, calculate_femoral_offset
+    calculate_cartilage_thickness_knn, calculate_femoral_offset, calculate_femoral_offset_projected
 from morphometry.image_io import Segmentation
 from matplotlib import pyplot as plt
 
@@ -114,13 +114,15 @@ def f(patient):
     p = pv.Plotter(off_screen=True)
 
     try:
-        offset_left = calculate_femoral_offset(mask_left, None, 'left', 1, isotropic=True, plot=p)
+        # offset_left = calculate_femoral_offset(mask_left, None, 'left', 1, isotropic=True, plot=p)
+        offset_left = calculate_femoral_offset_projected(mask_left, None, 'left', 1, True, False)
     except Exception as e:
         print(f"Error calculating femoral offset for left side of patient {patient.name}: {e}")
         offset_left = np.nan
 
     try:
-        offset_right = calculate_femoral_offset(mask_right, None, 'right', 1, isotropic=True, plot=p)
+        # offset_right = calculate_femoral_offset(mask_right, None, 'right', 1, isotropic=True, plot=p)
+        offset_right = calculate_femoral_offset_projected(mask_right, None, 'right', 1, True, False)
     except Exception as e:
         print(f"Error calculating femoral offset for right side of patient {patient.name}: {e}")
         offset_right = np.nan

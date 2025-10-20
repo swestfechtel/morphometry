@@ -932,3 +932,31 @@ def calculate_femoral_offset(hip_image: Image, knee_image: Optional[Image] = Non
         plot.add_lines(np.array([c_world, projection_vector_world]), color='red', width=5)
 
     return femoral_offset
+
+
+def calculate_femoral_offset_projected(hip_image: Image, knee_image: Optional[Image] = None, side: str = 'left', femur_label: int = 1, isotropic: bool = False, plot: pv.Plotter | bool = False) -> float:
+    """
+    Calculate the femoral offset, i.e. the distance between the femoral head center and the femoral shaft axis.
+    Landmarks are projected to the coronal plane before final calculations.
+    :param hip_image: Image: A segmentation mask of the proximal femur.
+    :param knee_image: Image: A segmentation mask of the knee (optional).
+    :param side: str: Side of the image (not patient!), either 'left' or 'right'.
+    :param femur_label: int: The label of the femur in the segmentation mask.
+    :param isotropic: bool: Whether the image has isotropic voxels.
+    :param plot: pv.Plotter | bool: A PyVista plotter to visualize the femoral offset, or False if no plotting desired.
+    :return:
+    """
+    r, c = get_femoral_head_center(hip_image.array, side=side, segmentation_label=femur_label, isotropic=isotropic)
+    start, end = get_femoral_shaft_axis(hip_image.array,
+                                        knee_mask=(knee_image.array if knee_image is not None else None),
+                                        femur_label=femur_label, isotropic=isotropic)
+
+    c = np.array([c[0], 0, c[2]])  # zero out coronal component
+    start = np.array([start[0], 0, start[2]])
+    end = np.array([end[0], 0, end[2]])
+
+    _, projection_vector = get_vector_through_point_perpendicular_to_line(start, (end - start), c)
+
+    femoral_offset = np.linalg.norm(c - projection_vector)
+
+    return femoral_offset
