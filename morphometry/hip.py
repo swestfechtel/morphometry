@@ -230,7 +230,7 @@ def get_femoral_shaft_axis(hip_mask: np.ndarray, knee_mask: np.ndarray = None, f
     return np.array(com_low_hip), np.array(com_high_hip)  # return the two points as the femoral shaft axis
 
 
-def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1., debug: bool = False, plot: plt.Axes | pv.Plotter = None) -> Tuple[float, float] | Tuple[float, float, plt.Figure]:
+def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1., debug: bool = False, plot: plt.Axes | pv.Plotter | bool = False) -> Tuple[float, float] | Tuple[float, float, plt.Figure]:
     """
     Calculate the CCD angle from the femoral head center, femoral neck axis and femoral shaft axis.
     :param hip_image: A segmentation mask of the proximal femur.
@@ -371,7 +371,7 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
     return ccd, ccd_projected
 
 
-def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, plot: Tuple[plt.axis, plt.axis] = None) -> float | Tuple[float, plt.Figure]:
+def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, plot: Tuple[plt.axis, plt.axis] | bool = False) -> float | Tuple[float, plt.Figure]:
     """
     Calculate the anteversion of the femur.
     :param segmentation_mask: A segmentation mask of the proximal femur.
@@ -379,7 +379,6 @@ def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmenta
     :param segmentation_label: The label of the femur in the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
     :param plot: Whether to plot the results.
-    :param fp: File path to save the plot.
     :return: The anteversion angle.
     """
     # TODO revise
@@ -443,7 +442,7 @@ def get_femoral_neck_transition(neck_points: np.ndarray, side: str = 'left') -> 
     return most_proximal_medial_point[0]  # this point is one possible transition point
 
 
-def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1, plot: plt.Axes = None) -> float:
+def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1, plot: plt.Axes | bool = False) -> float:
     """
     Calculate the alpha angle from the femoral head center and the femoral neck transition.
     :param segmentation_mask: A segmentation mask of the proximal femur.
@@ -451,6 +450,7 @@ def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', seg
     :param segmentation_label: The label of the femur in the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
     :param x_ratio: Correction factor for slice thickness.
+    :param plot: Whether to plot the reference lines.
     :return: The alpha angle.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
@@ -537,7 +537,7 @@ def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', seg
     anterior_angle = calculate_angle_between_vectors(neck_axis_rotated.astype('float32'), anterior_axis.astype('float32'))
     posterior_angle = calculate_angle_between_vectors(neck_axis_rotated.astype('float32'), posterior_axis.astype('float32'))
 
-    if plot is not None:
+    if plot:
         if side == 'right':
             rotated_image = rotated_image[::-1]  # flip back for visualisation
             femoral_head_center_rotated = np.array([rotated_image.shape[0], 0, 0]) - femoral_head_center_rotated * np.array([1, -1, -1])  # adjust for flipping
