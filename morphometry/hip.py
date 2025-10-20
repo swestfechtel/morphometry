@@ -901,7 +901,7 @@ def calculate_cartilage_thickness_ray_tracing(segmentation_mask: np.ndarray, car
     return 1.
 
 
-def calculate_femoral_offset(hip_image: Image, knee_image: Optional[Image] = None, side: str = 'left', femur_label: int = 1, isotropic: bool = False, plot: pv.Plotter = None) -> float:
+def calculate_femoral_offset(hip_image: Image, knee_image: Optional[Image] = None, side: str = 'left', femur_label: int = 1, isotropic: bool = False, plot: pv.Plotter | bool = False) -> float:
     """
     Calculate the femoral offset, i.e. the distance between the femoral head center and the femoral shaft axis.
     :param hip_image: Image: A segmentation mask of the proximal femur.
@@ -921,7 +921,7 @@ def calculate_femoral_offset(hip_image: Image, knee_image: Optional[Image] = Non
     projection_vector_world = hip_image.transform_index_to_physical_point(projection_vector)
     femoral_offset = np.linalg.norm(c_world - projection_vector_world)
 
-    if plot is not None:
+    if plot:
         femur_coords = np.argwhere(hip_image.array == femur_label).astype(np.float32)
         for i, coord in enumerate(femur_coords):
             femur_coords[i] = hip_image.transform_index_to_physical_point(coord)
