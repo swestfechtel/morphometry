@@ -280,6 +280,7 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
 
     # also calculate the projected ccd
     # https://math.stackexchange.com/questions/2305792/3d-projection-on-a-2d-plane-weak-maths-ressources
+    """
     projection_plane_index = femoral_head_center[1]
     origin = np.array([hip_mask.shape[0] // 2, 0, hip_mask.shape[2] // 2])
     projection_plane_center = np.array([origin[0], projection_plane_index, origin[2]])
@@ -291,8 +292,17 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
     neck_vector_projected = femoral_neck_center_projected - femoral_head_center_projected
     shaft_vector_projected = femoral_shaft_axis_1_projected - femoral_shaft_axis_0_projected
     projected_ccd = calculate_angle_between_vectors(neck_vector_projected.astype('float32'), shaft_vector_projected.astype('float32'))
+    """
+    femoral_neck_center_projected = np.array([femoral_neck_center[0], 0, femoral_neck_center[2]])
+    femoral_head_center_projected = np.array([femoral_head_center[0], 0, femoral_head_center[2]])
+    shaft_axis_high_projected = np.array([shaft_axis_high[0], 0, shaft_axis_high[2]])
+    shaft_axis_low_projected = np.array([shaft_axis_low[0], 0, shaft_axis_low[2]])
 
-    projected_ccd = 180 - projected_ccd if projected_ccd < 90 else projected_ccd
+    neck_vector_projected = femoral_neck_center_projected - femoral_head_center_projected
+    shaft_vector_projected = shaft_axis_high_projected - shaft_axis_low_projected
+    ccd_projected = calculate_angle_between_vectors(neck_vector_projected.astype('float32'), shaft_vector_projected.astype('float32'))
+
+    ccd_projected = 180 - ccd_projected if ccd_projected < 90 else ccd_projected
 
     if plot:
         if knee_image is not None:
@@ -358,7 +368,7 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
         plot.add_lines(np.array([femoral_head_center, femoral_neck_center - 2 * neck_vector]), color='r')
         plot.add_lines(np.array([shaft_axis_high, shaft_axis_low]), color='r')
 
-    return ccd, projected_ccd
+    return ccd, ccd_projected
 
 
 def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, plot: Tuple[plt.axis, plt.axis] = None) -> float | Tuple[float, plt.Figure]:
