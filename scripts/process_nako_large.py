@@ -88,13 +88,13 @@ def f(patient):
         offset_left = np.nan
 
     try:
-        offset_right = calculate_femoral_offset_projected(mask_right, None, 'right', 1, isotropic=True, plot=False)
+        offset_right = calculate_femoral_offset_projected(mask_right.array, None, 'right', 1, isotropic=True, plot=False)
     except Exception as e:
         print(f"Error calculating femoral offset for right side of patient {patient.name}: {e}")
         offset_right = np.nan
 
     try:
-        cartilage_thickness_left = calculate_cartilage_thickness_knn(mask_left, 2)
+        cartilage_thickness_left = calculate_cartilage_thickness_knn(mask_left.array, 2)
     except Exception as e:
         print(f"Error calculating cartilage thickness for left side of patient {patient.name}: {e}")
         cartilage_thickness_left = np.nan
