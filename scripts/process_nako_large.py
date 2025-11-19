@@ -93,9 +93,22 @@ def f(patient):
         print(f"Error calculating femoral offset for right side of patient {patient.name}: {e}")
         offset_right = np.nan
 
+    try:
+        cartilage_thickness_left = calculate_cartilage_thickness_knn(mask_left, 2)
+    except Exception as e:
+        print(f"Error calculating cartilage thickness for left side of patient {patient.name}: {e}")
+        cartilage_thickness_left = np.nan
+
+    try:
+        cartilage_thickness_right = calculate_cartilage_thickness_knn(mask_right, 2)
+    except Exception as e:
+        print(f"Error calculating cartilage thickness for right side of patient {patient.name}: {e}")
+        cartilage_thickness_right = np.nan
+
     return {'patient': patient.name.split('.')[0], 'ccd_left': ccd_left, 'ccd_right': ccd_right,'fat_left': fat_left, 'fat_right': fat_right,
             'aa_left': aa_left, 'aa_right': aa_right, 'aav_left': aav[0], 'aav_right': aav[1],
-            'cea_left': cea[0], 'cea_right': cea[1], 'offset_left': offset_left, 'offset_right': offset_right}
+            'cea_left': cea[0], 'cea_right': cea[1], 'offset_left': offset_left, 'offset_right': offset_right,
+            'cartilage_thickness_left': cartilage_thickness_left,'cartilage_thickness_right': cartilage_thickness_right}
 
 
 if __name__ == '__main__':
@@ -107,7 +120,7 @@ if __name__ == '__main__':
     patients = [x.name.split('.')[0] for x in os.scandir(f'/hpcwork/p0021834/workspace_simon/nako/chunk_{chunk}_segmentations')]
     iterables = [patients, ['right', 'left']]
     index = pd.MultiIndex.from_product(iterables, names=['Patient', 'Side'])
-    df = pd.DataFrame(columns=['CCD', 'AT_murphy', 'AA_anterior', 'AA_posterior', 'AAV', 'CE', 'Offset'], index=index)
+    df = pd.DataFrame(columns=['CCD', 'AT_murphy', 'AA_anterior', 'AA_posterior', 'AAV', 'CE', 'Offset', 'Cartilage_thickness'], index=index)
     patients = [patient for patient in Path(f'/hpcwork/p0021834/workspace_simon/nako/chunk_{chunk}_segmentations').iterdir() if patient.suffix == '.gz']
 
     with multiprocessing.Pool() as pool:
@@ -129,6 +142,8 @@ if __name__ == '__main__':
         df.loc[(patient, 'left'), 'CE'] = round(x['cea_right'], 1)
         df.loc[(patient, 'right'), 'Offset'] = round(x['offset_left'], 1)
         df.loc[(patient, 'left'), 'Offset'] = round(x['offset_right'], 1)
+        df.loc[(patient, 'right'), 'Cartilage_thickness'] = round(x['cartilage_thickness_left'], 1)
+        df.loc[(patient, 'left'), 'Cartilage_thickness'] = round(x['cartilage_thickness_right'], 1)
 
     # df.to_excel('/home/sw521914/Data/nako/eval.xlsx')
     df.to_csv(f'/home/sw521914/Data/nako/results_chunk_{chunk}.csv')

@@ -265,7 +265,7 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, segm
     hip_mask = np.where(hip_mask == segmentation_label, 1, 0)  # convert to binary mask
 
     # start, stop, step = (hip_mask.shape[0], 0, -1) if side == 'right' else (0, hip_mask.shape[0], 1)
-    start, stop, step = (hip_mask.shape[0] - 1, -1, -1)
+    start, stop, step = (hip_mask.shape[0] - 1, 0, -1)
     two_components_found = False
     candidate_1, candidate_2 = False, False
     components_large_enough = False
@@ -305,14 +305,21 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, segm
     smaller_component = min(connected_components, key=lambda x: np.count_nonzero(x))
 
     start = layer
-    most_distal_segmented_point_global = np.max(np.argwhere(hip_mask == segmentation_label)[:, 1])
+    most_distal_segmented_point_global = np.max(np.argwhere(hip_mask == segmentation_label)[:, 2])
 
     for layer in range(start, stop, step):
         sagittal_layer = hip_mask[layer]
 
-        most_distal_segmented_point = np.max(np.argwhere(sagittal_layer == 1)[:, 1])
+        try:
+            most_distal_segmented_point = np.max(np.argwhere(sagittal_layer == 1)[:, 1])
+        except ValueError:
+            # print(f'Something happened that should not happen - debug info. most_distal_segmented_point={most_distal_segmented_point}, most_distal_segmented_point_global={most_distal_segmented_point_global}, start={start}, stop={stop}, step={step}, layer={layer}')
+            # plt.imshow(sagittal_layer)
+            # plt.show()
+            continue
 
-        if most_distal_segmented_point >= (most_distal_segmented_point_global - (1 if not isotropic else 10)):  # if the point is at the bottom of the image, we have found the shaft
+        offset = 1 if not isotropic else 10
+        if most_distal_segmented_point >= (most_distal_segmented_point_global - offset):  # if the point is at the bottom of the image, we have found the shaft
             break
     else:
         raise RuntimeError('Could not find the femoral shaft')

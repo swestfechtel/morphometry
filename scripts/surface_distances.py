@@ -62,4 +62,5 @@ if __name__ == '__main__':
     print(df)
     print(df.groupby(level='label').describe().T)
     if args.output_path:
-        df.to_csv(args.output_path, index=True)
+        # df.to_csv(args.output_path, index=True)
+        df.groupby(level='label').describe().T.to_excel(args.output_path)
