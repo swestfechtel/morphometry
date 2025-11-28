@@ -509,7 +509,7 @@ def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', seg
     posterior_points_sorted = sort_points_by_x(posterior_points_sorted, descending=True)
 
     tol = 2
-    tmp = contour_points[contour_points[:, 0] > femoral_head_center_rotated[0] - r]
+    tmp = contour_points[contour_points[:, 0] > (femoral_head_center_rotated[0] - .6 * r)]
 
     center, radius = fit_circle_to_points(tmp)
 
@@ -547,13 +547,15 @@ def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', seg
             center = np.array([rotated_image.shape[0], 0]) - center * np.array([1, -1])  # adjust for flipping
 
         plot.imshow(rotated_image[:, :, femoral_head_center_rotated[2]].T, cmap='gray')
+        plot.scatter(tmp[:, 0], tmp[:, 1], s=1, c='y')
         # plot.plot([femoral_head_center_rotated[0], femoral_neck_center_rotated[0]], [femoral_head_center_rotated[1], femoral_neck_center_rotated[1]], 'r-')
         # plot.plot([anterior_point[0], femoral_head_center_rotated[0]], [anterior_point[1], femoral_head_center_rotated[1]], 'g-')
         # plot.plot([posterior_point[0], femoral_head_center_rotated[0]], [posterior_point[1], femoral_head_center_rotated[1]], 'b-')
         plot.plot([center[0], femoral_neck_center_rotated[0]], [center[1], femoral_neck_center_rotated[1]], 'r-')
         plot.plot([center[0], anterior_point[0]], [center[1], anterior_point[1]], 'g-')
         plot.plot([center[0], posterior_point[0]], [center[1], posterior_point[1]], 'b-')
-        plot.add_patch(plt.Circle(center, r, color='r', fill=False))
+        plot.add_patch(plt.Circle(femoral_head_center_rotated[:2], r, color='b', fill=False))
+        plot.add_patch(plt.Circle(center, radius, color='r', fill=False))
         plot.set_aspect('equal')
 
     return anterior_angle, posterior_angle
@@ -698,13 +700,14 @@ def calculate_acetabular_depth(segmentation_mask: np.ndarray, side: str = 'left'
     return ad
 
 
-def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, plot: bool = False, fp: str = None) -> Tuple[float, float]:
+def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, project: bool = False, plot: bool = False, fp: str = None) -> Tuple[float, float]:
     """
     Calculate the center edge angle for both sides from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur.
     :param femur_label: The label of the femur in the segmentation mask.
     :param acetabulum_label: The label of the acetabulum in the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
+    :param project: Whether to project all landmarks onto a 2D plane before calculating the angle.
     :param plot: Whether to plot the results.
     :param fp: File path to save the plot.
     :return: The center edge angle for both sides.
@@ -714,6 +717,12 @@ def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int 
 
     r_l, left_fhc = get_femoral_head_center(left_mask, side='left', segmentation_label=femur_label, isotropic=isotropic)
     r_r, right_fhc = get_femoral_head_center(right_mask, side='right', segmentation_label=femur_label, isotropic=isotropic)
+
+    coronal_slice = int((right_fhc[1] + left_fhc[1]) // 2)
+
+    if project:
+        left_fhc[1] = 0
+        right_fhc[1] = 0
 
     femur_array = np.where(segmentation_mask == femur_label, 1, 0)
     left_femur = femur_array[:femur_array.shape[0] // 2]
@@ -740,10 +749,22 @@ def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int 
         tmp[:, :, :ul] = 0
         # tmp[:, :, most_proximal_femur_slice + 10:] = 0
         acetabulum_points = np.nonzero(tmp)
-        lateral_edge = np.argmin(acetabulum_points[0]) if side == 'left' else np.argmax(acetabulum_points[0])
+
+        # Find the most lateral sagittal coordinate
+        lateral_s = np.min(acetabulum_points[0]) if side == 'left' else np.max(acetabulum_points[0])
+
+        # Find all points with this sagittal coordinate
+        candidates_mask = acetabulum_points[0] == lateral_s
+        candidate_coronal = acetabulum_points[1][candidates_mask]
+        candidate_transversal = acetabulum_points[2][candidates_mask]
+
+        # Select the one with maximum transversal coordinate
+        max_transversal_idx = np.argmax(candidate_transversal)
         lateral_edge_point = np.array(
-            [acetabulum_points[0][lateral_edge], acetabulum_points[1][lateral_edge],
-             acetabulum_points[2][lateral_edge]])
+            [lateral_s, candidate_coronal[max_transversal_idx], candidate_transversal[max_transversal_idx]])
+
+        if project:
+            lateral_edge_point[1] = 0
 
         return lateral_edge_point
 
@@ -767,7 +788,7 @@ def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int 
 
     if plot:
         fig, ax = plt.subplots(figsize=(20, 10))
-        ax.imshow(segmentation_mask[:, int((right_fhc[1] + left_fhc[1]) // 2)].T, cmap='gray')
+        ax.imshow(segmentation_mask[:, coronal_slice].T, cmap='gray')
         ax.plot([left_fhc[0], right_fhc_adj[0]], [left_fhc[2], right_fhc_adj[2]], 'r-', label='G')
 
         ax.plot([left_fhc[0], s_left[0]], [left_fhc[2], s_left[2]], 'g--', label='Perpendicular Vector (right)')
@@ -775,6 +796,103 @@ def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int 
 
         ax.plot([left_fhc[0], lat_left[0]], [left_fhc[2], lat_left[2]], 'c-', label='Lateral Edge Point (right)')
         ax.plot([right_fhc_adj[0], lat_right[0] + left_mask.shape[0]], [right_fhc_adj[2], lat_right[2]], 'y-', label='Lateral Edge Point (left)')
+        ax.set_title(f'Right CEA: {cea_left:.2f}°, Left CEA: {cea_right:.2f}°')
+        ax.set_aspect('equal')
+        ax.legend()
+        fig.savefig(fp)
+        plt.close(fig)
+
+    return cea_left, cea_right
+
+
+def calculate_center_edge_angle_2d(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, plot: bool = False, fp: str = None) -> Tuple[float, float]:
+    """
+    Calculate the center edge angle for both sides from a segmentation mask. Finds the landmarks on a 2D coronal plane.
+    :param segmentation_mask: A segmentation mask of the proximal femur.
+    :param femur_label: The label of the femur in the segmentation mask.
+    :param acetabulum_label: The label of the acetabulum in the segmentation mask.
+    :param isotropic: Whether the image has isotropic voxels.
+    :param plot: Whether to plot the results.
+    :param fp: File path to save the plot.
+    :return: The center edge angle for both sides.
+    """
+    def get_lateral_edge_point(fa: np.ndarray, aa: np.ndarray, side: str = 'left') -> np.ndarray:
+        """
+        Get the most lateral edge point of the acetabulum right above the femoral head.
+        :param fa: A segmentation mask of the femur.
+        :param aa: A segmentation mask of the acetabulum.
+        :param side: Side of the image (not patient!), either 'left' or 'right'
+        :return:
+        """
+        assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
+        tmp = aa.copy()
+        ul = int((right_fhc[1] - 1.5 * r_r) if side == 'right' else (left_fhc[1] - 1.5 * r_l))
+        tmp[:, :, :ul] = 0
+        tmp = tmp[:, coronal_slice]
+
+        acetabulum_points = np.nonzero(tmp)
+
+        lateral_s = np.min(acetabulum_points[0]) if side == 'left' else np.max(acetabulum_points[0])
+
+        # Find all points with this sagittal coordinate
+        candidates_mask = acetabulum_points[0] == lateral_s
+        candidate_transversal = acetabulum_points[1][candidates_mask]
+
+        # Select the one with maximum transversal coordinate
+        max_transversal_idx = np.argmax(candidate_transversal)
+        lateral_edge_point = np.array(
+            [lateral_s, candidate_transversal[max_transversal_idx]])
+
+        return lateral_edge_point
+
+    left_mask = segmentation_mask[:segmentation_mask.shape[0] // 2]
+    right_mask = segmentation_mask[segmentation_mask.shape[0] // 2:]
+
+    r_l, left_fhc = get_femoral_head_center(left_mask, side='left', segmentation_label=femur_label, isotropic=isotropic)
+    r_r, right_fhc = get_femoral_head_center(right_mask, side='right', segmentation_label=femur_label, isotropic=isotropic)
+
+    coronal_slice = int((left_fhc[1] + right_fhc[1]) // 2)
+    left_fhc = np.array([left_fhc[0], left_fhc[2]])
+    right_fhc = np.array([right_fhc[0], right_fhc[2]])
+
+    femur_array = np.where(segmentation_mask == femur_label, 1, 0)
+    left_femur = femur_array[:femur_array.shape[0] // 2]
+    right_femur = femur_array[femur_array.shape[0] // 2:]
+
+    right_fhc_adj = right_fhc.copy()
+    right_fhc_adj[0] += left_femur.shape[
+        0]  # adjust the x coordinate of the right femoral head center to account for the splitting into left and right
+    G = left_fhc - right_fhc_adj  # G is the vector connecting the left and right femoral head center
+
+    acetabulum_array = np.where(segmentation_mask == acetabulum_label, 1, 0)
+    left_acetabulum = acetabulum_array[:acetabulum_array.shape[0] // 2]
+    right_acetabulum = acetabulum_array[acetabulum_array.shape[0] // 2:]
+
+    d = np.array([0, -1])
+    n = G / np.linalg.norm(G)
+    d_perp = d - np.dot(d, n) * n  # d_perp is perpendicular to G and goes in proximal direction
+    d_perp *= 100  # scale the perpendicular vector to a reasonable length
+    s_right = right_fhc_adj + d_perp  # s is a point from the femoral head center with direction d_perp, just for visualisation
+    lat_right = get_lateral_edge_point(right_femur, right_acetabulum, side='right')
+    s2_right = lat_right - right_fhc
+    cea_right = calculate_angle_between_vectors(d_perp, s2_right)
+
+    s_left = left_fhc + d_perp
+    lat_left = get_lateral_edge_point(left_femur, left_acetabulum)
+    s2_left = lat_left - left_fhc
+    cea_left = calculate_angle_between_vectors(d_perp, s2_left)
+
+    if plot:
+        fig, ax = plt.subplots(figsize=(20, 10))
+        ax.imshow(segmentation_mask[:, coronal_slice].T, cmap='gray')
+        ax.plot([left_fhc[0], right_fhc_adj[0]], [left_fhc[1], right_fhc_adj[1]], 'r-', label='G')
+
+        ax.plot([left_fhc[0], s_left[0]], [left_fhc[1], s_left[1]], 'g--', label='Perpendicular Vector (right)')
+        ax.plot([right_fhc_adj[0], s_right[0]], [right_fhc_adj[1], s_right[1]], 'b--', label='Perpendicular Vector (left)')
+
+        ax.plot([left_fhc[0], lat_left[0]], [left_fhc[1], lat_left[1]], 'c-', label='Lateral Edge Point (right)')
+        ax.plot([right_fhc_adj[0], lat_right[0] + left_mask.shape[0]], [right_fhc_adj[1], lat_right[1]], 'y-', label='Lateral Edge Point (left)')
         ax.set_title(f'Right CEA: {cea_left:.2f}°, Left CEA: {cea_right:.2f}°')
         ax.set_aspect('equal')
         ax.legend()
@@ -871,7 +989,7 @@ def get_cartilage_inner_and_outer_surface_points(segmentation_mask: np.ndarray, 
     return inner_surface, outer_surface
 
 
-def calculate_cartilage_thickness_knn(segmentation_mask: np.ndarray, cartilage_label: int = 2) -> float:
+def calculate_cartilage_thickness_knn(segmentation_mask: np.ndarray, cartilage_label: int = 2) -> Tuple[float, float, float, float]:
     """
     Calculate the cartilage thickness using a k-nearest neighbors approach.
     :param segmentation_mask: A 3D segmentation mask of the hip.
@@ -886,7 +1004,7 @@ def calculate_cartilage_thickness_knn(segmentation_mask: np.ndarray, cartilage_l
         distance, _ = inner_tree.query(point)
         distances[i] = distance
 
-    return np.nanmean(distances)
+    return np.nanmean(distances), np.nanstd(distances), np.nanmin(distances), np.nanmax(distances)
 
 
 def calculate_cartilage_thickness_ray_tracing(segmentation_mask: np.ndarray, cartilage_label: int = 2) -> float:

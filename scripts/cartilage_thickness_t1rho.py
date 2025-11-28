@@ -313,7 +313,7 @@ if __name__ == '__main__':
 
         unloaded_df, med_to_lat_df, lat_to_med_df = process_patient(path.name, unloaded, med_to_lat, lat_to_med, unloaded_df, med_to_lat_df, lat_to_med_df)
 
-        """
+
         if str(path.name) == 'P04':
             unloaded_new = Image('nibabel')
             unloaded_new.read_image(f'{data_path}/Duesseldorf/T1rho/{path.name}/1Relaxed/1Relaxednew.nii.gz')
@@ -340,7 +340,7 @@ if __name__ == '__main__':
 
             unloaded_df, med_to_lat_df, lat_to_med_df = process_patient('P10_new', unloaded_new, med_to_lat_new,
                                                                         lat_to_med_new, unloaded_df, med_to_lat_df,
-                                                                        lat_to_med_df)"""
+                                                                        lat_to_med_df)
 
     unloaded_df.to_excel('../unloaded_df.xlsx')
     med_to_lat_df.to_excel('../med_to_lat_df.xlsx')

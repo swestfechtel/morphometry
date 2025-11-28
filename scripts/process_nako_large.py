@@ -76,7 +76,7 @@ def f(patient):
         aav = [np.nan, np.nan]
 
     try:
-        cea = calculate_center_edge_angle(mask.array, 1, 3, isotropic=True, plot=False)
+        cea = calculate_center_edge_angle(mask.array, 1, 3, project=True, isotropic=True, plot=False)
     except Exception as e:
         print(f"Error calculating CEA for left side of patient {patient.name}: {e}")
         cea = [np.nan, np.nan]
@@ -97,13 +97,13 @@ def f(patient):
         cartilage_thickness_left = calculate_cartilage_thickness_knn(mask_left.array, 2)
     except Exception as e:
         print(f"Error calculating cartilage thickness for left side of patient {patient.name}: {e}")
-        cartilage_thickness_left = np.nan
+        cartilage_thickness_left = (np.nan, np.nan, np.nan, np.nan)
 
     try:
         cartilage_thickness_right = calculate_cartilage_thickness_knn(mask_right.array, 2)
     except Exception as e:
         print(f"Error calculating cartilage thickness for right side of patient {patient.name}: {e}")
-        cartilage_thickness_right = np.nan
+        cartilage_thickness_right = (np.nan, np.nan, np.nan, np.nan)
 
     return {'patient': patient.name.split('.')[0], 'ccd_left': ccd_left, 'ccd_right': ccd_right,'fat_left': fat_left, 'fat_right': fat_right,
             'aa_left': aa_left, 'aa_right': aa_right, 'aav_left': aav[0], 'aav_right': aav[1],
@@ -142,8 +142,14 @@ if __name__ == '__main__':
         df.loc[(patient, 'left'), 'CE'] = round(x['cea_right'], 1)
         df.loc[(patient, 'right'), 'Offset'] = round(x['offset_left'], 1)
         df.loc[(patient, 'left'), 'Offset'] = round(x['offset_right'], 1)
-        df.loc[(patient, 'right'), 'Cartilage_thickness'] = round(x['cartilage_thickness_left'], 1)
-        df.loc[(patient, 'left'), 'Cartilage_thickness'] = round(x['cartilage_thickness_right'], 1)
+        df.loc[(patient, 'right'), 'Cartilage_thickness (mean)'] = round(x['cartilage_thickness_left'][0], 1)
+        df.loc[(patient, 'left'), 'Cartilage_thickness (mean)'] = round(x['cartilage_thickness_right'][0], 1)
+        df.loc[(patient, 'right'), 'Cartilage_thickness (std)'] = round(x['cartilage_thickness_left'][1], 1)
+        df.loc[(patient, 'left'), 'Cartilage_thickness (std)'] = round(x['cartilage_thickness_right'][1], 1)
+        df.loc[(patient, 'right'), 'Cartilage_thickness (min)'] = round(x['cartilage_thickness_left'][2], 1)
+        df.loc[(patient, 'left'), 'Cartilage_thickness (min)'] = round(x['cartilage_thickness_right'][2], 1)
+        df.loc[(patient, 'right'), 'Cartilage_thickness (max)'] = round(x['cartilage_thickness_left'][3], 1)
+        df.loc[(patient, 'left'), 'Cartilage_thickness (max)'] = round(x['cartilage_thickness_right'][3], 1)
 
     # df.to_excel('/home/sw521914/Data/nako/eval.xlsx')
     df.to_csv(f'/home/sw521914/Data/nako/results_chunk_{chunk}.csv')

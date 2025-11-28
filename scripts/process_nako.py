@@ -13,7 +13,8 @@ import pyvista as pv
 from pathlib import Path
 from morphometry.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
     calculate_alpha_angle, calculate_acetabular_depth, calculate_center_edge_angle, \
-    calculate_cartilage_thickness_knn, calculate_femoral_offset, calculate_femoral_offset_projected
+    calculate_cartilage_thickness_knn, calculate_femoral_offset, calculate_femoral_offset_projected, \
+    calculate_center_edge_angle_2d
 from morphometry.image_io import Segmentation
 from matplotlib import pyplot as plt
 
@@ -108,9 +109,10 @@ def f(patient):
         aav = [np.nan, np.nan]
 
     try:
-        cea = calculate_center_edge_angle(mask.array, 1, 3, isotropic=True, plot=True, fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png')
+        cea = calculate_center_edge_angle(mask.array, 1, 3, isotropic=True, project=True, plot=True, fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png')
+        # cea = calculate_center_edge_angle_2d(mask.array, 1, 3, isotropic=True, plot=True, fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png')
     except Exception as e:
-        print(f"Error calculating CEA for left side of patient {patient.name}: {e}")
+        print(f"Error calculating CEA of patient {patient.name}: {e}")
         cea = [np.nan, np.nan]
 
     p = pv.Plotter(off_screen=True)
@@ -172,4 +174,4 @@ if __name__ == '__main__':
         df.loc[(patient, 'left'), 'Offset'] = round(x['offset_right'], 1)
 
     print(df)
-    df.to_excel('/home/simon/Data/NaKo_sample/eval.xlsx')
+    df.to_excel('/home/simon/Data/NaKo_sample/tables/eval.xlsx')
