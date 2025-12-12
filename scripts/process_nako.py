@@ -1,6 +1,5 @@
-import os
-import re
 import multiprocessing
+import os
 import sys
 
 sys.path.append('/home/simon/Work/morphometry')
@@ -12,14 +11,13 @@ import pyvista as pv
 
 from pathlib import Path
 from morphometry.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
-    calculate_alpha_angle, calculate_acetabular_depth, calculate_center_edge_angle, \
-    calculate_cartilage_thickness_knn, calculate_femoral_offset, calculate_femoral_offset_projected, \
-    calculate_center_edge_angle_2d
+    calculate_alpha_angle, calculate_center_edge_angle, \
+    calculate_femoral_offset_projected
 from morphometry.image_io import Segmentation
 from matplotlib import pyplot as plt
 
 
-def f(patient):
+def f(patient: Path):
     mask = Segmentation('nibabel')
     mask.read_image(patient)
     mask.transform_coordinate_system()
@@ -65,19 +63,19 @@ def f(patient):
 
     fig, ax = plt.subplots(nrows=2, ncols=2, figsize=(20, 10))
     try:
-        fat_left = calculate_anteversion(mask_left, 'left', 1, isotropic=True, plot=(ax[0,0], ax[1,0]))
+        fat_left = calculate_anteversion(mask_left, 'left', 1, isotropic=True, plot=(ax[0, 0], ax[1, 0]))
     except Exception as e:
         print(f"Error calculating FAT for left side of patient {patient.name}: {e}")
         fat_left = np.nan
 
     try:
-        fat_right = calculate_anteversion(mask_right, 'right', 1, isotropic=True, plot=(ax[0, 1], ax[1,1]))
+        fat_right = calculate_anteversion(mask_right, 'right', 1, isotropic=True, plot=(ax[0, 1], ax[1, 1]))
     except Exception as e:
         print(f"Error calculating FAT for right side of patient {patient.name}: {e}")
         fat_right = np.nan
 
-    ax[0,0].set_title(f'Antetorsion right: {fat_left:.1f}°')
-    ax[0,1].set_title(f'Antetorsion left: {fat_right:.1f}°')
+    ax[0, 0].set_title(f'Antetorsion right: {fat_left:.1f}°')
+    ax[0, 1].set_title(f'Antetorsion left: {fat_right:.1f}°')
     fig.savefig(f'/home/simon/Data/NaKo_sample/plots/anteversion/{patient.name}.png')
     plt.close(fig)
 
@@ -109,7 +107,9 @@ def f(patient):
         aav = [np.nan, np.nan]
 
     try:
-        cea = calculate_center_edge_angle(mask.array, 1, 3, isotropic=True, project=True, plot=True, fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png')
+        cea = calculate_center_edge_angle(mask.array, 1, 3, isotropic=True, project=True, plot=True,
+                                          fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png',
+                                          image_path=f'/home/simon/Data/NaKo_sample/nifti/{patient.name.replace(".nii.gz", "_0000.nii.gz")}')
         # cea = calculate_center_edge_angle_2d(mask.array, 1, 3, isotropic=True, plot=True, fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png')
     except Exception as e:
         print(f"Error calculating CEA of patient {patient.name}: {e}")
@@ -139,10 +139,10 @@ def f(patient):
     p.screenshot(f'/home/simon/Data/NaKo_sample/plots/offset/{patient.name}_offset.png')
     p.close()
 
-    return {'patient': patient.name.split('.')[0], 'ccd_left': ccd_left, 'ccd_right': ccd_right,'fat_left': fat_left, 'fat_right': fat_right,
+    return {'patient': patient.name.split('.')[0], 'ccd_left': ccd_left, 'ccd_right': ccd_right, 'fat_left': fat_left,
+            'fat_right': fat_right,
             'aa_left': aa_left, 'aa_right': aa_right, 'aav_left': aav[0], 'aav_right': aav[1],
             'cea_left': cea[0], 'cea_right': cea[1], 'offset_left': offset_left, 'offset_right': offset_right}
-
 
 
 if __name__ == '__main__':
@@ -150,8 +150,9 @@ if __name__ == '__main__':
     iterables = [patients, ['right', 'left']]
     index = pd.MultiIndex.from_product(iterables, names=['Patient', 'Side'])
     df = pd.DataFrame(columns=['CCD', 'AT_murphy', 'AA_anterior', 'AA_posterior', 'AAV', 'CE', 'Offset'], index=index)
-    patients = [patient for patient in Path('/home/simon/Data/NaKo_sample/segmentations').iterdir() if patient.suffix == '.gz']
-    pv.start_xvfb()
+    patients = [patient for patient in Path('/home/simon/Data/NaKo_sample/segmentations').iterdir() if
+                patient.suffix == '.gz']
+    # pv.start_xvfb()
 
     with multiprocessing.Pool() as pool:
         res = pool.map(f, patients)

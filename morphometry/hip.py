@@ -700,7 +700,7 @@ def calculate_acetabular_depth(segmentation_mask: np.ndarray, side: str = 'left'
     return ad
 
 
-def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, project: bool = False, plot: bool = False, fp: str = None) -> Tuple[float, float]:
+def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, project: bool = False, plot: bool = False, fp: str = None, image_path: str = None) -> Tuple[float, float]:
     """
     Calculate the center edge angle for both sides from a segmentation mask.
     :param segmentation_mask: A segmentation mask of the proximal femur.
@@ -710,6 +710,7 @@ def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int 
     :param project: Whether to project all landmarks onto a 2D plane before calculating the angle.
     :param plot: Whether to plot the results.
     :param fp: File path to save the plot.
+    :param image_path: File path to the original image for plotting.
     :return: The center edge angle for both sides.
     """
     left_mask = segmentation_mask[:segmentation_mask.shape[0] // 2]
@@ -788,7 +789,15 @@ def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int 
 
     if plot:
         fig, ax = plt.subplots(figsize=(20, 10))
-        ax.imshow(segmentation_mask[:, coronal_slice].T, cmap='gray')
+        if image_path:
+            image = Image('nibabel')
+            image.read_image(image_path)
+            image.transform_coordinate_system()
+            ax.imshow(image.array[:, coronal_slice].T, cmap='gray')
+            ax.imshow(np.where(segmentation_mask > 0, segmentation_mask, np.nan)[:, coronal_slice].T, alpha=.5)
+        else:
+            ax.imshow(segmentation_mask[:, coronal_slice].T, cmap='gray')
+
         ax.plot([left_fhc[0], right_fhc_adj[0]], [left_fhc[2], right_fhc_adj[2]], 'r-', label='G')
 
         ax.plot([left_fhc[0], s_left[0]], [left_fhc[2], s_left[2]], 'g--', label='Perpendicular Vector (right)')
