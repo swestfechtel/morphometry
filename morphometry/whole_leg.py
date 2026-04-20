@@ -1,106 +1,14 @@
 import numpy as np
 from numpy import floating
 
-from morphometry.hip import get_femoral_head_center
+from morphometry.hip import get_femoral_head_center_ct
 from morphometry.knee import get_knee_center
 from morphometry.utils import get_minimum_distance_between_line_and_point, get_point_orientation_to_vertical_line, \
-    get_minimum_distance_between_line_and_point_
-from morphometry.image_io import Image
+    get_minimum_distance_between_line_and_point_, get_vector_through_point_perpendicular_to_line, \
+    calculate_angle_between_vectors
+from morphometry.image_io import Image, Segmentation, split_ct_image
 from typing import Tuple, Any
 from scipy.ndimage import center_of_mass
-
-def get_mikulicz_line(hip_mask: np.ndarray, ankle_mask: np.ndarray, side: str = 'left', x_ratio: float = 1., isotropic: bool = False) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Get the Mikulicz line of one image side.
-
-    The Mikulicz line is the line connecting the center of the femoral head and the center of the ankle.
-    :param hip_mask: A 3D segmentation mask of the hip, where the femur should be labeled 1 and everything else 0.
-    :param ankle_mask: A 3D segmentation mask of the ankle, where tibia and fibula should both be labeled 1 and
-    everything else 0.
-    :param side: The side of the image (not patient!), either 'left' or 'right'.
-    :param x_ratio: Correction factor for slice thickness.
-    :param isotropic: Whether the image has isotropic voxels.
-    :return: The proximal and distal points of the Mikulicz line, i.e. the center of the femoral head and the center
-    of the ankle.
-    """
-    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
-    r, femoral_head_center = get_femoral_head_center(hip_mask, side=side, x_ratio=x_ratio, isotropic=isotropic)
-    # ankle_center = np.array(center_of_mass(ankle_mask))
-    ankle_mask_cleaned = np.where(ankle_mask == 1, 1, 0)  # null everything else
-    ankle_center_index = get_distal_articulating_surface(ankle_mask_cleaned, 1)
-    ankle_center = np.array(center_of_mass(ankle_mask_cleaned[:, :, ankle_center_index]))
-    ankle_center = np.array([ankle_center[0], ankle_center[1], ankle_center_index])
-
-    return femoral_head_center, ankle_center
-
-
-def calculate_mikulicz_deviation(hip_image: Image, knee_image: Image, ankle_image: Image, side:str = 'left', x_ratio: float = 1., proximal_femur_label: int = 1, distal_femur_label: int = 1, proximal_tibia_label: int = 2, distal_tibia_label: int = 1, distal_fibula_label: int = 2) -> float:
-    """
-    Calculate the deviation of the center of the knee from the Mikulicz line.
-    :param hip_image: An Image object of the hip segmentation mask.
-    :param knee_image: An Image object of the knee segmentation mask.
-    :param ankle_image: An Image object of the ankle segmentation mask.
-    :param side: The side of the image (not patient!), either 'left' or 'right'.
-    :param x_ratio: Correction factor for slice thickness.
-    :param proximal_femur_label: The segmentation label of the femur at hip level.
-    :param distal_femur_label: The segmentation label of the femur at knee level.
-    :param proximal_tibia_label: The segmentation label of the tibia at knee level.
-    :param distal_tibia_label: The segmentation label of the tibia at ankle level.
-    :param distal_fibula_label: The segmentation label of the fibula at ankle level.
-    :return: The deviation of the center of the knee from the Mikulicz line.
-    """
-    # prepare masks
-    hip_mask = np.where(hip_image.array == proximal_femur_label, 1, 0)
-
-    knee_mask = np.where(knee_image.array == distal_femur_label, 1, knee_image.array)  # set distal femur to 1
-    knee_mask = np.where(knee_mask == proximal_tibia_label, 1, knee_mask)  # set proximal tibia to 1
-    knee_mask = np.where(knee_mask == 1, 1, 0)  # null everything else
-
-    ankle_mask = np.where(ankle_image.array == distal_tibia_label, 1, ankle_image.array)  # set distal tibia to 1
-    ankle_mask = np.where(ankle_mask == distal_fibula_label, 1, ankle_mask)  # set distal fibula to 1
-    ankle_mask = np.where(ankle_mask == 1, 1, 0)  # null everything else
-
-    femoral_head_center, ankle_center = get_mikulicz_line(hip_mask, ankle_mask, side=side, x_ratio=x_ratio)
-    knee_center = get_knee_center(knee_mask)
-
-    fhc_world = np.array(hip_image.transform_index_to_physical_point(femoral_head_center))
-    kc_world = np.array(knee_image.transform_index_to_physical_point(knee_center))
-    ac_world = np.array(ankle_image.transform_index_to_physical_point(ankle_center))
-
-    mikulicz_line = fhc_world - ac_world
-    w = kc_world - ac_world
-    d = np.linalg.norm(np.cross(mikulicz_line, w)) / np.linalg.norm(mikulicz_line)
-
-    t = (np.dot(w, mikulicz_line)) / np.power(np.linalg.norm(mikulicz_line), 2)
-    l = ac_world + np.dot(t, mikulicz_line)
-
-    # print(f'd = {d}, kc-l = {np.linalg.norm(kc_world - l)}')
-
-    """
-    World coordinates are positive on the left image side (right patient side)
-    and negative on the right image side (left patient side).
-    """
-
-    if side == 'left':  # remember here side refers to image side
-        if l[2] > kc_world[2]:  # if the mikulicz line is lateral to the knee, it is a medial deviation, which is encoded as a negative value
-            return -d
-
-    if side == 'right':
-        if l[2] < kc_world[2]:
-            return -d
-
-    return d
-
-    print(f'Femoral head center: {fhc_world}, Knee center: {kc_world}, Ankle center: {ac_world}')
-    # discard y coordinate since we are only interested in the deviation in the x-z plane
-    # + minimum distance method is only defined for 2D points as of now.
-    fhc_world_2d = np.array([fhc_world[0], fhc_world[-1]])
-    kc_world_2d = np.array([kc_world[0], kc_world[-1]])
-    ac_world_2d = np.array([ac_world[0], ac_world[-1]])
-    orientation = get_point_orientation_to_vertical_line(fhc_world_2d, ac_world_2d, kc_world_2d)
-    print(f'Knee center is to the {orientation} image side of the Mikulicz line.')
-
-    return get_minimum_distance_between_line_and_point(fhc_world_2d, ac_world_2d, kc_world_2d)
 
 
 def get_distal_articulating_surface(ankle_image: np.ndarray, tibia_label: int = 1) -> int:
@@ -139,6 +47,113 @@ def get_distal_articulating_surface(ankle_image: np.ndarray, tibia_label: int = 
     return largest_change - 1  # -1 because we want the slice before the change, which is the distal articulating surface
 
 
+def get_mechanical_axis(whole_leg_image: Segmentation, femur_label: int = 1, tibia_label: int = 2, fibula_label: int = 3, patella_label: int = 5, hip_label: int = 7, side: str = 'left') -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Get the Mikulicz line of one image side.
+
+    The Mikulicz line is the line connecting the center of the femoral head and the center of the ankle.
+    :param whole_leg_image: An Image object of the whole leg segmentation mask.
+    :param femur_label: The segmentation label of the femur.
+    :param tibia_label: The segmentation label of the tibia.
+    :param fibula_label: The segmentation label of the fibula.
+    :param patella_label: The segmentation label of the patella.
+    :param hip_label: The segmentation label of the hip.
+    :param side: The side of the image (not patient!), either 'left' or 'right'.
+    :return: The proximal and distal points of the Mikulicz line, i.e. the center of the femoral head and the center
+    of the ankle.
+    """
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
+    r, femoral_head_center = get_femoral_head_center_ct(whole_leg_image, femur_label, side)
+    _, masks = split_ct_image(whole_leg_image, None, femur_label=femur_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label)
+    ankle_mask = masks[2]
+
+    ankle_mask = np.where(ankle_mask.array == tibia_label, 1, 0)  # set distal tibia to 1
+    ankle_center_index = get_distal_articulating_surface(ankle_mask, 1)
+    ankle_center = np.array(center_of_mass(ankle_mask[:, :, ankle_center_index]))
+    ankle_center = np.array([ankle_center[0], ankle_center[1], ankle_center_index])
+    ankle_center = whole_leg_image.transform_index_to_physical_point(ankle_center)
+
+    return femoral_head_center, ankle_center
+
+
+def calculate_mechanical_axis_deviation(whole_leg_image: Segmentation, femur_label: int = 1, tibia_label: int = 2, fibula_label: int = 3, patella_label: int = 5, hip_label: int = 7, side:str = 'left') -> float:
+    """
+    Calculate the deviation of the center of the knee from the Mikulicz line.
+    :param whole_leg_image: An Image object of the whole leg segmentation mask.
+    :param femur_label: The segmentation label of the femur.
+    :param tibia_label: The segmentation label of the tibia.
+    :param fibula_label: The segmentation label of the fibula.
+    :param patella_label: The segmentation label of the patella.
+    :param hip_label: The segmentation label of the hip.
+    :param side: The side of the image (not patient!), either 'left' or 'right'.
+    :return: The deviation of the center of the knee from the Mikulicz line.
+    """
+
+    femoral_head_center, ankle_center = get_mechanical_axis(whole_leg_image, femur_label=femur_label, tibia_label=tibia_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label, side=side)
+    _, masks = split_ct_image(whole_leg_image, None)
+    knee_mask = masks[1]
+
+    knee_mask = knee_mask.array.copy()
+    knee_mask = np.where(knee_mask == tibia_label, 1, 0)
+    knee_mask = np.where(knee_mask > 1, 0, knee_mask)
+
+    knee_center = get_knee_center(knee_mask)
+    knee_center = whole_leg_image.transform_index_to_physical_point(knee_center)
+
+    femoral_head_center[1] = 0  # project to frontal plane
+    knee_center[1] = 0
+    ankle_center[1] = 0
+
+    mikulicz_line = femoral_head_center - ankle_center
+    _, projection_vector = get_vector_through_point_perpendicular_to_line(femoral_head_center, mikulicz_line, knee_center)
+    d = np.linalg.norm(knee_center - projection_vector)
+
+    if side == 'left':  # remember here side refers to image side
+        if projection_vector[0] > knee_center[0]:  # if the mikulicz line is lateral to the knee, it is a medial deviation, which is encoded as a negative value
+            return -d
+
+    if side == 'right':
+        if projection_vector[0] < knee_center[0]:
+            return -d
+
+    return d
+
+
+def calculate_hip_knee_ankle_angle(whole_leg_image: Segmentation, femur_label: int = 1, tibia_label: int = 2, fibula_label: int = 3, patella_label: int = 5, hip_label: int = 7, side: str = 'left') -> float:
+    """
+    Calculate the hip-knee-ankle angle.
+    :param whole_leg_image: An Image object of the whole leg segmentation mask.
+    :param femur_label: The segmentation label of the femur.
+    :param tibia_label: The segmentation label of the tibia.
+    :param fibula_label: The segmentation label of the fibula.
+    :param patella_label: The segmentation label of the patella.
+    :param hip_label: The segmentation label of the hip.
+    :param side: The side of the image (not patient!), either 'left' or 'right'.
+    :return: The hip-knee-ankle angle in degrees.
+    """
+    femoral_head_center, ankle_center = get_mechanical_axis(whole_leg_image, femur_label=femur_label, tibia_label=tibia_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label, side=side)
+    _, masks = split_ct_image(whole_leg_image, None)
+    knee_mask = masks[1]
+
+    knee_mask = knee_mask.array.copy()
+    knee_mask = np.where(knee_mask == tibia_label, 1, 0)
+    knee_mask = np.where(knee_mask > 1, 0, knee_mask)
+    knee_center = get_knee_center(knee_mask)
+    knee_center = whole_leg_image.transform_index_to_physical_point(knee_center)
+
+    hip_knee_vector = knee_center - femoral_head_center
+    knee_ankle_vector = ankle_center - knee_center
+
+    # Project to coronal plane
+    hip_knee_vector[1] = 0
+    knee_ankle_vector[1] = 0
+
+    angle = calculate_angle_between_vectors(hip_knee_vector, knee_ankle_vector)
+
+    return angle
+
+
 def calculate_bone_length(proximal_image: Image, distal_image: Image, proximal_label: int, distal_label: int, tibia=False) -> floating[Any]:
     """
     Calculate the length of the femur, tibia or whole leg.
@@ -166,6 +181,30 @@ def calculate_bone_length(proximal_image: Image, distal_image: Image, proximal_l
 
     proximal_world = proximal_image.transform_index_to_physical_point(proximal_layer_centroid)
     distal_world = distal_image.transform_index_to_physical_point(distal_layer_centroid)
+
+    return np.linalg.norm(np.array(proximal_world) - np.array(distal_world))
+
+
+def calculate_bone_length_ct(whole_leg_image: Segmentation, segmentation_label: int) -> floating[Any]:
+    """
+    Calculate the length of the femur or tibia in a whole leg CT segmentation.
+    :param whole_leg_image: An Image object of the whole leg segmentation mask.
+    :param segmentation_label: The segmentation label of the bone in the whole leg image.
+    :return: The length of the bone.
+    """
+    cleaned = np.where(whole_leg_image.array == segmentation_label, 1, 0)
+
+    most_proximal_layer = np.min(np.argwhere(cleaned)[:, 2])
+    most_distal_layer = np.max(np.argwhere(cleaned)[:, 2])
+
+    proximal_layer_centroid = center_of_mass(cleaned[:, :, most_proximal_layer])
+    proximal_layer_centroid = (proximal_layer_centroid[0], proximal_layer_centroid[1], most_proximal_layer)
+
+    distal_layer_centroid = center_of_mass(cleaned[:, :, most_distal_layer])
+    distal_layer_centroid = (distal_layer_centroid[0], distal_layer_centroid[1], most_distal_layer)
+
+    proximal_world = whole_leg_image.transform_index_to_physical_point(proximal_layer_centroid)
+    distal_world = whole_leg_image.transform_index_to_physical_point(distal_layer_centroid)
 
     return np.linalg.norm(np.array(proximal_world) - np.array(distal_world))
 

@@ -175,6 +175,8 @@ class TorsionModelJob(ModelJob):
 
             examination.femoral_torsion_left = results['femoral_torsion_left']
             examination.femoral_torsion_right = results['femoral_torsion_right']
+            examination.femoral_torsion_left_murphy = results.get('femoral_torsion_left_murphy')
+            examination.femoral_torsion_right_murphy = results.get('femoral_torsion_right_murphy')
             examination.tibial_torsion_left = results['tibial_torsion_left']
             examination.tibial_torsion_right = results['tibial_torsion_right']
 

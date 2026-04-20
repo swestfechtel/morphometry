@@ -5,11 +5,11 @@ from matplotlib import pyplot as plt
 from scipy.ndimage import center_of_mass
 from scipy.optimize import curve_fit
 from skimage.measure import find_contours
-from morphometry.hip import get_femoral_head_center
+from morphometry.hip import get_femoral_head_center, get_femoral_head_center_ct
 from morphometry.knee import get_knee_reference_line
 from morphometry.utils import rotate_mask_dorsal_points, find_notch, transform_point, points_on_circle, \
     get_contour, calculate_angle_between_vectors, circle_fit, draw_circle, draw_line, extract_connected_components_2d
-from morphometry.image_io import Image
+from morphometry.image_io import Image, Segmentation, split_ct_image
 from typing import Tuple
 
 
@@ -249,8 +249,8 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, segm
 
         :return: Whether the trochanter minor is plausible.
         """
-        tm = (int(trochanter_minor[0]), int(trochanter_minor[1]), int(trochanter_minor[2]))
-        fh = (int(femoral_head_centre[0]), int(femoral_head_centre[1]), int(femoral_head_centre[2]))
+        tm = trochanter_minor.astype(np.int16)
+        fh = femoral_head_centre.astype(np.int32)
 
         tm_world = hip_image.transform_index_to_physical_point(tm)
         fh_world = hip_image.transform_index_to_physical_point(fh)
@@ -433,6 +433,51 @@ def get_proximal_reference_line(hip_image: Image, side: str = 'left',
     return (start, end, r_fh, r_tm) if method == 'tomczak' else (start, end, r_fh)
 
 
+def get_proximal_reference_line_ct(femur_image: Segmentation, side: str = 'left', segmentation_label: int = 1) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Get the proximal reference line of a CT femur segmentation for calculating the femoral torsion.
+    :param femur_image: A Segmentation object of the femur segmentation mask.
+    :param side: The side of the image (not patient!), either 'left' or 'right'.
+    :param segmentation_label: The label of the femur in the segmentation mask.
+    :return: The start and end points of the reference line.
+    """
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
+    r_fh, fhc = get_femoral_head_center_ct(femur_image, segmentation_label, side)
+    tmp = fhc + np.array([r_fh, 0, 0])  # rationale: point on the surface of the femoral head in arbitrary direction
+
+    fhc = femur_image.transform_physical_point_to_index(fhc)
+    tmp = femur_image.transform_physical_point_to_index(tmp)  # transform that point to index space
+    r_fh = np.linalg.norm(fhc - tmp)  # recalculate radius in index space
+
+    hip_start = np.min(np.argwhere(femur_image.array == segmentation_label)[:, 2])
+    femur_end = np.max(np.argwhere(femur_image.array == segmentation_label)[:, 2])
+    num_femur_slices = femur_end - hip_start + 1
+    hip_end = hip_start + int(num_femur_slices * 0.30)  # take 30% of the femur length to find the femoral neck base
+
+    mask = np.where(femur_image.array == segmentation_label, 1, 0)
+    mask[:, :, :hip_start] = 0
+    mask[:, :, hip_end:] = 0
+
+    if side == 'right':
+        mask = mask[::-1]
+        fhc[0] = fhc[0] + (mask.shape[0] // 2 - fhc[0]) * 2  # flip sagittal coordinate of center
+        tmp = nib.Nifti1Image(mask, femur_image.affine, femur_image.header)
+        hip_image = Segmentation.from_nibabel(tmp)
+    else:
+        tmp = nib.Nifti1Image(mask, femur_image.affine, femur_image.header)
+        hip_image = Segmentation.from_nibabel(tmp)
+
+    end = get_femoral_neck_base(hip_image, fhc, segmentation_label, False)
+
+    if side == 'right':
+        end[0] = end[0] + (hip_image.array.shape[0] // 2 - end[0]) * 2  # flip sagittal coordinate back
+        fhc[0] = fhc[0] - (fhc[0] - hip_image.array.shape[0] // 2) * 2
+
+    start: np.ndarray = np.array([fhc[0], fhc[1], fhc[2]])
+    return start, end
+
+
 def calculate_femoral_torsion(hip_image: Image, knee_mask: np.ndarray, side: str = 'left', method: str = 'lee',
                               segmentation_label: int = 1, x_ratio: float = 1., plot: bool = False,
                               isotropic: bool = False, return_landmarks: bool = False) -> float | Tuple[float, plt.Figure] | Tuple[float, dict] | Tuple[float, plt.Figure, dict]:
@@ -482,7 +527,7 @@ def calculate_femoral_torsion(hip_image: Image, knee_mask: np.ndarray, side: str
 
     knee_mask = np.where(knee_mask == segmentation_label, 1, 0)
     knee_layer, knee_start, knee_end = get_knee_reference_line(knee_mask,
-                                                               bone='femur')  # for both image sides, knee_start is to the right of knee_end
+                                                               bone='femur', segmentation_label=segmentation_label)  # for both image sides, knee_start is to the right of knee_end
     if knee_start[0] < knee_end[0]:  # if this is somehow not the case, swap the points
         tmp = knee_start
         knee_start = knee_end
@@ -547,3 +592,84 @@ def calculate_femoral_torsion(hip_image: Image, knee_mask: np.ndarray, side: str
             return angle, landmarks
 
     return angle, fig, landmarks
+
+
+def calculate_femoral_torsion_ct(femur_image: Segmentation, knee_image: Segmentation, side: str = 'left', segmentation_label: int = 1, plot: bool | plt.Axes = False) -> float:
+    """
+    Calculate the femoral torsion from a whole-leg CT segmentation mask.
+    :param femur_image: A Segmentation object of the femur segmentation mask.
+    :param knee_image: A Segmentation object of the knee segmentation mask.
+    :param side: The side of the image (not patient!), either 'left' or 'right'.
+    :param segmentation_label: The label of the femur in the segmentation mask.
+    :param plot: Whether to plot the reference lines or not.
+    :return: The femoral torsion in degrees.
+    """
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
+    landmarks = get_proximal_reference_line_ct(femur_image, side=side, segmentation_label=segmentation_label)
+    hip_start = landmarks[0]
+    fhc_layer = int(hip_start[2])
+    hip_end = landmarks[1]
+    hip_start[2] = hip_end[2]  # adjust axial coordinate to align
+    hip_layer = int(hip_end[2])
+    print(fhc_layer, hip_layer)
+
+    proximal_line = hip_end - hip_start
+    x = np.array([-1, 0, 0]) if side == 'left' else np.array(
+        [1, 0, 0])  # need to distinguish between left and right image side
+    proximal_angle = calculate_angle_between_vectors(proximal_line, x)
+
+    if proximal_angle > 90:
+        proximal_angle = 180 - proximal_angle
+
+    proximal_orientation = hip_end[1] - hip_start[1]  # positive if hip_end is posterior to hip_start
+
+    knee_mask = np.where(knee_image.array == segmentation_label, 1, 0)
+    knee_layer, knee_start, knee_end = get_knee_reference_line(knee_mask,
+                                                               bone='femur', segmentation_label=segmentation_label)
+
+    if knee_start[0] < knee_end[0]:  # if this is somehow not the case, swap the points
+        tmp = knee_start
+        knee_start = knee_end
+        knee_end = tmp
+
+    distal_line = knee_end - knee_start
+    x = np.array([-1, 0, 0])  # because end is always left of start, no need to distinguish between left and right
+    distal_angle = calculate_angle_between_vectors(distal_line, x)
+
+    if distal_angle > 90:
+        distal_angle = 180 - distal_angle
+
+    distal_orientation = (knee_end[1] - knee_start[1]) if side == 'left' else (knee_start[1] - knee_end[1])  # positive if knee_end is posterior to knee_start
+
+    if np.sign(proximal_orientation) != np.sign(distal_orientation):  # add angles
+        angle = proximal_angle + distal_angle
+    else:
+        angle = proximal_angle - distal_angle
+
+    if plot is not False:
+        ax = plot
+
+        """
+        ax[0].imshow(np.where(femur_image.array[:, :, hip_layer] == 0, np.nan, femur_image.array[:, :, hip_layer]).T)
+        tmp = femur_image.array[:, :, fhc_layer].copy().T
+        tmp = np.where(tmp == 0, np.nan, tmp)
+        ax[0].imshow(tmp, alpha=.5)
+        """
+        ax[0].imshow(femur_image.array[:, :, hip_layer].T, cmap='gray')
+        ax[0].imshow(femur_image.array[:, :, fhc_layer].T, cmap='gray', alpha=.5)
+
+        ax[2].imshow(femur_image.array[:, hip_end[1]].T)
+        ax[2].plot([hip_start[0], hip_end[0]], [fhc_layer, hip_layer], 'r')
+        ax[2].set_aspect(femur_image.spacing[2] / femur_image.spacing[0])
+
+        ax[0].plot([hip_start[0], hip_end[0]], [hip_start[1], hip_end[1]], 'r')
+        ax[0].text(10, 10, f'Proximal angle: {proximal_angle:.2f}°', color='red', fontsize='small')
+        ax[0].text(10, 30, f'Proximal orientation: {np.sign(proximal_orientation):.2f}', color='red', fontsize='small')
+        ax[0].set_title(f'Angle: {angle:.2f}°')
+        ax[1].imshow(knee_mask[:, :, knee_layer].T)
+        ax[1].plot([knee_start[0], knee_end[0]], [knee_start[1], knee_end[1]], 'r')
+        ax[1].text(10, 10, f'Distal angle: {distal_angle:.2f}°', color='red', fontsize='small')
+        ax[1].text(10, 30, f'Distal orientation: {np.sign(distal_orientation):.2f}', color='red', fontsize='small')
+
+    return angle

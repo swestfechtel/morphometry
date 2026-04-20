@@ -39,8 +39,8 @@ def init_logger(name: str, level: int = logging.DEBUG):
 
     logger = logging.getLogger(name)
     logger.setLevel(level)
-    fh = logging.StreamHandler()
-    # fh = logging.FileHandler(filename=f'{workdir}/logs/app_log_{time.asctime()}.log', mode='w')
+    # fh = logging.StreamHandler()
+    fh = logging.FileHandler(filename=f'{workdir}/logs/app_log_{time.asctime()}.log', mode='w')
     fh.setLevel(level)
     fh.setFormatter(logging.Formatter("%(levelname)s: %(asctime)s - %(filename)s - %(funcName)s - %(message)s"))
     logger.addHandler(fh)

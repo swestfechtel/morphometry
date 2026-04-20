@@ -11,7 +11,7 @@ import pyvista as pv
 
 from pathlib import Path
 from morphometry.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
-    calculate_alpha_angle, calculate_center_edge_angle, \
+    calculate_alpha_angle, calculate_center_edge_angle, calculate_center_edge_angle_2d, \
     calculate_femoral_offset_projected
 from morphometry.image_io import Segmentation
 from matplotlib import pyplot as plt
@@ -110,7 +110,11 @@ def f(patient: Path):
         cea = calculate_center_edge_angle(mask.array, 1, 3, isotropic=True, project=True, plot=True,
                                           fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png',
                                           image_path=f'/home/simon/Data/NaKo_sample/nifti/{patient.name.replace(".nii.gz", "_0000.nii.gz")}')
-        # cea = calculate_center_edge_angle_2d(mask.array, 1, 3, isotropic=True, plot=True, fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png')
+        """
+        cea = calculate_center_edge_angle_2d(mask.array, 1, 3, isotropic=True, plot=True,
+                                             fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png',
+                                             image_path=f'/home/simon/Data/NaKo_sample/nifti/{patient.name.replace(".nii.gz", "_0000.nii.gz")}')
+        """
     except Exception as e:
         print(f"Error calculating CEA of patient {patient.name}: {e}")
         cea = [np.nan, np.nan]

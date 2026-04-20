@@ -1,8 +1,10 @@
 import numpy as np
 from scipy.ndimage import center_of_mass
+from sklearn.decomposition import PCA
 from morphometry.utils import get_layer_with_biggest_convex_area, find_notch, get_contour_points, \
     rotate_mask_vec_parallel, rotate_mask_dorsal_points, transform_point, rotate_point, num_mask_points_on_line, \
-    get_dorsal_mask_point, shrink_points_to_mask, calculate_angle_between_vectors
+    get_dorsal_mask_point, shrink_points_to_mask, calculate_angle_between_vectors, extract_connected_components_2d
+from morphometry.image_io import Segmentation
 from typing import Tuple
 from matplotlib import pyplot as plt
 
@@ -34,20 +36,22 @@ def rotate_tibia(segmentation_mask: np.ndarray):
     return rotate_mask_vec_parallel(segmentation_mask, line, np.array([1, 0]))
 
 
-def get_knee_reference_line(mask: np.ndarray, bone: str, thresh: int = 2, step_size: int = 1) -> Tuple[
+def get_knee_reference_line(mask: np.ndarray, bone: str, segmentation_label=1, thresh: int = 2, step_size: int = 1) -> Tuple[
     int, np.ndarray, np.ndarray]:
     """
     Get the distal reference line of a segmentation mask for calculating the femoral torsion, or the proximal
     reference line for calculating tibial torsion.
 
-    :param mask: A 3D segmentation mask of the femur or tibia, where the corresponding bone should be labeled 1 and
-    everything else 0.
+    :param mask: A 3D segmentation mask of the femur or tibia.
     :param bone: Either 'femur' or 'tibia'.
+    :param segmentation_label: The segmentation label of the femur/tibia.
     :param thresh: Minimum number of mask points on the reference line.
     :param step_size: Step size (in degrees) for rotating the reference line.
     :return: The layer and start and end points of the reference line.
     """
     assert bone in ['femur', 'tibia'], 'Bone must be either "femur" or "tibia"'
+
+    mask = np.where(mask == segmentation_label, 1, 0)
 
     layer_index = get_layer_with_biggest_convex_area(mask)
     mask_layer = mask[:, :, layer_index]  # mask_layer is 2D mask of the selected layer
@@ -245,4 +249,146 @@ def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: in
         ax[1].text(10, 30, f'Distal orientation: {np.sign(distal_orientation):.2f}', color='red', fontsize='small')
         return angle, fig
 
+    return angle
+
+
+def calculate_joint_line_convergence_angle(segmentation_mask: Segmentation, femur_label: int, tibia_label: int, side: str = 'left', plot: bool | plt.Axes = False) -> float:
+    """
+    Calculate the joint line convergence angle (JLCA).
+    :param segmentation_mask: A 3D segmentation mask of the knee.
+    :param femur_label: The segmentation label of the femur.
+    :param tibia_label: The segmentation label of the tibia.
+    :param side: The side of the image (not patient!), either 'left' or 'right'.
+    :param plot: Whether to plot the reference lines.
+    :return: The joint line convergence angle.
+    """
+
+    # Femoral reference line
+    array = segmentation_mask.array.copy()
+    array = np.where(array == femur_label, 1, 0)
+
+    flag_1 = False
+    flag_2 = False
+    i = 0
+    while i < array.shape[2]:
+        layer = array[:, :, i]
+        connected_components = extract_connected_components_2d(layer)
+        if len(connected_components) == 2:
+            flag_1 = True
+        if flag_1 and len(connected_components) == 1:
+            flag_2 = True
+            break
+        i += 1
+
+    if not (flag_1 and flag_2):
+        raise RuntimeError('Could not find condyles!')
+
+    i = array.shape[2] - 1
+    flag_1 = False
+    while i >= 0:
+        layer = array[:, :, i]
+        connected_components = extract_connected_components_2d(layer)
+        if len(connected_components) == 2:
+            flag_1 = True
+            break
+
+        i -= 1
+
+    if not flag_1:
+        raise RuntimeError('Could not find condyles!')
+
+    condyle_1 = center_of_mass(connected_components[0]) if np.count_nonzero(connected_components[0]) < np.count_nonzero(
+        connected_components[1]) else center_of_mass(connected_components[1])
+    condyle_1 = np.array([condyle_1[0], condyle_1[1], i])
+
+    i = array.shape[2] - 1
+    flag_1 = False
+    while i >= 0:
+        layer = array[:, :, i]
+        connected_components = extract_connected_components_2d(layer)
+        if len(connected_components) == 1:
+            flag_1 = True
+            break
+
+        i -= 1
+
+    if not flag_1:
+        raise RuntimeError('Could not find condyles!')
+
+    condyle_2 = center_of_mass(connected_components[0])
+    condyle_2 = np.array([condyle_2[0], condyle_2[1], i])
+
+    proximal_reference_line = condyle_2 - condyle_1
+
+    # Tibial reference line
+    array = segmentation_mask.array.copy()
+    array = np.where(array == tibia_label, 1, 0)
+
+    # 1. Find the intercondylar eminence (centroid of the first segmented slice) and divide the tibial plateau into left and right halves.
+    if np.count_nonzero(array) == 0:
+        raise ValueError('No tibia found!')
+
+    i = 0
+    while i < array.shape[2]:
+        layer = array[:, :, i]
+        if np.count_nonzero(layer) > 0:
+            break
+        i += 1
+
+    eminence = center_of_mass(layer)
+    eminence = np.array([eminence[0], eminence[1], i])
+
+    # 2. Find the outermost points in each half of that slice.
+    points = np.argwhere(array == 1)
+    leftmost = points[points[:, 0].argmin()]
+    leftmost = np.array([leftmost[0], leftmost[1], i])
+    rightmost = points[points[:, 0].argmax()]
+    rightmost = np.array([rightmost[0], rightmost[1], i])
+
+    # 3. Compute the distances d_1 and d_2 between the eminence and those two points.
+    d_1 = np.linalg.norm(leftmost - eminence)
+    d_2 = np.linalg.norm(rightmost - eminence)
+
+    # 4. Restrict the search space to all points laterally of the eminence by >d_1 * 2/3 and medially of the eminence by >d_2 * 2/3.
+    left_points = points[points[:, 0] < (eminence[0] - d_1 * 2 / 3)]
+    right_points = points[points[:, 0] > (eminence[0] + d_2 * 2 / 3)]
+
+    # 5. Find the most proximal medial and lateral points in that restricted search space.
+    leftmost_point = left_points[left_points[:, 2].argmin()]
+    leftmost_point = np.array([leftmost_point[0], leftmost_point[1], leftmost_point[2]])
+    rightmost_point = right_points[right_points[:, 2].argmin()]
+    rightmost_point = np.array([rightmost_point[0], rightmost_point[1], rightmost_point[2]])
+
+    distal_reference_line = leftmost_point - rightmost_point
+
+    # project to coronal plane
+    proximal_reference_line[1] = 0
+    distal_reference_line[1] = 0
+
+    # Calculate angle between the two lines
+    angle = calculate_angle_between_vectors(proximal_reference_line, distal_reference_line)
+
+    if plot is not False:
+        ax = plot
+
+        array = segmentation_mask.array.copy()
+        array = np.where(array == femur_label, 1, 0)
+
+        ax[0].imshow(array[:, (int(condyle_1[1]) + int(condyle_2[1])) // 2].T)
+        ax[0].plot(condyle_1[0], condyle_1[2], 'ro')
+        ax[0].plot(condyle_2[0], condyle_2[2], 'bo')
+        ax[0].plot([condyle_1[0], condyle_2[0]], [condyle_1[2], condyle_2[2]], 'g-')
+        ax[0].set_title('Femoral JLCA line')
+
+        array = segmentation_mask.array.copy()
+        array = np.where(array == tibia_label, 1, 0)
+
+        ax[1].imshow(array[:, (int(leftmost_point[1]) + int(rightmost_point[1])) // 2].T)
+        ax[1].plot(leftmost_point[0], leftmost_point[2], 'ro')
+        ax[1].plot(rightmost_point[0], rightmost_point[2], 'bo')
+        ax[1].plot([leftmost_point[0], rightmost_point[0]], [leftmost_point[2], rightmost_point[2]], 'g-')
+        ax[1].set_title('Tibial JLCA line')
+
+    if angle > 90:
+        angle = 180 - angle
     return angle

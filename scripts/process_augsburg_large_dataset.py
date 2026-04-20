@@ -11,7 +11,7 @@ from pathlib import Path
 from morphometry.femur import calculate_femoral_torsion
 from morphometry.tibia import calculate_tibial_torsion
 from morphometry.knee import calculate_knee_rotation_angle
-from morphometry.whole_leg import calculate_mikulicz_deviation, calculate_bone_length
+from morphometry.whole_leg import calculate_mechanical_axis_deviation, calculate_bone_length
 from morphometry.ankle import calculate_pma_angle
 from morphometry.hip import calculate_ccd
 from morphometry.image_io import Segmentation
@@ -207,13 +207,13 @@ def process_patient(patient):
         tl_right = np.nan
 
     try:
-        mld_left = calculate_mikulicz_deviation(left_hip, left_knee, left_ankle, 'left', x_ratio=x_ratio)
+        mld_left = calculate_mechanical_axis_deviation(left_hip, left_knee, left_ankle, 'left', x_ratio=x_ratio)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate MLD for the left side.', e)
         mld_left = np.nan
 
     try:
-        mld_right = calculate_mikulicz_deviation(right_hip, right_knee, right_ankle, 'right', x_ratio=x_ratio)
+        mld_right = calculate_mechanical_axis_deviation(right_hip, right_knee, right_ankle, 'right', x_ratio=x_ratio)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate MLD for the right side.', e)
         mld_right = np.nan

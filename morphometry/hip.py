@@ -1,13 +1,14 @@
 import numpy as np
 import pyvista as pv
 import pandas as pd
+import nibabel as nib
 
 from morphometry.utils import sphere_fit, get_contour_points, calculate_angle_between_vectors, \
     calculate_min_distance_between_point_clouds, get_vector_through_point_perpendicular_to_line, \
     get_minimum_distance_between_line_and_point, get_contour_points, num_connected_components, \
     extract_connected_components_2d, circumference_points, intersect_ndarrays, \
     sort_points_clockwise, sort_points_by_x, fit_circle_to_points
-from morphometry.image_io import Image
+from morphometry.image_io import Image, Segmentation
 
 from scipy.ndimage import center_of_mass, label, rotate
 from scipy.spatial import KDTree
@@ -15,6 +16,7 @@ from scipy.stats import zscore
 from typing import Tuple, Optional
 from skimage.measure import find_contours
 from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
 from matplotlib import pyplot as plt
 
 
@@ -93,6 +95,57 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     return (r, center) if not return_layers else (r, center, layer_high, layer_low)
 
 
+def get_femoral_head_center_ct(femur_image: Segmentation, segmentation_label: int = 1, side: str = 'left') -> Tuple[float, np.ndarray]:
+    """
+    Get the center of the femoral head from a whole-leg CT segmentation mask.
+    :param femur_image: A segmentation mask of the whole leg.
+    :param segmentation_label: The label of the femur in the segmentation mask.
+    :param side: Side of the image (not patient!), either 'left' or 'right'.
+    :return: The radius and location of the femoral head center.
+    """
+    mask = np.where(femur_image.array == segmentation_label, 1, 0)
+    contour_points = get_contour_points(mask)
+
+    layer_high = np.amin(contour_points[:, 2])
+    com_high = center_of_mass(mask[:, :, layer_high])
+    com_high = (int(com_high[0]), com_high[1])
+    com_high = (int(com_high[0]), int(com_high[1]))
+    layer_low = layer_high + 1
+
+    while mask[com_high[0], com_high[1], layer_low] != 0:
+        layer_low += 1
+
+    contour_points = contour_points[contour_points[:, 2] >= layer_high]
+    contour_points = contour_points[contour_points[:, 2] <= layer_low]
+
+    # transform everything into physical coordinates
+    contour_points = np.array([femur_image.transform_index_to_physical_point(x) for x in contour_points])
+    layer_high = femur_image.transform_index_to_physical_point((0, 0, layer_high))[2]
+    layer_low = femur_image.transform_index_to_physical_point((0, 0, layer_low))[2]
+    com_high = femur_image.transform_index_to_physical_point((com_high[0], com_high[1], 0))[:2]
+
+    middle_slice = (layer_high + (layer_low - layer_high) // 2)
+    superior_half = contour_points[contour_points[:, 2] >= middle_slice]
+
+    if side == 'left':
+        min_s = np.min(superior_half[:, 0])
+        radius = com_high[0] - min_s
+        max_s = com_high[0] + radius
+        contour_points = contour_points[contour_points[:, 0] <= max_s]
+    else:
+        max_s = np.max(superior_half[:, 0])
+        radius = max_s - com_high[0]
+        min_s = com_high[0] - radius
+        contour_points = contour_points[contour_points[:, 0] >= min_s]
+
+    min_c = np.min(contour_points[:, 1])
+    radius = com_high[1] - min_c
+    max_c = com_high[1] + radius
+    contour_points = contour_points[contour_points[:, 1] <= max_c]
+
+    return sphere_fit(contour_points)
+
+
 def get_femoral_neck_center(segmentation_mask: np.ndarray, femoral_head_center: Tuple[float, np.ndarray], side: str = 'left', segmentation_label: int = 1, x_ratio: float = 1) -> Tuple[np.ndarray, np.ndarray]:
     """
     Get the endpoint of the femoral neck axis from a segmentation mask.
@@ -167,6 +220,51 @@ def get_femoral_neck_center(segmentation_mask: np.ndarray, femoral_head_center: 
     return neck_points, com
 
 
+def get_femoral_neck_center_ct(femur_image: Segmentation, femoral_head_center: Tuple[float, np.ndarray], segmentation_label: int = 1, side: str = 'left') -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Get the endpoint of the femoral neck axis from a whole-leg CT segmentation mask.
+    :param femur_image: A segmentation mask of the whole leg.
+    :param femoral_head_center: The radius and center of the femoral head.
+    :param segmentation_label: The label of the femur in the segmentation mask.
+    :param side: The side of the image (not patient!), either 'left' or 'right'.
+    :return: The points constituting the femoral neck and the endpoint of the femoral neck axis.
+    """
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+    mask = np.where(femur_image.array == segmentation_label, 1, 0)
+
+    point_cloud = np.argwhere(mask)
+    point_cloud = np.array([femur_image.transform_index_to_physical_point(x) for x in point_cloud])
+    r, center = femoral_head_center
+
+    solid_sphere = pv.SolidSphere(inner_radius=r, outer_radius=1.2 * r, center=center)
+    points_i_want = np.array(solid_sphere.points)
+    points_i_want = points_i_want[points_i_want[:, 2] < center[2]]  # less than because of different coordinate system in CT images
+    if side == 'left':
+        points_i_want = points_i_want[points_i_want[:, 0] > center[0]]
+    else:
+        points_i_want = points_i_want[points_i_want[:, 0] < center[0]]
+
+    com = KMeans(n_clusters=1).fit(points_i_want).cluster_centers_[0]
+    distances = np.linalg.norm(points_i_want - com, axis=1)
+    points_i_want = points_i_want[distances <= distances.mean() + 2 * distances.std()]  # remove outliers
+
+    pc_tree = KDTree(point_cloud)
+    sphere_tree = KDTree(points_i_want)
+
+    pairs = sphere_tree.query_ball_tree(pc_tree, 2)
+    neck_points = list()
+    for pair in pairs:
+        if len(pair) > 0:
+            for index in pair:
+                neck_points.append(point_cloud[index])
+
+    neck_points = np.array(neck_points)
+    com = KMeans(n_clusters=1).fit(neck_points).cluster_centers_[0]
+    com = np.array(com)
+
+    return neck_points, com
+
+
 def get_femoral_shaft_axis(hip_mask: np.ndarray, knee_mask: np.ndarray = None, femur_label: int = 1, isotropic: bool = False) -> Tuple[np.ndarray, np.ndarray]:
     """
     Get the femoral shaft axis from a segmentation mask.
@@ -228,6 +326,45 @@ def get_femoral_shaft_axis(hip_mask: np.ndarray, knee_mask: np.ndarray = None, f
     com_high_hip = (int(com_high_hip[0]), int(com_high_hip[1]), layer_high_hip)
 
     return np.array(com_low_hip), np.array(com_high_hip)  # return the two points as the femoral shaft axis
+
+
+def get_femoral_shaft_axis_ct(femur_image: Segmentation, segmentation_label: int = 1) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Get the femoral shaft axis from a whole-leg CT segmentation mask using PCA.
+    :param femur_image: A segmentation mask of the whole leg.
+    :param segmentation_label: The label of the femur in the segmentation mask.
+    :return: Start and end point of the vector representing the femoral shaft axis.
+    """
+
+    cleaned_mask = np.where(femur_image.array == segmentation_label, 1, 0)
+
+    # Extract shaft region (exclude proximal femur and distal condyles)
+    point_cloud = np.argwhere(cleaned_mask)
+    point_cloud = np.array([femur_image.transform_index_to_physical_point(x) for x in point_cloud])
+    z_min, z_max = np.min(point_cloud[:, 2]), np.max(point_cloud[:, 2])
+    z_range = z_max - z_min
+
+    # Keep middle 60-70% to avoid complex geometry at ends
+    shaft_mask = (point_cloud[:, 2] > z_min + 0.15 * z_range) & \
+                 (point_cloud[:, 2] < z_max - 0.15 * z_range)
+    shaft_points = point_cloud[shaft_mask]
+
+    # Fit PCA to find principal axis
+    pca = PCA(n_components=3)
+    pca.fit(shaft_points)
+
+    # First principal component is the shaft axis direction
+    centroid = pca.mean_
+    direction = pca.components_[0]
+
+    # Project extremes onto the axis to get start/end points
+    projections = np.dot(shaft_points - centroid, direction)
+    t_min, t_max = np.min(projections), np.max(projections)
+
+    start_point = centroid + t_min * direction
+    end_point = centroid + t_max * direction
+
+    return start_point.astype(np.int32), end_point.astype(np.int32)
 
 
 def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1., debug: bool = False, plot: plt.Axes | pv.Plotter | bool = False) -> Tuple[float, float] | Tuple[float, float, plt.Figure]:
@@ -367,6 +504,53 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
 
         plot.add_lines(np.array([femoral_head_center, femoral_neck_center - 2 * neck_vector]), color='r')
         plot.add_lines(np.array([shaft_axis_high, shaft_axis_low]), color='r')
+
+    return ccd, ccd_projected
+
+
+def calculate_ccd_ct(femur_image: Segmentation, side: str = 'left', segmentation_label: int = 1, plot: bool | pv.Plotter = False) -> Tuple[float, float]:
+    """
+    Calculate the CCD angle from a whole-leg CT segmentation mask using PCA for the femoral shaft axis.
+    :param femur_image: A segmentation mask of the whole leg.
+    :param side: The side of the image (not patient!), either 'left' or 'right'.
+    :param segmentation_label: The label of the femur in the segmentation mask.
+    :param plot: Whether to plot the results.
+    :return: The actual and projected CCD angle.
+    """
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
+    r, femoral_head_center = get_femoral_head_center_ct(femur_image, segmentation_label, side)
+    femoral_neck_points, femoral_neck_center = get_femoral_neck_center_ct(femur_image, (r, femoral_head_center), segmentation_label, side)
+    shaft_axis_low, shaft_axis_high = get_femoral_shaft_axis_ct(femur_image, segmentation_label=segmentation_label)
+
+    neck_vector = femoral_neck_center - femoral_head_center
+    shaft_vector = shaft_axis_high - shaft_axis_low
+
+    ccd = calculate_angle_between_vectors(neck_vector.astype('float32'), shaft_vector.astype('float32'))
+    ccd = 180 - ccd if ccd < 90 else ccd
+
+    femoral_neck_center_projected = np.array([femoral_neck_center[0], 0, femoral_neck_center[2]])
+    femoral_head_center_projected = np.array([femoral_head_center[0], 0, femoral_head_center[2]])
+    shaft_axis_high_projected = np.array([shaft_axis_high[0], 0, shaft_axis_high[2]])
+    shaft_axis_low_projected = np.array([shaft_axis_low[0], 0, shaft_axis_low[2]])
+
+    neck_vector_projected = femoral_neck_center_projected - femoral_head_center_projected
+    shaft_vector_projected = shaft_axis_high_projected - shaft_axis_low_projected
+    ccd_projected = calculate_angle_between_vectors(neck_vector_projected.astype('float32'),
+                                                    shaft_vector_projected.astype('float32'))
+
+    ccd_projected = 180 - ccd_projected if ccd_projected < 90 else ccd_projected
+
+    if plot:
+        point_cloud = np.argwhere(femur_image.array == segmentation_label).astype(np.float32)
+        point_cloud = np.array([femur_image.transform_index_to_physical_point(x) for x in point_cloud])
+
+        plot.add_mesh(pv.PolyData(point_cloud.astype(np.float32)), color=('g' if side == 'left' else 'y'), opacity=.1)
+        plot.add_mesh(pv.PolyData(femoral_neck_points.astype(np.float32)), color='r')
+        plot.add_mesh(pv.Sphere(r, femoral_head_center), color='c', opacity=.3)
+        plot.add_lines(np.array([femoral_head_center, femoral_neck_center + 2 * neck_vector]), color='r')
+        plot.add_lines(np.array([shaft_axis_high, shaft_axis_low]), color='r')
+        plot.enable_eye_dome_lighting()
 
     return ccd, ccd_projected
 
@@ -607,22 +791,36 @@ def get_p2(acetabulum_array: np.ndarray, side: str = 'left', segmentation_label:
     return p2
 
 
-def calculate_acetabular_anteversion(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, plot: bool = False, fp: str = None) -> Tuple[float, float]:
+def calculate_acetabular_anteversion(hip_image: Segmentation, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, ct: bool = False, plot: bool | plt.Axes = False) -> Tuple[float, float]:
     """
     Calculate the acetabular anteversion for both sides from a segmentation mask.
-    :param segmentation_mask: A segmentation mask of the hip.
+    :param hip_image: A segmentation mask of the hip.
     :param femur_label: The label of the femur in the segmentation mask.
     :param acetabulum_label: The label of the acetabulum in the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
+    :param ct: Whether the image is a CT scan.
     :param plot: Whether to plot the results.
-    :param fp: File path to save the plot.
     :return: The acetabular anteversion for both sides.
     """
-    left_mask = segmentation_mask[:segmentation_mask.shape[0] // 2]
-    right_mask = segmentation_mask[segmentation_mask.shape[0] // 2:]
+    left_mask = hip_image.array[:hip_image.shape[0] // 2]
+    right_mask = hip_image.array[hip_image.shape[0] // 2:]
 
-    _, left_fhc = get_femoral_head_center(left_mask, side='left', segmentation_label=femur_label, isotropic=isotropic)
-    _, right_fhc = get_femoral_head_center(right_mask, side='right', segmentation_label=femur_label, isotropic=isotropic)
+    left_image = nib.Nifti1Image(left_mask, hip_image.affine, hip_image.header)
+    right_image = nib.Nifti1Image(right_mask, hip_image.affine, hip_image.header)
+    left_image = Segmentation.from_nibabel(left_image)
+    right_image = Segmentation.from_nibabel(right_image)
+
+    if ct:
+        _, left_fhc = get_femoral_head_center_ct(left_image, segmentation_label=femur_label, side='left')
+        _, right_fhc = get_femoral_head_center_ct(right_image, segmentation_label=femur_label, side='right')
+
+        left_fhc = left_image.transform_physical_point_to_index(left_fhc)
+        right_fhc = right_image.transform_physical_point_to_index(right_fhc)
+    else:
+        _, left_fhc = get_femoral_head_center(left_image.array, side='left', segmentation_label=femur_label,
+                                              isotropic=isotropic)
+        _, right_fhc = get_femoral_head_center(right_image.array, side='right', segmentation_label=femur_label,
+                                               isotropic=isotropic)
 
     slice_gap = abs(int(left_fhc[2]) - int(right_fhc[2]))
     correct_slice = min(int(left_fhc[2]), int(right_fhc[2])) + slice_gap // 2
@@ -633,7 +831,7 @@ def calculate_acetabular_anteversion(segmentation_mask: np.ndarray, femur_label:
     p1_right = get_p1(right_mask[:, :, correct_slice], side='right', segmentation_label=acetabulum_label, fhc_y_index=int(right_fhc[1]))
     p2_right = get_p2(right_mask[:, :, correct_slice], side='right', segmentation_label=acetabulum_label, fhc_y_index=int(right_fhc[1]))
 
-    femur_array = np.where(segmentation_mask == femur_label, 1, 0)
+    femur_array = np.where(hip_image.array == femur_label, 1, 0)
     left_femur = femur_array[:femur_array.shape[0] // 2]
 
     right_fhc_adj = right_fhc.copy()
@@ -657,21 +855,20 @@ def calculate_acetabular_anteversion(segmentation_mask: np.ndarray, femur_label:
     v2 = s_right.copy()
     right_aa = calculate_angle_between_vectors(v1, v2)
 
-    if plot:
-        fig, ax = plt.subplots(figsize=(20, 10))
-        ax.imshow(segmentation_mask[:, :, correct_slice].T, cmap='gray')
-        ax.plot([p1_left[0], p2_left[0]], [p1_left[1], p2_left[1]], 'r-', label='Right Acetabulum Rim')
-        ax.plot([p1_right[0] + left_femur.shape[0], p2_right[0] + left_femur.shape[0]], [p1_right[1], p2_right[1]], 'b-', label='Left Acetabulum Rim')
-        ax.plot([left_fhc[0], right_fhc_adj[0]], [left_fhc[1], right_fhc_adj[1]], 'g-', label='Femoral Head Centers')
-        # ax.plot([p1_left[0], p1_left[0] - s_left[0]], [p1_left[1], p1_left[1] - s_left[1]], 'c--', label='Right Perpendicular Vector')
-        # ax.plot([p1_right[0] + left_femur.shape[0], p1_right[0] - s_right[0] + left_femur.shape[0]], [p1_right[1], p1_right[1] - s_right[1]], 'm--', label='Left Perpendicular Vector')
-        ax.plot([p1_left[0], projection_left[0]], [p1_left[1], projection_left[1]], 'c--', label='Right Perpendicular Projection')
-        ax.plot([p1_right[0] + left_femur.shape[0], projection_right[0] + left_femur.shape[0]], [p1_right[1], projection_right[1]], 'm--', label='Left Perpendicular Projection')
-        ax.set_title(f'Right AA: {left_aa:.2f}°, Left AA: {right_aa:.2f}°')
-        ax.set_aspect('equal')
-        ax.legend()
-        fig.savefig(fp)
-        plt.close(fig)
+    if plot is not False:
+        plot.imshow(hip_image.array[:, :, correct_slice].T, cmap='gray')
+        plot.plot([p1_left[0], p2_left[0]], [p1_left[1], p2_left[1]], 'r-', label='Right Acetabulum Rim')
+        plot.plot([p1_right[0] + left_femur.shape[0], p2_right[0] + left_femur.shape[0]], [p1_right[1], p2_right[1]],
+                'b-', label='Left Acetabulum Rim')
+        plot.plot([left_fhc[0], right_fhc_adj[0]], [left_fhc[1], right_fhc_adj[1]], 'g-', label='Femoral Head Centers')
+
+        plot.plot([p1_left[0], projection_left[0]], [p1_left[1], projection_left[1]], 'c--',
+                label='Right Perpendicular Projection')
+        plot.plot([p1_right[0] + left_femur.shape[0], projection_right[0] + left_femur.shape[0]],
+                [p1_right[1], projection_right[1]], 'm--', label='Left Perpendicular Projection')
+        plot.set_title(f'Right AA: {left_aa:.2f}°, Left AA: {right_aa:.2f}°')
+        plot.set_aspect('equal')
+        plot.legend()
 
     return left_aa, right_aa
 
@@ -700,24 +897,46 @@ def calculate_acetabular_depth(segmentation_mask: np.ndarray, side: str = 'left'
     return ad
 
 
-def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, project: bool = False, plot: bool = False, fp: str = None, image_path: str = None) -> Tuple[float, float]:
+def calculate_center_edge_angle(hip_image: Segmentation, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, ct: bool = False, project: bool = False, plot: bool | plt.Axes = False, image_path: str = None) -> Tuple[float, float]:
     """
     Calculate the center edge angle for both sides from a segmentation mask.
-    :param segmentation_mask: A segmentation mask of the proximal femur.
+    :param hip_image: A segmentation mask of the hip.
     :param femur_label: The label of the femur in the segmentation mask.
     :param acetabulum_label: The label of the acetabulum in the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
+    :param ct: Whether the image is a CT scan.
     :param project: Whether to project all landmarks onto a 2D plane before calculating the angle.
     :param plot: Whether to plot the results.
-    :param fp: File path to save the plot.
     :param image_path: File path to the original image for plotting.
     :return: The center edge angle for both sides.
     """
-    left_mask = segmentation_mask[:segmentation_mask.shape[0] // 2]
-    right_mask = segmentation_mask[segmentation_mask.shape[0] // 2:]
+    left_mask = hip_image.array[:hip_image.shape[0] // 2]
+    right_mask = hip_image.array[hip_image.shape[0] // 2:]
 
-    r_l, left_fhc = get_femoral_head_center(left_mask, side='left', segmentation_label=femur_label, isotropic=isotropic)
-    r_r, right_fhc = get_femoral_head_center(right_mask, side='right', segmentation_label=femur_label, isotropic=isotropic)
+    left_image = nib.Nifti1Image(left_mask, hip_image.affine, hip_image.header)
+    right_image = nib.Nifti1Image(right_mask, hip_image.affine, hip_image.header)
+    left_image = Segmentation.from_nibabel(left_image)
+    right_image = Segmentation.from_nibabel(right_image)
+
+    if ct:
+        r_l, left_fhc = get_femoral_head_center_ct(left_image, segmentation_label=femur_label, side='left')
+        r_r, right_fhc = get_femoral_head_center_ct(right_image, segmentation_label=femur_label, side='right')
+
+        left_fhc = left_image.transform_physical_point_to_index(left_fhc)
+        right_fhc = right_image.transform_physical_point_to_index(right_fhc)
+
+        tmp = left_fhc + np.array([r_l, 0, 0])  # rationale: point on the surface of the femoral head in arbitrary direction
+        tmp = hip_image.transform_physical_point_to_index(tmp)  # transform that point to index space
+        r_l = np.linalg.norm(left_fhc - tmp)  # recalculate radius in index space
+
+        tmp = right_fhc + np.array([r_r, 0, 0])
+        tmp = hip_image.transform_physical_point_to_index(tmp)
+        r_r = np.linalg.norm(right_fhc - tmp)
+    else:
+        r_l, left_fhc = get_femoral_head_center(left_image.array, side='left', segmentation_label=femur_label,
+                                              isotropic=isotropic)
+        r_r, right_fhc = get_femoral_head_center(right_image.array, side='right', segmentation_label=femur_label,
+                                               isotropic=isotropic)
 
     coronal_slice = int((right_fhc[1] + left_fhc[1]) // 2)
 
@@ -725,7 +944,7 @@ def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int 
         left_fhc[1] = 0
         right_fhc[1] = 0
 
-    femur_array = np.where(segmentation_mask == femur_label, 1, 0)
+    femur_array = np.where(hip_image.array == femur_label, 1, 0)
     left_femur = femur_array[:femur_array.shape[0] // 2]
     right_femur = femur_array[femur_array.shape[0] // 2:]
 
@@ -769,7 +988,7 @@ def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int 
 
         return lateral_edge_point
 
-    acetabulum_array = np.where(segmentation_mask == acetabulum_label, 1, 0)
+    acetabulum_array = np.where(hip_image.array == acetabulum_label, 1, 0)
     left_acetabulum = acetabulum_array[:acetabulum_array.shape[0] // 2]
     right_acetabulum = acetabulum_array[acetabulum_array.shape[0] // 2:]
 
@@ -787,126 +1006,26 @@ def calculate_center_edge_angle(segmentation_mask: np.ndarray, femur_label: int 
     s2_left = lat_left - left_fhc
     cea_left = calculate_angle_between_vectors(d_perp, s2_left)
 
-    if plot:
-        fig, ax = plt.subplots(figsize=(20, 10))
+    if plot is not None:
         if image_path:
             image = Image('nibabel')
             image.read_image(image_path)
             image.transform_coordinate_system()
-            ax.imshow(image.array[:, coronal_slice].T, cmap='gray')
-            ax.imshow(np.where(segmentation_mask > 0, segmentation_mask, np.nan)[:, coronal_slice].T, alpha=.5)
+            plot.imshow(image.array[:, coronal_slice].T, cmap='gray')
+            plot.imshow(np.where(hip_image.array > 0, hip_image.array, np.nan)[:, coronal_slice].T, alpha=.5)
         else:
-            ax.imshow(segmentation_mask[:, coronal_slice].T, cmap='gray')
+            plot.imshow(hip_image.array[:, coronal_slice].T, cmap='gray')
 
-        ax.plot([left_fhc[0], right_fhc_adj[0]], [left_fhc[2], right_fhc_adj[2]], 'r-', label='G')
+        plot.plot([left_fhc[0], right_fhc_adj[0]], [left_fhc[2], right_fhc_adj[2]], 'r-', label='G')
 
-        ax.plot([left_fhc[0], s_left[0]], [left_fhc[2], s_left[2]], 'g--', label='Perpendicular Vector (right)')
-        ax.plot([right_fhc_adj[0], s_right[0]], [right_fhc_adj[2], s_right[2]], 'b--', label='Perpendicular Vector (left)')
+        plot.plot([left_fhc[0], s_left[0]], [left_fhc[2], s_left[2]], 'g--', label='Perpendicular Vector (right)')
+        plot.plot([right_fhc_adj[0], s_right[0]], [right_fhc_adj[2], s_right[2]], 'b--', label='Perpendicular Vector (left)')
 
-        ax.plot([left_fhc[0], lat_left[0]], [left_fhc[2], lat_left[2]], 'c-', label='Lateral Edge Point (right)')
-        ax.plot([right_fhc_adj[0], lat_right[0] + left_mask.shape[0]], [right_fhc_adj[2], lat_right[2]], 'y-', label='Lateral Edge Point (left)')
-        ax.set_title(f'Right CEA: {cea_left:.2f}°, Left CEA: {cea_right:.2f}°')
-        ax.set_aspect('equal')
-        ax.legend()
-        fig.savefig(fp)
-        plt.close(fig)
-
-    return cea_left, cea_right
-
-
-def calculate_center_edge_angle_2d(segmentation_mask: np.ndarray, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, plot: bool = False, fp: str = None) -> Tuple[float, float]:
-    """
-    Calculate the center edge angle for both sides from a segmentation mask. Finds the landmarks on a 2D coronal plane.
-    :param segmentation_mask: A segmentation mask of the proximal femur.
-    :param femur_label: The label of the femur in the segmentation mask.
-    :param acetabulum_label: The label of the acetabulum in the segmentation mask.
-    :param isotropic: Whether the image has isotropic voxels.
-    :param plot: Whether to plot the results.
-    :param fp: File path to save the plot.
-    :return: The center edge angle for both sides.
-    """
-    def get_lateral_edge_point(fa: np.ndarray, aa: np.ndarray, side: str = 'left') -> np.ndarray:
-        """
-        Get the most lateral edge point of the acetabulum right above the femoral head.
-        :param fa: A segmentation mask of the femur.
-        :param aa: A segmentation mask of the acetabulum.
-        :param side: Side of the image (not patient!), either 'left' or 'right'
-        :return:
-        """
-        assert side in ['left', 'right'], 'Side must be either "left" or "right"'
-
-        tmp = aa.copy()
-        ul = int((right_fhc[1] - 1.5 * r_r) if side == 'right' else (left_fhc[1] - 1.5 * r_l))
-        tmp[:, :, :ul] = 0
-        tmp = tmp[:, coronal_slice]
-
-        acetabulum_points = np.nonzero(tmp)
-
-        lateral_s = np.min(acetabulum_points[0]) if side == 'left' else np.max(acetabulum_points[0])
-
-        # Find all points with this sagittal coordinate
-        candidates_mask = acetabulum_points[0] == lateral_s
-        candidate_transversal = acetabulum_points[1][candidates_mask]
-
-        # Select the one with maximum transversal coordinate
-        max_transversal_idx = np.argmax(candidate_transversal)
-        lateral_edge_point = np.array(
-            [lateral_s, candidate_transversal[max_transversal_idx]])
-
-        return lateral_edge_point
-
-    left_mask = segmentation_mask[:segmentation_mask.shape[0] // 2]
-    right_mask = segmentation_mask[segmentation_mask.shape[0] // 2:]
-
-    r_l, left_fhc = get_femoral_head_center(left_mask, side='left', segmentation_label=femur_label, isotropic=isotropic)
-    r_r, right_fhc = get_femoral_head_center(right_mask, side='right', segmentation_label=femur_label, isotropic=isotropic)
-
-    coronal_slice = int((left_fhc[1] + right_fhc[1]) // 2)
-    left_fhc = np.array([left_fhc[0], left_fhc[2]])
-    right_fhc = np.array([right_fhc[0], right_fhc[2]])
-
-    femur_array = np.where(segmentation_mask == femur_label, 1, 0)
-    left_femur = femur_array[:femur_array.shape[0] // 2]
-    right_femur = femur_array[femur_array.shape[0] // 2:]
-
-    right_fhc_adj = right_fhc.copy()
-    right_fhc_adj[0] += left_femur.shape[
-        0]  # adjust the x coordinate of the right femoral head center to account for the splitting into left and right
-    G = left_fhc - right_fhc_adj  # G is the vector connecting the left and right femoral head center
-
-    acetabulum_array = np.where(segmentation_mask == acetabulum_label, 1, 0)
-    left_acetabulum = acetabulum_array[:acetabulum_array.shape[0] // 2]
-    right_acetabulum = acetabulum_array[acetabulum_array.shape[0] // 2:]
-
-    d = np.array([0, -1])
-    n = G / np.linalg.norm(G)
-    d_perp = d - np.dot(d, n) * n  # d_perp is perpendicular to G and goes in proximal direction
-    d_perp *= 100  # scale the perpendicular vector to a reasonable length
-    s_right = right_fhc_adj + d_perp  # s is a point from the femoral head center with direction d_perp, just for visualisation
-    lat_right = get_lateral_edge_point(right_femur, right_acetabulum, side='right')
-    s2_right = lat_right - right_fhc
-    cea_right = calculate_angle_between_vectors(d_perp, s2_right)
-
-    s_left = left_fhc + d_perp
-    lat_left = get_lateral_edge_point(left_femur, left_acetabulum)
-    s2_left = lat_left - left_fhc
-    cea_left = calculate_angle_between_vectors(d_perp, s2_left)
-
-    if plot:
-        fig, ax = plt.subplots(figsize=(20, 10))
-        ax.imshow(segmentation_mask[:, coronal_slice].T, cmap='gray')
-        ax.plot([left_fhc[0], right_fhc_adj[0]], [left_fhc[1], right_fhc_adj[1]], 'r-', label='G')
-
-        ax.plot([left_fhc[0], s_left[0]], [left_fhc[1], s_left[1]], 'g--', label='Perpendicular Vector (right)')
-        ax.plot([right_fhc_adj[0], s_right[0]], [right_fhc_adj[1], s_right[1]], 'b--', label='Perpendicular Vector (left)')
-
-        ax.plot([left_fhc[0], lat_left[0]], [left_fhc[1], lat_left[1]], 'c-', label='Lateral Edge Point (right)')
-        ax.plot([right_fhc_adj[0], lat_right[0] + left_mask.shape[0]], [right_fhc_adj[1], lat_right[1]], 'y-', label='Lateral Edge Point (left)')
-        ax.set_title(f'Right CEA: {cea_left:.2f}°, Left CEA: {cea_right:.2f}°')
-        ax.set_aspect('equal')
-        ax.legend()
-        fig.savefig(fp)
-        plt.close(fig)
+        plot.plot([left_fhc[0], lat_left[0]], [left_fhc[2], lat_left[2]], 'c-', label='Lateral Edge Point (right)')
+        plot.plot([right_fhc_adj[0], lat_right[0] + left_mask.shape[0]], [right_fhc_adj[2], lat_right[2]], 'y-', label='Lateral Edge Point (left)')
+        plot.set_title(f'Right CEA: {cea_left:.2f}°, Left CEA: {cea_right:.2f}°')
+        plot.set_aspect('equal')
+        plot.legend()
 
     return cea_left, cea_right
 
@@ -1071,7 +1190,7 @@ def calculate_femoral_offset(hip_image: Image, knee_image: Optional[Image] = Non
     return femoral_offset
 
 
-def calculate_femoral_offset_projected(hip_image: Image, knee_image: Optional[Image] = None, side: str = 'left', femur_label: int = 1, isotropic: bool = False, plot: pv.Plotter | bool = False) -> float:
+def calculate_femoral_offset_projected(hip_image: Segmentation, knee_image: Optional[Image] = None, side: str = 'left', femur_label: int = 1, isotropic: bool = False, ct: bool = False) -> float:
     """
     Calculate the femoral offset, i.e. the distance between the femoral head center and the femoral shaft axis.
     Landmarks are projected to the coronal plane before final calculations.
@@ -1080,13 +1199,17 @@ def calculate_femoral_offset_projected(hip_image: Image, knee_image: Optional[Im
     :param side: str: Side of the image (not patient!), either 'left' or 'right'.
     :param femur_label: int: The label of the femur in the segmentation mask.
     :param isotropic: bool: Whether the image has isotropic voxels.
-    :param plot: pv.Plotter | bool: A PyVista plotter to visualize the femoral offset, or False if no plotting desired.
+    :param ct: bool: Whether the image is a CT scan.
     :return:
     """
-    r, c = get_femoral_head_center(hip_image.array, side=side, segmentation_label=femur_label, isotropic=isotropic)
-    start, end = get_femoral_shaft_axis(hip_image.array,
-                                        knee_mask=(knee_image.array if knee_image is not None else None),
-                                        femur_label=femur_label, isotropic=isotropic)
+    if ct:
+        r, c = get_femoral_head_center_ct(hip_image, segmentation_label=femur_label, side=side)
+        start, end = get_femoral_shaft_axis_ct(hip_image, segmentation_label=femur_label)
+    else:
+        r, c = get_femoral_head_center(hip_image.array, side=side, segmentation_label=femur_label, isotropic=isotropic)
+        start, end = get_femoral_shaft_axis(hip_image.array,
+                                            knee_mask=(knee_image.array if knee_image is not None else None),
+                                            femur_label=femur_label, isotropic=isotropic)
 
     c = np.array([c[0], 0, c[2]])  # zero out coronal component
     start = np.array([start[0], 0, start[2]])

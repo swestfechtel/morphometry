@@ -159,10 +159,16 @@ def get_examination_by_id(examination_id: str):
         
         tmp = dict(examination.landmarks)
         for bone in tmp.keys():
-            for side in tmp[bone].keys():
-                for k, v in tmp[bone][side].items():
-                    tmp[bone][side][k] = [0 if np.isnan(x) else x for x in v]
-        
+            if bone == 'femur' and any(k in tmp[bone] for k in ['Lee', 'Murphy']):
+                for method in tmp[bone].keys():
+                    for side in tmp[bone][method].keys():
+                        for k, v in tmp[bone][method][side].items():
+                            tmp[bone][method][side][k] = [0 if np.isnan(x) else x for x in v]
+            else:
+                for side in tmp[bone].keys():
+                    for k, v in tmp[bone][side].items():
+                        tmp[bone][side][k] = [0 if np.isnan(x) else x for x in v]
+
         d['landmarks'] = tmp
         d['knee_offset'] = examination.hip.shape[2]
         d['ankle_offset'] = examination.hip.shape[2] + examination.knee.shape[2]

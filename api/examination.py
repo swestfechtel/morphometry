@@ -93,6 +93,8 @@ class TorsionExamination(Examination):
     ankle_mask: mio.Segmentation
     femoral_torsion_left: float
     femoral_torsion_right: float
+    femoral_torsion_left_murphy: float
+    femoral_torsion_right_murphy: float
     tibial_torsion_left: float
     tibial_torsion_right: float
     landmarks: dict
@@ -109,6 +111,8 @@ class TorsionExamination(Examination):
         self.ankle_mask = None
         self.femoral_torsion_left = None
         self.femoral_torsion_right = None
+        self.femoral_torsion_left_murphy = None
+        self.femoral_torsion_right_murphy = None
         self.tibial_torsion_left = None
         self.tibial_torsion_right = None
         self.landmarks = None
@@ -139,11 +143,18 @@ class TorsionExamination(Examination):
         Get the computed torsion values.
         :return: A dictionary containing the torsion values.
         """
+        def safe_value(value: float) -> float:
+            if value is None:
+                return 0
+            return 0 if np.isnan(value) else value
+
         return {
-            'femoral_torsion_left': 0 if np.isnan(self.femoral_torsion_left) else self.femoral_torsion_left,
-            'femoral_torsion_right': 0 if np.isnan(self.femoral_torsion_right) else self.femoral_torsion_right,
-            'tibial_torsion_left': 0 if np.isnan(self.tibial_torsion_left) else self.tibial_torsion_left,
-            'tibial_torsion_right': 0 if np.isnan(self.tibial_torsion_right) else self.tibial_torsion_right
+            'femoral_torsion_left': safe_value(self.femoral_torsion_left),
+            'femoral_torsion_right': safe_value(self.femoral_torsion_right),
+            'femoral_torsion_left_murphy': safe_value(self.femoral_torsion_left_murphy),
+            'femoral_torsion_right_murphy': safe_value(self.femoral_torsion_right_murphy),
+            'tibial_torsion_left': safe_value(self.tibial_torsion_left),
+            'tibial_torsion_right': safe_value(self.tibial_torsion_right)
         }
 
     def encode_images(self):

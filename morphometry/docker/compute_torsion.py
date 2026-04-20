@@ -40,8 +40,14 @@ if __name__ == '__main__':
     results = dict()
     landmarks_final = {
         'femur': {
-            'left': defaultdict(list),
-            'right': defaultdict(list)
+            'Lee': {
+                'left': defaultdict(list),
+                'right': defaultdict(list)
+            },
+            'Murphy': {
+                'left': defaultdict(list),
+                'right': defaultdict(list)
+            }
         },
         'tibia': {
             'left': defaultdict(list),
@@ -57,15 +63,32 @@ if __name__ == '__main__':
         for k, v in landmarks.items():
             landmarks[k] = v.tolist()
 
-        landmarks_final['femur']['right'] = landmarks
+        landmarks_final['femur']['Lee']['right'] = landmarks
 
     except (RuntimeError, AssertionError, ValueError) as e:
         errors.append(traceback.format_exc())
         results['femoral_torsion_right'] = np.nan
-        landmarks_final['femur']['right']['hip_start'] = [0, 0, 0]
-        landmarks_final['femur']['right']['hip_end'] = [0, 0, 0]
-        landmarks_final['femur']['right']['knee_start'] = [0, 0, 0]
-        landmarks_final['femur']['right']['knee_end'] = [0, 0, 0]
+        landmarks_final['femur']['Lee']['right']['hip_start'] = [0, 0, 0]
+        landmarks_final['femur']['Lee']['right']['hip_end'] = [0, 0, 0]
+        landmarks_final['femur']['Lee']['right']['knee_start'] = [0, 0, 0]
+        landmarks_final['femur']['Lee']['right']['knee_end'] = [0, 0, 0]
+
+    try:
+        torsion, landmarks = calculate_femoral_torsion(left_hip, left_knee, side='left', method='murphy', x_ratio=x_ratio, plot=False, return_landmarks=True)
+        results['femoral_torsion_right_murphy'] = torsion
+
+        for k, v in landmarks.items():
+            landmarks[k] = v.tolist()
+
+        landmarks_final['femur']['Murphy']['right'] = landmarks
+
+    except (RuntimeError, AssertionError, ValueError) as e:
+        errors.append(traceback.format_exc())
+        results['femoral_torsion_right_murphy'] = np.nan
+        landmarks_final['femur']['Murphy']['right']['hip_start'] = [0, 0, 0]
+        landmarks_final['femur']['Murphy']['right']['hip_end'] = [0, 0, 0]
+        landmarks_final['femur']['Murphy']['right']['knee_start'] = [0, 0, 0]
+        landmarks_final['femur']['Murphy']['right']['knee_end'] = [0, 0, 0]
 
     try:
         torsion, landmarks = calculate_femoral_torsion(right_hip, right_knee, side='right', method='lee', x_ratio=x_ratio, plot=False, return_landmarks=True)
@@ -79,15 +102,37 @@ if __name__ == '__main__':
         for k, v in landmarks.items():
             landmarks[k] = v.tolist()
 
-        landmarks_final['femur']['left'] = landmarks
+        landmarks_final['femur']['Lee']['left'] = landmarks
 
     except (RuntimeError, AssertionError, ValueError) as e:
         errors.append(traceback.format_exc())
         results['femoral_torsion_left'] = np.nan
-        landmarks_final['femur']['left']['hip_start'] = [0, 0, 0]
-        landmarks_final['femur']['left']['hip_end'] = [0, 0, 0]
-        landmarks_final['femur']['left']['knee_start'] = [0, 0, 0]
-        landmarks_final['femur']['left']['knee_end'] = [0, 0, 0]
+        landmarks_final['femur']['Lee']['left']['hip_start'] = [0, 0, 0]
+        landmarks_final['femur']['Lee']['left']['hip_end'] = [0, 0, 0]
+        landmarks_final['femur']['Lee']['left']['knee_start'] = [0, 0, 0]
+        landmarks_final['femur']['Lee']['left']['knee_end'] = [0, 0, 0]
+
+    try:
+        torsion, landmarks = calculate_femoral_torsion(right_hip, right_knee, side='right', method='murphy', x_ratio=x_ratio, plot=False, return_landmarks=True)
+        landmarks['hip_start'][0] += left_hip.array.shape[0]  # shift to the right image side
+        landmarks['hip_end'][0] += left_hip.array.shape[0]
+        landmarks['knee_start'][0] += left_knee.shape[0]
+        landmarks['knee_end'][0] += left_knee.shape[0]
+
+        results['femoral_torsion_left_murphy'] = torsion
+
+        for k, v in landmarks.items():
+            landmarks[k] = v.tolist()
+
+        landmarks_final['femur']['Murphy']['left'] = landmarks
+
+    except (RuntimeError, AssertionError, ValueError) as e:
+        errors.append(traceback.format_exc())
+        results['femoral_torsion_left_murphy'] = np.nan
+        landmarks_final['femur']['Murphy']['left']['hip_start'] = [0, 0, 0]
+        landmarks_final['femur']['Murphy']['left']['hip_end'] = [0, 0, 0]
+        landmarks_final['femur']['Murphy']['left']['knee_start'] = [0, 0, 0]
+        landmarks_final['femur']['Murphy']['left']['knee_end'] = [0, 0, 0]
 
     try:
         torsion, landmarks = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left', plot=False, return_landmarks=True)
