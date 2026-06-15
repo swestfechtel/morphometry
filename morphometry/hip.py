@@ -9,6 +9,7 @@ from morphometry.utils import sphere_fit, get_contour_points, calculate_angle_be
     extract_connected_components_2d, circumference_points, intersect_ndarrays, \
     sort_points_clockwise, sort_points_by_x, fit_circle_to_points
 from morphometry.image_io import Image, Segmentation
+from morphometry.bresenham import bresenhamline
 
 from scipy.ndimage import center_of_mass, label, rotate
 from scipy.spatial import KDTree
@@ -1066,6 +1067,238 @@ def calculate_min_distance_between_femoral_head_and_acetabulum(segmentation_mask
     acetabulum_points = np.argwhere(np.where(segmentation_mask == acetabulum_label, 1, 0))
 
     return calculate_min_distance_between_point_clouds(femoral_head_points, acetabulum_points)
+
+
+def _sample_cone_directions(axis: np.ndarray, n_rays: int, cone_angle: float) -> np.ndarray:
+    """
+    Sample unit direction vectors evenly within a cone around a central axis.
+
+    A spherical-Fibonacci cap is used so that the directions are distributed with
+    even solid-angle density (a naive polar/azimuth grid would cluster samples
+    near the axis). The cap is generated around the canonical +z axis (uniform in
+    cos(theta) over the cap, golden-angle azimuth) and then rotated onto ``axis``
+    via a Rodrigues rotation, with the (anti)parallel cases handled explicitly.
+    :param axis: The 3D direction the cone is centered on (need not be unit length).
+    :param n_rays: The number of directions to sample.
+    :param cone_angle: The half-angle of the cone in degrees.
+    :return: An (n_rays, 3) array of unit direction vectors in the same space as ``axis``.
+    """
+    axis = np.asarray(axis, dtype=float)
+    axis = axis / np.linalg.norm(axis)
+
+    cos_min = np.cos(np.radians(cone_angle))
+    golden_angle = np.pi * (3.0 - np.sqrt(5.0))
+
+    i = np.arange(n_rays)
+    z = 1.0 - (i + 0.5) / n_rays * (1.0 - cos_min)  # uniform in cos(theta) over the cap
+    r = np.sqrt(np.clip(1.0 - z * z, 0.0, None))
+    phi = i * golden_angle
+    local = np.stack([r * np.cos(phi), r * np.sin(phi), z], axis=1)  # directions around +z
+
+    # rotate the +z axis onto `axis` (Rodrigues); handle the (anti)parallel cases
+    z_axis = np.array([0.0, 0.0, 1.0])
+    v = np.cross(z_axis, axis)
+    s = np.linalg.norm(v)
+    c = float(np.dot(z_axis, axis))
+    if s < 1e-8:
+        rot = np.eye(3) if c > 0 else np.diag([1.0, -1.0, -1.0])  # 180 deg about x for antiparallel
+    else:
+        vx = np.array([[0.0, -v[2], v[1]],
+                       [v[2], 0.0, -v[0]],
+                       [-v[1], v[0], 0.0]])
+        rot = np.eye(3) + vx + vx @ vx * ((1.0 - c) / (s * s))
+
+    return local @ rot.T
+
+
+def _subchondral_distance_ray_tracing(image: Image, fhc_index: np.ndarray, fhc_radius_index: float,
+                                      femur_mask: np.ndarray, acetabulum_mask: np.ndarray,
+                                      n_rays: int = 200, cone_angle: float = 45.0,
+                                      ray_length_factor: float = 3.0,
+                                      plot: bool | plt.Axes | pv.Plotter = False) -> Tuple[float, float, float, float, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Measure the subchondral femoral-head-to-acetabulum distance by ray tracing.
+
+    A fan of rays is cast from the femoral head center (FHC) within an angular cone
+    pointed at the acetabulum. For each ray, the voxel where it exits the femoral
+    head (the first femur 1->0 transition going outward, i.e. the femoral head
+    contour) and the first acetabulum voxel hit beyond that are recorded; the
+    per-ray value is the Euclidean distance between those two points in physical
+    (mm) space. All cone/direction geometry is done in physical space so the result
+    is correct under anisotropic voxel spacing; only ray endpoints are converted to
+    index space for the Bresenham walk.
+    :param image: The Image/Segmentation providing index<->physical transforms.
+    :param fhc_index: The femoral head center in index (voxel) coordinates.
+    :param fhc_radius_index: The femoral head radius in index (voxel) units.
+    :param femur_mask: A binary (0/1) mask of the femur, same grid as ``image``.
+    :param acetabulum_mask: A binary (0/1) mask of the acetabulum (or hip bone for CT).
+    :param n_rays: The number of rays to cast within the cone.
+    :param cone_angle: The half-angle of the cone in degrees.
+    :param ray_length_factor: Ray length as a multiple of the femoral head radius (mm).
+    :param plot: A matplotlib Axes / PyVista Plotter to overlay the rays on, or False.
+    :return: A tuple ``(mean, std, min, max, distances, exit_points, hit_points)`` where
+        the distances are in mm and the exit/hit point arrays are (K, 3) physical coordinates
+        for the K surviving rays.
+    """
+    fhc_index = np.asarray(fhc_index, dtype=float)
+    shape = np.array(femur_mask.shape)
+
+    # physical-space FHC and femoral head radius (mm)
+    fhc_phys = np.asarray(image.transform_index_to_physical_point(fhc_index), dtype=float)
+    radius_surface_phys = np.asarray(image.transform_index_to_physical_point(fhc_index + np.array([fhc_radius_index, 0, 0])), dtype=float)
+    fhc_radius_mm = np.linalg.norm(radius_surface_phys - fhc_phys)
+    ray_length_mm = ray_length_factor * fhc_radius_mm
+
+    # cone axis: FHC -> acetabulum centroid, in physical space
+    acetabulum_voxels = np.argwhere(acetabulum_mask)
+    if acetabulum_voxels.size == 0:
+        raise ValueError('Acetabulum mask is empty; cannot measure subchondral distance')
+    acetabulum_centroid_phys = np.asarray(image.transform_index_to_physical_point(acetabulum_voxels.mean(axis=0)), dtype=float)
+    axis = acetabulum_centroid_phys - fhc_phys
+    if np.linalg.norm(axis) < 1e-6:
+        raise ValueError('Femoral head center coincides with acetabulum centroid; cannot define a cone axis')
+
+    directions = _sample_cone_directions(axis, n_rays, cone_angle)
+    fhc_voxel = np.rint(fhc_index).astype(int)
+
+    distances, exit_points, hit_points = [], [], []
+
+    for d in directions:
+        end_index = np.rint(image.transform_physical_point_to_index(fhc_phys + d * ray_length_mm)).astype(int)
+        # bresenhamline returns (start, end] (start excluded); prepend the FHC so index 0 == FHC
+        path = bresenhamline(fhc_voxel[np.newaxis, :], end_index[np.newaxis, :], max_iter=-1)
+        path = np.vstack([fhc_voxel, path])
+
+        # keep the in-bounds prefix (stop at the first voxel that leaves the volume)
+        in_bounds = np.all((path >= 0) & (path < shape), axis=1)
+        if not in_bounds[0]:
+            continue  # FHC itself out of bounds
+        if not in_bounds.all():
+            path = path[:int(np.argmin(in_bounds))]
+
+        fv = femur_mask[path[:, 0], path[:, 1], path[:, 2]]
+        av = acetabulum_mask[path[:, 0], path[:, 1], path[:, 2]]
+
+        # first voxel that is inside the femoral head (handles FHC landing just outside the mask)
+        femur_hits = np.argwhere(fv == 1)
+        if femur_hits.size == 0:
+            continue  # ray never passes through the femur
+        first_femur = int(femur_hits[0, 0])
+
+        # femur exit = last femur voxel before the first outward 1->0 transition
+        exit_i = None
+        for j in range(first_femur, len(fv) - 1):
+            if fv[j] == 1 and fv[j + 1] == 0:
+                exit_i = j
+                break
+        if exit_i is None:
+            continue  # ray never exits the femoral head within range
+
+        # first acetabulum hit beyond the exit
+        acetabulum_after = np.argwhere(av[exit_i + 1:] == 1)
+        if acetabulum_after.size == 0:
+            continue  # ray never reaches the acetabulum
+        hit_i = exit_i + 1 + int(acetabulum_after[0, 0])
+
+        exit_phys = np.asarray(image.transform_index_to_physical_point(path[exit_i]), dtype=float)
+        hit_phys = np.asarray(image.transform_index_to_physical_point(path[hit_i]), dtype=float)
+        distance = float(np.linalg.norm(hit_phys - exit_phys))
+        if distance > ray_length_mm:
+            continue  # generous sanity cap against tangential grazes
+
+        distances.append(distance)
+        exit_points.append(exit_phys)
+        hit_points.append(hit_phys)
+
+    if len(distances) == 0:
+        raise ValueError('No valid rays connected the femoral head to the acetabulum')
+
+    distances = np.array(distances)
+    exit_points = np.array(exit_points)
+    hit_points = np.array(hit_points)
+
+    if plot is not False and plot is not None:
+        if isinstance(plot, pv.Plotter):
+            for exit_phys, hit_phys in zip(exit_points, hit_points):
+                plot.add_lines(np.array([exit_phys, hit_phys]), color='red', width=2)
+            plot.add_points(exit_points, color='blue', point_size=6, render_points_as_spheres=True)
+            plot.add_points(hit_points, color='green', point_size=6, render_points_as_spheres=True)
+        else:  # assume a matplotlib Axes; show a sagittal maximum-intensity projection
+            plot.imshow(femur_mask.max(axis=1).T, cmap='gray')
+            for exit_phys, hit_phys in zip(exit_points, hit_points):
+                exit_idx = image.transform_physical_point_to_index(exit_phys)
+                hit_idx = image.transform_physical_point_to_index(hit_phys)
+                plot.plot([exit_idx[0], hit_idx[0]], [exit_idx[2], hit_idx[2]], 'r-', linewidth=0.5)
+            plot.set_aspect('equal')
+            plot.set_title(f'Subchondral distance: {np.nanmean(distances):.2f} mm ({len(distances)} rays)')
+
+    return float(np.nanmean(distances)), float(np.nanstd(distances)), float(np.nanmin(distances)), float(np.nanmax(distances)), distances, exit_points, hit_points
+
+
+def calculate_subchondral_distance_ray_tracing(image: Segmentation, side: str = 'left', femur_label: int = 1,
+                                               acetabulum_label: int = 3, isotropic: bool = False,
+                                               n_rays: int = 200, cone_angle: float = 45.0,
+                                               plot: bool | plt.Axes | pv.Plotter = False) -> Tuple[float, float, float, float, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Measure the subchondral femoral-head-to-acetabulum distance on an MRI hip segmentation.
+
+    Rays are cast from the femoral head center within a cone aimed at the acetabulum;
+    for each ray the femoral head contour exit and the first acetabulum contour hit are
+    found and their physical (mm) distance recorded. See
+    :func:`_subchondral_distance_ray_tracing` for the algorithm. The mask must already be
+    in LPI orientation (call ``transform_coordinate_system`` first).
+    :param image: A Segmentation of the (single-side) proximal-femur hip mask.
+    :param side: Side of the image (not patient!), either 'left' or 'right'.
+    :param femur_label: The label of the femur in the segmentation mask.
+    :param acetabulum_label: The label of the acetabulum in the segmentation mask.
+    :param isotropic: Whether the image has isotropic voxels.
+    :param n_rays: The number of rays to cast within the cone.
+    :param cone_angle: The half-angle of the cone in degrees.
+    :param plot: A matplotlib Axes / PyVista Plotter to overlay the rays on, or False.
+    :return: A tuple ``(mean, std, min, max, distances, exit_points, hit_points)`` in mm.
+    """
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
+    r_idx, fhc_idx = get_femoral_head_center(image.array, side=side, segmentation_label=femur_label, isotropic=isotropic)
+    femur_mask = np.where(image.array == femur_label, 1, 0)
+    acetabulum_mask = np.where(image.array == acetabulum_label, 1, 0)
+
+    return _subchondral_distance_ray_tracing(image, fhc_idx, r_idx, femur_mask, acetabulum_mask,
+                                             n_rays=n_rays, cone_angle=cone_angle, plot=plot)
+
+
+def calculate_subchondral_distance_ray_tracing_ct(femur_image: Segmentation, side: str = 'left', femur_label: int = 1,
+                                                  acetabulum_label: int = 7, n_rays: int = 200, cone_angle: float = 45.0,
+                                                  plot: bool | plt.Axes | pv.Plotter = False) -> Tuple[float, float, float, float, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Measure the subchondral femoral-head-to-acetabulum distance on a whole-leg CT segmentation.
+
+    Identical to :func:`calculate_subchondral_distance_ray_tracing` but uses the CT femoral
+    head center (returned in physical space and converted to index space here, mirroring
+    ``get_proximal_reference_line_ct`` in femur.py). In whole-leg CT there is no distinct
+    acetabulum label, so the hip bone label (7 by default) plays the acetabulum role. The
+    mask must already be in LPI orientation.
+    :param femur_image: A Segmentation of the (single-side) whole-leg mask.
+    :param side: Side of the image (not patient!), either 'left' or 'right'.
+    :param femur_label: The label of the femur in the segmentation mask.
+    :param acetabulum_label: The label of the hip bone (acetabulum) in the segmentation mask.
+    :param n_rays: The number of rays to cast within the cone.
+    :param cone_angle: The half-angle of the cone in degrees.
+    :param plot: A matplotlib Axes / PyVista Plotter to overlay the rays on, or False.
+    :return: A tuple ``(mean, std, min, max, distances, exit_points, hit_points)`` in mm.
+    """
+    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
+    r_phys, fhc_phys = get_femoral_head_center_ct(femur_image, segmentation_label=femur_label, side=side)
+    fhc_idx = femur_image.transform_physical_point_to_index(fhc_phys)
+    tmp = femur_image.transform_physical_point_to_index(fhc_phys + np.array([r_phys, 0, 0]))
+    r_idx = np.linalg.norm(fhc_idx - tmp)
+
+    femur_mask = np.where(femur_image.array == femur_label, 1, 0)
+    acetabulum_mask = np.where(femur_image.array == acetabulum_label, 1, 0)
+
+    return _subchondral_distance_ray_tracing(femur_image, fhc_idx, r_idx, femur_mask, acetabulum_mask,
+                                             n_rays=n_rays, cone_angle=cone_angle, plot=plot)
 
 
 def get_cartilage_inner_and_outer_surface_points(segmentation_mask: np.ndarray, cartilage_label: int = 2) -> Tuple[np.ndarray, np.ndarray]:
