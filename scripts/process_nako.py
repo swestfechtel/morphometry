@@ -101,21 +101,20 @@ def f(patient: Path):
     plt.close(fig)
 
     try:
-        aav = calculate_acetabular_anteversion(mask.array, 1, 3, isotropic=True, plot=True,
-                                               fp=f'/home/simon/Data/NaKo_sample/plots/acetabular_anteversion/{patient.name}.png')
+        fig, ax = plt.subplots(figsize=(10, 10))
+        aav = calculate_acetabular_anteversion(mask, 1, 3, isotropic=True, plot=ax)
+        fig.savefig(f'/home/simon/Data/NaKo_sample/plots/acetabular_anteversion/{patient.name}.png')
+        plt.close(fig)
     except Exception as e:
         print(f"Error calculating AAV for patient {patient.name}: {e}")
         aav = [np.nan, np.nan]
 
     try:
-        cea = calculate_center_edge_angle(mask.array, 1, 3, isotropic=True, project=True, plot=True,
-                                          fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png',
+        fig, ax = plt.subplots(figsize=(10, 10))
+        cea = calculate_center_edge_angle(mask, 1, 3, isotropic=True, project=True, plot=ax,
                                           image_path=f'/home/simon/Data/NaKo_sample/nifti/{patient.name.replace(".nii.gz", "_0000.nii.gz")}')
-        """
-        cea = (mask.array, 1, 3, isotropic=True, plot=True,
-                                             fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png',
-                                             image_path=f'/home/simon/Data/NaKo_sample/nifti/{patient.name.replace(".nii.gz", "_0000.nii.gz")}')
-        """
+        fig.savefig(f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png')
+        plt.close(fig)
     except Exception as e:
         print(f"Error calculating CEA of patient {patient.name}: {e}")
         cea = [np.nan, np.nan]

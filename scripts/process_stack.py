@@ -1,11 +1,3 @@
-# FIXME (measurements refactor): this batch script calls the pre-refactor API and
-# needs updating to the new single-return measurements API:
-#   - calculate_femoral_torsion / calculate_tibial_torsion / calculate_knee_rotation_angle
-#     now return only the angle (no (angle, fig)); pass a sequence of Axes to `plot=` to
-#     draw, and use get_femoral_torsion_landmarks / get_tibial_torsion_landmarks for landmarks.
-#   - calculate_mechanical_axis_deviation now takes a single whole-leg CT Segmentation
-#     (femur=1, tibia=2, ...), not separate hip/knee/ankle images.
-# Imports have been repointed to morphometry.measurements; call sites are not yet updated.
 import sys
 sys.path.append('/home/simon/Work/morphometry')
 import SimpleITK as sitk
@@ -58,7 +50,8 @@ if __name__ == '__main__':
 
     if args.plot:
         try:
-            femoral_torsion_left, fig = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=args.plot)
+            fig, ax = plt.subplots(1, 2)
+            femoral_torsion_left = calculate_femoral_torsion(left_hip, left_knee, side='left', x_ratio=x_ratio, plot=ax)
             fig.savefig(f'{args.output}/ft_right.png')  # patient side <-> image side
             plt.close(fig)
         except (RuntimeError, AssertionError, ValueError) as e:
@@ -66,7 +59,8 @@ if __name__ == '__main__':
             femoral_torsion_left = np.nan
 
         try:
-            femoral_torsion_right, fig = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio, plot=args.plot)
+            fig, ax = plt.subplots(1, 2)
+            femoral_torsion_right = calculate_femoral_torsion(right_hip, right_knee, side='right', x_ratio=x_ratio, plot=ax)
             fig.savefig(f'{args.output}/ft_left.png')
             plt.close(fig)
         except (RuntimeError, AssertionError, ValueError) as e:
@@ -74,7 +68,8 @@ if __name__ == '__main__':
             femoral_torsion_right = np.nan
 
         try:
-            tibial_torsion_left, fig = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left', plot=args.plot)
+            fig, ax = plt.subplots(1, 2)
+            tibial_torsion_left = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left', plot=ax)
             fig.savefig(f'{args.output}/tt_right.png')
             plt.close(fig)
         except (RuntimeError, AssertionError, ValueError) as e:
@@ -82,7 +77,8 @@ if __name__ == '__main__':
             tibial_torsion_left = np.nan
 
         try:
-            tibial_torsion_right, fig = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right', plot=args.plot)
+            fig, ax = plt.subplots(1, 2)
+            tibial_torsion_right = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right', plot=ax)
             fig.savefig(f'{args.output}/tt_left.png')
             plt.close(fig)
         except (RuntimeError, AssertionError, ValueError) as e:

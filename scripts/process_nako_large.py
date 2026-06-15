@@ -70,25 +70,25 @@ def f(patient):
         aa_right = (np.nan, np.nan)
 
     try:
-        aav = calculate_acetabular_anteversion(mask.array, 1, 3, isotropic=False, plot=False)
+        aav = calculate_acetabular_anteversion(mask, 1, 3, isotropic=False, plot=False)
     except Exception as e:
         print(f"Error calculating AAV for patient {patient.name}: {e}")
         aav = [np.nan, np.nan]
 
     try:
-        cea = calculate_center_edge_angle(mask.array, 1, 3, project=True, isotropic=True, plot=False)
+        cea = calculate_center_edge_angle(mask, 1, 3, project=True, isotropic=True, plot=False)
     except Exception as e:
         print(f"Error calculating CEA for left side of patient {patient.name}: {e}")
         cea = [np.nan, np.nan]
 
     try:
-        offset_left = calculate_femoral_offset_projected(mask_left, None, 'left', 1, isotropic=True, plot=False)
+        offset_left = calculate_femoral_offset_projected(mask_left, None, 'left', 1, isotropic=True)
     except Exception as e:
         print(f"Error calculating femoral offset for left side of patient {patient.name}: {e}")
         offset_left = np.nan
 
     try:
-        offset_right = calculate_femoral_offset_projected(mask_right, None, 'right', 1, isotropic=True, plot=False)
+        offset_right = calculate_femoral_offset_projected(mask_right, None, 'right', 1, isotropic=True)
     except Exception as e:
         print(f"Error calculating femoral offset for right side of patient {patient.name}: {e}")
         offset_right = np.nan
