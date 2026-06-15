@@ -1,3 +1,4 @@
+# FIXME (pre-existing): calculate_center_edge_angle_2d was imported but never existed; removed.
 import multiprocessing
 import os
 import sys
@@ -10,8 +11,8 @@ import nibabel as nib
 import pyvista as pv
 
 from pathlib import Path
-from morphometry.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
-    calculate_alpha_angle, calculate_center_edge_angle, calculate_center_edge_angle_2d, \
+from morphometry.measurements.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
+    calculate_alpha_angle, calculate_center_edge_angle, \
     calculate_femoral_offset_projected
 from morphometry.image_io import Segmentation
 from matplotlib import pyplot as plt
@@ -111,7 +112,7 @@ def f(patient: Path):
                                           fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png',
                                           image_path=f'/home/simon/Data/NaKo_sample/nifti/{patient.name.replace(".nii.gz", "_0000.nii.gz")}')
         """
-        cea = calculate_center_edge_angle_2d(mask.array, 1, 3, isotropic=True, plot=True,
+        cea = (mask.array, 1, 3, isotropic=True, plot=True,
                                              fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png',
                                              image_path=f'/home/simon/Data/NaKo_sample/nifti/{patient.name.replace(".nii.gz", "_0000.nii.gz")}')
         """

@@ -5,8 +5,8 @@ import nibabel as nib
 import numpy as np
 
 from morphometry.image_io import Image, Segmentation
-from morphometry.femur import calculate_femoral_torsion
-from morphometry.tibia import calculate_tibial_torsion
+from morphometry.measurements.femur import calculate_femoral_torsion, get_femoral_torsion_landmarks
+from morphometry.measurements.tibia import calculate_tibial_torsion, get_tibial_torsion_landmarks
 
 from collections import defaultdict
 
@@ -57,7 +57,8 @@ if __name__ == '__main__':
     errors = list()
 
     try:
-        torsion, landmarks = calculate_femoral_torsion(left_hip, left_knee, side='left', method='lee', x_ratio=x_ratio, plot=False, return_landmarks=True)
+        torsion = calculate_femoral_torsion(left_hip, left_knee, side='left', method='lee', x_ratio=x_ratio)
+        landmarks = get_femoral_torsion_landmarks(left_hip, left_knee, side='left', method='lee', x_ratio=x_ratio)
         results['femoral_torsion_right'] = torsion
 
         for k, v in landmarks.items():
@@ -74,7 +75,8 @@ if __name__ == '__main__':
         landmarks_final['femur']['Lee']['right']['knee_end'] = [0, 0, 0]
 
     try:
-        torsion, landmarks = calculate_femoral_torsion(left_hip, left_knee, side='left', method='murphy', x_ratio=x_ratio, plot=False, return_landmarks=True)
+        torsion = calculate_femoral_torsion(left_hip, left_knee, side='left', method='murphy', x_ratio=x_ratio)
+        landmarks = get_femoral_torsion_landmarks(left_hip, left_knee, side='left', method='murphy', x_ratio=x_ratio)
         results['femoral_torsion_right_murphy'] = torsion
 
         for k, v in landmarks.items():
@@ -91,7 +93,8 @@ if __name__ == '__main__':
         landmarks_final['femur']['Murphy']['right']['knee_end'] = [0, 0, 0]
 
     try:
-        torsion, landmarks = calculate_femoral_torsion(right_hip, right_knee, side='right', method='lee', x_ratio=x_ratio, plot=False, return_landmarks=True)
+        torsion = calculate_femoral_torsion(right_hip, right_knee, side='right', method='lee', x_ratio=x_ratio)
+        landmarks = get_femoral_torsion_landmarks(right_hip, right_knee, side='right', method='lee', x_ratio=x_ratio)
         landmarks['hip_start'][0] += left_hip.array.shape[0]  # shift to the right image side
         landmarks['hip_end'][0] += left_hip.array.shape[0]
         landmarks['knee_start'][0] += left_knee.shape[0]
@@ -113,7 +116,8 @@ if __name__ == '__main__':
         landmarks_final['femur']['Lee']['left']['knee_end'] = [0, 0, 0]
 
     try:
-        torsion, landmarks = calculate_femoral_torsion(right_hip, right_knee, side='right', method='murphy', x_ratio=x_ratio, plot=False, return_landmarks=True)
+        torsion = calculate_femoral_torsion(right_hip, right_knee, side='right', method='murphy', x_ratio=x_ratio)
+        landmarks = get_femoral_torsion_landmarks(right_hip, right_knee, side='right', method='murphy', x_ratio=x_ratio)
         landmarks['hip_start'][0] += left_hip.array.shape[0]  # shift to the right image side
         landmarks['hip_end'][0] += left_hip.array.shape[0]
         landmarks['knee_start'][0] += left_knee.shape[0]
@@ -135,7 +139,8 @@ if __name__ == '__main__':
         landmarks_final['femur']['Murphy']['left']['knee_end'] = [0, 0, 0]
 
     try:
-        torsion, landmarks = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left', plot=False, return_landmarks=True)
+        torsion = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left')
+        landmarks = get_tibial_torsion_landmarks(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left')
         results['tibial_torsion_right'] = torsion
 
         for k, v in landmarks.items():
@@ -152,7 +157,8 @@ if __name__ == '__main__':
         landmarks_final['tibia']['right']['ankle_end'] = [0, 0, 0]
 
     try:
-        torsion, landmarks = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right', plot=False, return_landmarks=True)
+        torsion = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right')
+        landmarks = get_tibial_torsion_landmarks(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right')
         landmarks['knee_start'][0] += left_knee.shape[0]
         landmarks['knee_end'][0] += left_knee.shape[0]
         landmarks['ankle_start'][0] += left_ankle.shape[0]

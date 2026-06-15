@@ -1,10 +1,18 @@
+# FIXME (measurements refactor): this batch script calls the pre-refactor API and
+# needs updating to the new single-return measurements API:
+#   - calculate_femoral_torsion / calculate_tibial_torsion / calculate_knee_rotation_angle
+#     now return only the angle (no (angle, fig)); pass a sequence of Axes to `plot=` to
+#     draw, and use get_femoral_torsion_landmarks / get_tibial_torsion_landmarks for landmarks.
+#   - calculate_mechanical_axis_deviation now takes a single whole-leg CT Segmentation
+#     (femur=1, tibia=2, ...), not separate hip/knee/ankle images.
+# Imports have been repointed to morphometry.measurements; call sites are not yet updated.
 import sys
 sys.path.append('/home/simon/Work/morphometry')
 import SimpleITK as sitk
 import nibabel as nib
 import numpy as np
-from morphometry.femur import calculate_femoral_torsion
-from morphometry.tibia import calculate_tibial_torsion
+from morphometry.measurements.femur import calculate_femoral_torsion
+from morphometry.measurements.tibia import calculate_tibial_torsion
 from morphometry.image_io import Image
 from argparse import ArgumentParser
 from matplotlib import pyplot as plt

@@ -10,7 +10,7 @@ import numpy as np
 import nibabel as nib
 
 from pathlib import Path
-from morphometry.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
+from morphometry.measurements.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
     calculate_alpha_angle, calculate_acetabular_depth, calculate_center_edge_angle, \
     calculate_cartilage_thickness_knn, calculate_femoral_offset, calculate_femoral_offset_projected
 from morphometry.image_io import Segmentation

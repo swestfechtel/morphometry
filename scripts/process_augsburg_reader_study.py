@@ -1,3 +1,11 @@
+# FIXME (measurements refactor): this batch script calls the pre-refactor API and
+# needs updating to the new single-return measurements API:
+#   - calculate_femoral_torsion / calculate_tibial_torsion / calculate_knee_rotation_angle
+#     now return only the angle (no (angle, fig)); pass a sequence of Axes to `plot=` to
+#     draw, and use get_femoral_torsion_landmarks / get_tibial_torsion_landmarks for landmarks.
+#   - calculate_mechanical_axis_deviation now takes a single whole-leg CT Segmentation
+#     (femur=1, tibia=2, ...), not separate hip/knee/ankle images.
+# Imports have been repointed to morphometry.measurements; call sites are not yet updated.
 import sys
 sys.path.append('/home/simon/Work/morphometry')
 
@@ -8,12 +16,12 @@ import nibabel as nib
 import traceback
 import pyvista as pv
 from pathlib import Path
-from morphometry.femur import calculate_femoral_torsion
-from morphometry.tibia import calculate_tibial_torsion
-from morphometry.knee import calculate_knee_rotation_angle
-from morphometry.whole_leg import calculate_mechanical_axis_deviation, calculate_bone_length
-from morphometry.ankle import calculate_pma_angle
-from morphometry.hip import calculate_ccd
+from morphometry.measurements.femur import calculate_femoral_torsion
+from morphometry.measurements.tibia import calculate_tibial_torsion
+from morphometry.measurements.knee import calculate_knee_rotation_angle
+from morphometry.measurements.whole_leg import calculate_mechanical_axis_deviation, calculate_bone_length
+from morphometry.measurements.ankle import calculate_pma_angle
+from morphometry.measurements.hip import calculate_ccd
 from morphometry.image_io import Segmentation
 from matplotlib import pyplot as plt
 from tqdm import tqdm
