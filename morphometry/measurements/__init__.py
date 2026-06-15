@@ -13,6 +13,15 @@ from morphometry.measurements.femur import (
     calculate_femoral_torsion_ct,
     get_femoral_torsion_landmarks,
 )
+from morphometry.measurements.knee import (
+    calculate_knee_rotation_angle,
+    calculate_joint_line_convergence_angle,
+)
+from morphometry.measurements.tibia import (
+    calculate_tibial_torsion,
+    get_tibial_torsion_landmarks,
+)
+from morphometry.measurements.ankle import calculate_pma_angle
 from morphometry.measurements.hip import (
     calculate_ccd,
     calculate_ccd_ct,
@@ -34,6 +43,11 @@ __all__ = [
     "calculate_femoral_torsion",
     "calculate_femoral_torsion_ct",
     "get_femoral_torsion_landmarks",
+    "calculate_knee_rotation_angle",
+    "calculate_joint_line_convergence_angle",
+    "calculate_tibial_torsion",
+    "get_tibial_torsion_landmarks",
+    "calculate_pma_angle",
     "calculate_ccd",
     "calculate_ccd_ct",
     "calculate_anteversion",

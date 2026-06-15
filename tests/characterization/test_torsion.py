@@ -12,7 +12,7 @@ import pytest
 
 from morphometry.image_io import Image
 from morphometry.measurements.femur import calculate_femoral_torsion
-from morphometry.tibia import calculate_tibial_torsion
+from morphometry.measurements.tibia import calculate_tibial_torsion
 from tests.conftest import assert_golden
 
 pytestmark = pytest.mark.needs_augsburg

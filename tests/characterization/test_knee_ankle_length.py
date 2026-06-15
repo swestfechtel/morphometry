@@ -9,7 +9,8 @@ import nibabel as nib
 import pytest
 
 from morphometry.image_io import Image, Segmentation
-from morphometry import knee as K, ankle as A, whole_leg as W
+from morphometry.measurements import knee as K, ankle as A
+from morphometry import whole_leg as W
 from tests.conftest import assert_golden
 
 pytestmark = pytest.mark.needs_augsburg
