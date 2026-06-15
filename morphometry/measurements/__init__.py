@@ -22,6 +22,12 @@ from morphometry.measurements.tibia import (
     get_tibial_torsion_landmarks,
 )
 from morphometry.measurements.ankle import calculate_pma_angle
+from morphometry.measurements.whole_leg import (
+    calculate_mechanical_axis_deviation,
+    calculate_hip_knee_ankle_angle,
+    calculate_bone_length,
+    calculate_bone_length_ct,
+)
 from morphometry.measurements.hip import (
     calculate_ccd,
     calculate_ccd_ct,
@@ -38,6 +44,11 @@ from morphometry.measurements.hip import (
     calculate_femoral_offset,
     calculate_femoral_offset_projected,
 )
+from morphometry.measurements.cartilage import (
+    calculate_tibial_cartilage_thickness,
+    calculate_femoral_cartilage_thickness,
+    calculate_knee_cartilage_thickness,
+)
 
 __all__ = [
     "calculate_femoral_torsion",
@@ -48,6 +59,10 @@ __all__ = [
     "calculate_tibial_torsion",
     "get_tibial_torsion_landmarks",
     "calculate_pma_angle",
+    "calculate_mechanical_axis_deviation",
+    "calculate_hip_knee_ankle_angle",
+    "calculate_bone_length",
+    "calculate_bone_length_ct",
     "calculate_ccd",
     "calculate_ccd_ct",
     "calculate_anteversion",
@@ -62,4 +77,7 @@ __all__ = [
     "calculate_cartilage_thickness_ray_tracing",
     "calculate_femoral_offset",
     "calculate_femoral_offset_projected",
+    "calculate_tibial_cartilage_thickness",
+    "calculate_femoral_cartilage_thickness",
+    "calculate_knee_cartilage_thickness",
 ]

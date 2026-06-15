@@ -12,7 +12,7 @@ import pytest
 
 from morphometry import hip as Hg
 from morphometry.measurements import hip as MH
-from morphometry import whole_leg as W
+from morphometry.measurements import whole_leg as W
 from morphometry.measurements.femur import calculate_femoral_torsion_ct
 from tests.conftest import assert_golden, split_left_right
 
