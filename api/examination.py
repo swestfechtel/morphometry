@@ -121,8 +121,15 @@ class TorsionExamination(Examination):
     def split_series(self):
         """
         Split a stacked series into hip, knee and ankle series.
+
+        If ``hip``, ``knee`` and ``ankle`` are already populated (e.g. because the
+        examination was created from three separate series via
+        :meth:`FileController.save_torsion_series`), this method is a no-op.
         :return:
         """
+        if self.hip is not None and self.knee is not None and self.ankle is not None:
+            return
+
         cpd = ruptures.KernelCPD()
         image_array = self.transformed_image.array
         image_array = np.where(image_array < 50, 0, image_array)  # outlier removal

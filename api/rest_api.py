@@ -243,6 +243,36 @@ async def files_from_html_form(request: Request, examination_type: str = Form(..
     return {'examination_id': examination.identifier}
 
 
+@app.post('/upload/torsion/multi', status_code=status.HTTP_201_CREATED)
+async def torsion_multi_series_upload(
+    hip_files: list[UploadFile] = File(...),
+    knee_files: list[UploadFile] = File(...),
+    ankle_files: list[UploadFile] = File(...),
+):
+    """
+    Upload three separate DICOM series (hip, knee, ankle) for a torsion examination.
+
+    Use this endpoint when the three anatomical regions are acquired as distinct
+    series rather than combined into a single stacked volume. Each region's files
+    are assigned directly to the examination, skipping the changepoint-based
+    ``split_series`` step that the single-upload endpoint relies on.
+
+    :param hip_files: DICOM files for the hip series.
+    :param knee_files: DICOM files for the knee series.
+    :param ankle_files: DICOM files for the ankle series.
+    :return: The identifier of the created examination.
+    """
+    if not (hip_files and knee_files and ankle_files):
+        return Response(status_code=status.HTTP_400_BAD_REQUEST)
+
+    examination = file_controller.save_torsion_series(hip_files, knee_files, ankle_files, origin='ui')
+
+    if examination is False:
+        return Response(status_code=status.HTTP_400_BAD_REQUEST)
+
+    return {'examination_id': examination.identifier}
+
+
 @app.post('/upload/orthanc', status_code=status.HTTP_201_CREATED)
 async def files_from_orthanc(file: Annotated[bytes, File(...)], metadata: str = Body(...)):
     """

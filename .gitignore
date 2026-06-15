@@ -3,6 +3,21 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# IDE
+.idea/
+
+# Large data / model artifacts (kept local, not version-controlled)
+api/data/
+api/docker/nnunet_torsion/checkpoints/
+out/
+*.pkl
+
+# Generated analysis artifacts
+*.xlsx
+data_exploration.pdf
+notebooks/augsburg_data_analysis.html
+notebooks/augsburg_data_analysis.pdf
+
 # C extensions
 *.so
 

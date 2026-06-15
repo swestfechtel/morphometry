@@ -11,6 +11,9 @@ import threading
 import asyncio
 import pydicom
 
+import numpy as np
+import nibabel as nib
+
 from api.examination import Examination, TorsionExamination, XRayExamination
 
 from morphometry.image_io import Image
@@ -355,3 +358,105 @@ class FileController(object):
                 examination.status = 'processed'
 
             return self.add_examination(examination)  # if this returns False the examination object should be garbage collected
+
+    def save_torsion_series(self, hip_files: list[UploadFile], knee_files: list[UploadFile],
+                            ankle_files: list[UploadFile], origin: str) -> Examination | bool:
+        """
+        Save three separate DICOM series (hip, knee, ankle) for torsion processing.
+
+        Unlike :meth:`save_files`, this path expects the three anatomical regions to be
+        uploaded as distinct series rather than as a single stacked volume. Each series
+        is written to its own sub-directory, read as a nibabel image, transformed to
+        LPI, and assigned directly to the corresponding attribute of the
+        ``TorsionExamination`` — bypassing :meth:`TorsionExamination.split_series`.
+
+        Study metadata is taken from the hip series; a warning is logged if the three
+        series disagree on ``AccessionNumber``.
+
+        :param hip_files: DICOM files for the hip series.
+        :param knee_files: DICOM files for the knee series.
+        :param ankle_files: DICOM files for the ankle series.
+        :param origin: The origin of the upload (currently only ``'ui'`` is supported).
+        :return: The created ``TorsionExamination`` or ``False`` if the upload was
+            rejected (e.g. in-plane shapes do not match across series).
+        """
+        workdir = os.path.dirname(os.path.realpath(__file__))
+
+        with tempfile.TemporaryDirectory(dir=f'{workdir}/uploads/') as temp_dir:
+            region_dirs: dict[str, str] = {}
+            for region, files in (('hip', hip_files), ('knee', knee_files), ('ankle', ankle_files)):
+                region_dir = Path(temp_dir) / region
+                region_dir.mkdir()
+                for file in files:
+                    filename = file.filename.split('/')[-1]
+                    if filename == 'VERSION':
+                        continue
+                    self.save_upload_file(file, region_dir / filename, rename=True)
+                region_dirs[region] = str(region_dir)
+                self.logger.debug(f'Saved {len(os.listdir(region_dir))} {region} files to {region_dir}.')
+
+            hip_metadata = Image.read_dicom_metadata(region_dirs['hip'])
+            knee_metadata = Image.read_dicom_metadata(region_dirs['knee'])
+            ankle_metadata = Image.read_dicom_metadata(region_dirs['ankle'])
+
+            if not (hip_metadata.AccessionNumber == knee_metadata.AccessionNumber == ankle_metadata.AccessionNumber):
+                self.logger.warning(
+                    f'Accession numbers differ between series: '
+                    f'hip={hip_metadata.AccessionNumber}, '
+                    f'knee={knee_metadata.AccessionNumber}, '
+                    f'ankle={ankle_metadata.AccessionNumber}. Using hip accession number.'
+                )
+
+            metadata = hip_metadata
+            if metadata.AccessionNumber == '':
+                self.logger.warning(f'Accession number not found in hip metadata. Using dummy value.')
+                metadata.AccessionNumber = ''.join(random.choices(string.ascii_uppercase + string.digits, k=10))
+
+            hip_nib, tmp_hip = Image.dicom_to_nibabel(region_dirs['hip'])
+            knee_nib, tmp_knee = Image.dicom_to_nibabel(region_dirs['knee'])
+            ankle_nib, tmp_ankle = Image.dicom_to_nibabel(region_dirs['ankle'])
+
+            try:
+                hip_image = Image.from_nibabel(hip_nib)
+                hip_image.metadata = metadata
+                hip_image.transform_coordinate_system()
+
+                knee_image = Image.from_nibabel(knee_nib)
+                knee_image.metadata = metadata
+                knee_image.transform_coordinate_system()
+
+                ankle_image = Image.from_nibabel(ankle_nib)
+                ankle_image.metadata = metadata
+                ankle_image.transform_coordinate_system()
+
+                hip_array = hip_image.array
+                knee_array = knee_image.array
+                ankle_array = ankle_image.array
+
+                if not (hip_array.shape[:2] == knee_array.shape[:2] == ankle_array.shape[:2]):
+                    self.logger.error(
+                        f'In-plane shapes differ between series: '
+                        f'hip={hip_array.shape[:2]}, knee={knee_array.shape[:2]}, '
+                        f'ankle={ankle_array.shape[:2]}. Multi-series torsion upload '
+                        f'requires matching in-plane dimensions.'
+                    )
+                    return False
+
+                combined_array = np.concatenate((hip_array, knee_array, ankle_array), axis=2)
+                combined_nib = nib.Nifti1Image(combined_array, affine=hip_image.affine)
+                transformed_image = Image.from_nibabel(combined_nib)
+                transformed_image.metadata = metadata
+
+                examination = Examination(identifier=None, metadata=metadata)
+                examination = TorsionExamination(examination)
+                examination.original_image = transformed_image.copy()
+                examination.transformed_image = transformed_image
+                examination.hip = hip_image
+                examination.knee = knee_image
+                examination.ankle = ankle_image
+            finally:
+                tmp_hip.cleanup()
+                tmp_knee.cleanup()
+                tmp_ankle.cleanup()
+
+            return self.add_examination(examination)

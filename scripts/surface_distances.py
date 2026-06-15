@@ -16,9 +16,20 @@ def compute_metrics(prediction_path: str, gt_path: str, labels: list) -> pd.Data
     :param labels: A list of labels to compute the metrics for.
     :return: A pandas DataFrame containing the metrics.
     """
-    filenames = [x.name for x in Path(
-        prediction_path).iterdir()
-                        if x.suffix != '.json']
+    prediction_files = {x.name for x in Path(prediction_path).iterdir() if x.suffix != '.json'}
+    gt_files = {x.name for x in Path(gt_path).iterdir() if x.suffix != '.json'}
+    missing_in_predictions = sorted(gt_files - prediction_files)
+    missing_in_gt = sorted(prediction_files - gt_files)
+    if missing_in_predictions:
+        print(f'Skipping {len(missing_in_predictions)} case(s) without a prediction: {missing_in_predictions}')
+    if missing_in_gt:
+        print(f'Skipping {len(missing_in_gt)} case(s) without a ground truth: {missing_in_gt}')
+
+    filenames = sorted(prediction_files & gt_files)
+    if not filenames:
+        print('No overlapping prediction/ground-truth pairs found; nothing to compute.')
+        return pd.DataFrame(columns=['asd', 'hd', 'dice'])
+
     index = pd.MultiIndex.from_product([filenames, labels], names=['filename', 'label'])
     df = pd.DataFrame(columns = ['asd', 'hd', 'dice'], index=index, dtype=float)
     for filename in tqdm(filenames):
@@ -55,6 +66,7 @@ if __name__ == '__main__':
     parser.add_argument('--gt_path', type=str, required=True, help='Path to the directory containing the ground truth masks.')
     parser.add_argument('--labels', nargs='+', type=int, required=True, help='List of labels to compute the metrics for.')
     parser.add_argument('-o', '--output_path', type=str, required=False, help='Path to save the computed metrics.')
+    parser.add_argument('--raw', type=str, required=False, help='Path to save per-case results.')
     args = parser.parse_args()
 
     df = compute_metrics(args.prediction_path, args.gt_path, args.labels)
@@ -64,3 +76,6 @@ if __name__ == '__main__':
     if args.output_path:
         # df.to_csv(args.output_path, index=True)
         df.groupby(level='label').describe().T.to_excel(args.output_path)
+        
+    if args.raw:
+        df.to_csv(args.raw)
