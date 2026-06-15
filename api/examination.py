@@ -1,3 +1,8 @@
+"""LEGACY examination classes — retained only so ``scripts/migrate_pickles.py`` can
+unpickle pre-refactor ``api/data/*.pkl`` files (pickle needs the original class at
+its original import path). The live API no longer uses these; examinations are now
+DB rows + image files (see api/db, api/storage, api/ingest). Do not extend.
+"""
 import pydicom
 import ruptures
 import base64

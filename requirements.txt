@@ -203,3 +203,17 @@ argparse~=1.4.0
 Deprecated~=1.2.18
 fastapi~=0.115.12
 pingouin~=0.5.5
+
+# --- API service (FastAPI app + RQ worker) ---
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+pydantic-settings>=2.4
+sqlmodel>=0.0.21
+alembic>=1.13
+redis>=5.0
+rq>=1.16
+rq-scheduler>=0.13
+# dev/test:
+pytest>=8.0
+httpx>=0.27
+fakeredis>=2.23

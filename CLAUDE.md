@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The repo has three loosely-coupled parts that share a single virtualenv and the `morphometry` package:
 
 - `morphometry/` — the analysis library. One module per anatomic region (`hip.py`, `knee.py`, `ankle.py`, `femur.py`, `tibia.py`, `whole_leg.py`, `cartilage/`). Every measurement function operates on segmentation masks through the `Image` / `Segmentation` wrapper in `morphometry/image_io.py`. Utilities live in `morphometry/utils.py`.
-- `api/` — a FastAPI service (`api/rest_api.py`) that ingests DICOM uploads or Orthanc callbacks, persists `Examination` objects via `FileController`, and dispatches jobs through `ModelController`. Jobs shell out to docker images (see below).
+- `api/` — a FastAPI service (`api/main.py`) that ingests DICOM uploads or Orthanc callbacks, stores examination metadata in SQLite + images as `.nii.gz` files (`api/db`, `api/storage`), and dispatches model jobs to a **Redis/RQ worker** (`api/tasks`) that shells out to the docker images (see below). Layered: `routers` → `ingest`/`serializers`/`deps` → `db`/`storage`/`tasks` → `settings`/`runtime`. Config is env-driven via `api/settings.py` (`MORPH_API_*` / `.env`). `api/examination.py` is legacy, kept only for `scripts/migrate_pickles.py`.
 - `scripts/` — one-off batch processing scripts (`process_augsburg_*.py`, `process_nako*.py`, `combine_series.py`, etc.). Each script is self-contained and typically prepends `sys.path.append('/home/simon/Work/morphometry')` and hard-codes absolute data paths (e.g. `/home/simon/Data/...`); update paths when running elsewhere.
 
 ## Core data flow
@@ -37,12 +37,26 @@ cd morphometry && docker build -t swestfechtel/torsion:latest .
 
 ## Running the API
 
+The API and the model worker are separate processes sharing Redis, the SQLite DB,
+and the storage dir. Copy `api/.env.example` to `.env` and adjust (`MORPH_API_*`:
+storage dir, redis/db URLs, docker image tags, `API_KEYS`, `CORS_ALLOW_ORIGINS`).
+
 ```bash
 # from repo root, with venv activated
-uvicorn api.rest_api:app --host 0.0.0.0 --port 8000
+redis-server                                   # broker + job state
+python -m api.tasks.worker                      # RQ worker (one, on the 'gpu' queue → serializes GPU jobs)
+uvicorn api.main:app --host 0.0.0.0 --port 8000 # the web app
 ```
 
-The API writes logs to `api/logs/` (file handler, see `api/utils.py::init_logger`). `api/orthanc_plugin.py` is loaded **inside an Orthanc server process**, not by the FastAPI app — it forwards stored DICOM instances to `http://localhost:8000/upload/orthanc`.
+The worker is the only process that loads volumes and runs docker (needs docker
+socket access + the morphometry venv); the API process does not touch docker. Job
+status is durable in the DB (`GET /jobs/{id}` survives restarts). Endpoints
+require an `X-API-Key` header when `MORPH_API_API_KEYS` is set (`/health` is open).
+Logs rotate in `api/logs/` (see `api/logging_config.py`). `api/orthanc_plugin.py`
+runs **inside an Orthanc process** and forwards stored instances to
+`MORPH_API_UPLOAD_URL` (default `http://localhost:8000/upload/orthanc`) with the
+`MORPH_API_API_KEY` header. Migrate legacy `api/data/*.pkl` with
+`python scripts/migrate_pickles.py`.
 
 ## Tests
 

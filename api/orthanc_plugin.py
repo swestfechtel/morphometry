@@ -2,7 +2,13 @@ import orthanc
 import requests
 import json
 import logging
+import os
 from io import BytesIO
+
+# Forward target + auth come from the environment so the plugin is not hardcoded
+# to localhost and matches the API's MORPH_API_API_KEYS when auth is enabled.
+UPLOAD_URL = os.environ.get("MORPH_API_UPLOAD_URL", "http://localhost:8000/upload/orthanc")
+API_KEY = os.environ.get("MORPH_API_API_KEY", "")
 
 
 def on_receive(data, origin):
@@ -25,7 +31,8 @@ def on_stored_instance(dicom, instance_id):
     metadata = json.loads(dicom.GetInstanceSimplifiedJson())
     files =  {'file': (instance_id, file, 'application/dicom')}
     data = {'metadata': json.dumps(metadata)}
-    response = requests.post(url='http://localhost:8000/upload/orthanc', files=files, data=data)
+    headers = {'X-API-Key': API_KEY} if API_KEY else {}
+    response = requests.post(url=UPLOAD_URL, files=files, data=data, headers=headers)
     logger.info(f'Got status code {response.status_code} and message {response.text}')
 
 
