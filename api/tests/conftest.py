@@ -27,6 +27,20 @@ def settings(tmp_path: Path) -> Settings:
 
 
 @pytest.fixture
+def runtime(tmp_path: Path, monkeypatch):
+    """Point the cached runtime (settings/engine/store) at temp dirs via env vars."""
+    monkeypatch.setenv("MORPH_API_STORAGE_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("MORPH_API_DATABASE_URL", f"sqlite:///{tmp_path / 'api.db'}")
+    monkeypatch.setenv("MORPH_API_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("MORPH_API_API_KEYS", "test-key")
+    monkeypatch.setenv("MORPH_API_CORS_ALLOW_ORIGINS", "http://testclient")
+    import api.runtime as rt
+    rt.reset()
+    yield rt
+    rt.reset()
+
+
+@pytest.fixture
 def fake_docker_run():
     """Factory for a ``subprocess.run`` replacement that fakes the model containers.
 

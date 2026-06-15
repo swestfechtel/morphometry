@@ -7,9 +7,10 @@ environment variable or an entry in a local ``.env`` file.
 """
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 _API_DIR = Path(__file__).resolve().parent
 
@@ -50,9 +51,10 @@ class Settings(BaseSettings):
 
     # --- auth / CORS -----------------------------------------------------------
     #: Accepted ``X-API-Key`` values. Empty list disables auth (dev only).
-    api_keys: list[str] = []
+    #: NoDecode lets env vars be comma-separated strings (handled by the validator below).
+    api_keys: Annotated[list[str], NoDecode] = []
     #: Allowed CORS origins. Use explicit origins in production, not ['*'].
-    cors_allow_origins: list[str] = ["*"]
+    cors_allow_origins: Annotated[list[str], NoDecode] = ["*"]
 
     @field_validator("api_keys", "cors_allow_origins", mode="before")
     @classmethod
