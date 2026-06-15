@@ -1,0 +1,8 @@
+# Pytest configuration. The runtime environment is pinned by requirements.txt.
+[tool.pytest.ini_options]
+testpaths = ["api/tests"]
+pythonpath = ["."]
+addopts = "-ra"
+markers = [
+    "needs_redis: requires a real Redis (uses fakeredis otherwise)",
+]
