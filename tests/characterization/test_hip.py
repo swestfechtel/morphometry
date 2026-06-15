@@ -14,7 +14,7 @@ import nibabel as nib
 import pytest
 
 from morphometry.image_io import Segmentation
-from morphometry import hip as H
+from morphometry.measurements import hip as H
 from tests.conftest import assert_golden, split_left_right
 
 pytestmark = pytest.mark.needs_nako
@@ -37,6 +37,11 @@ def test_center_edge_angle(nako_sample):
 def test_ccd_left(nako_sample):
     left, _ = split_left_right(nako_sample)
     assert_golden("ccd_left", H.calculate_ccd(left, side="left", isotropic=True))
+
+
+def test_anteversion_left(nako_sample):
+    left, _ = split_left_right(nako_sample)
+    assert_golden("anteversion_left", H.calculate_anteversion(left, side="left", isotropic=True))
 
 
 def test_alpha_angle_left(nako_sample):

@@ -27,7 +27,23 @@ NAKO_SAMPLE_DIR = Path(
     )
 )
 
-# A whole-leg CT segmentation (femur=1, tibia=2, fibula=3, patella=5, hip=7).
-# Location is uncertain on most machines; set MORPH_CT_SAMPLE to enable the
-# CT (`*_ct`) characterization tests.
-CT_WHOLE_LEG = Path(os.environ["MORPH_CT_SAMPLE"]) if os.environ.get("MORPH_CT_SAMPLE") else None
+# A whole-leg CT segmentation (femur=1, tibia=2, fibula=3, patella=5, hip=7),
+# containing both legs (split at shape[0]//2). MORPH_CT_SAMPLE may point at a
+# single .nii.gz file; otherwise a fixed case from the NMDID verification sample
+# directory is used (chosen deterministically for stable goldens).
+_CT_DEFAULT_DIR = Path(
+    "/home/simon/sshfs/hpcproject/workspace_simon/nmdid/verification_sample/ground_truth"
+)
+_CT_DEFAULT_CASE = "case-105094.nii.gz"
+
+
+def _resolve_ct_sample():
+    env = os.environ.get("MORPH_CT_SAMPLE")
+    if env:
+        p = Path(env)
+        return p if p.exists() else None
+    candidate = _CT_DEFAULT_DIR / _CT_DEFAULT_CASE
+    return candidate if candidate.exists() else None
+
+
+CT_WHOLE_LEG = _resolve_ct_sample()
