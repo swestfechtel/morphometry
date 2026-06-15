@@ -36,6 +36,8 @@ class Examination(SQLModel, table=True):
     mask_paths: dict | None = Field(default=None, sa_column=Column(JSON))
     encoded_paths: dict | None = Field(default=None, sa_column=Column(JSON))
     shape: list | None = Field(default=None, sa_column=Column(JSON))
+    knee_offset: int | None = None   # hip sub-volume slice count
+    ankle_offset: int | None = None  # hip + knee sub-volume slice count
 
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)

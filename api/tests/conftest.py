@@ -41,6 +41,22 @@ def runtime(tmp_path: Path, monkeypatch):
 
 
 @pytest.fixture
+def client(runtime):
+    """A TestClient on a fresh app wired to temp deps + an eager (in-process) queue."""
+    from fastapi.testclient import TestClient
+
+    from api.deps import get_queue
+    from api.main import create_app
+    from api.tasks.queue import EagerQueue
+
+    app = create_app()
+    app.dependency_overrides[get_queue] = lambda: EagerQueue()
+    with TestClient(app) as test_client:
+        test_client.headers.update({"X-API-Key": "test-key"})
+        yield test_client
+
+
+@pytest.fixture
 def fake_docker_run():
     """Factory for a ``subprocess.run`` replacement that fakes the model containers.
 
