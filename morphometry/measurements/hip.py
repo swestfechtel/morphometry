@@ -25,6 +25,8 @@ from morphometry.hip import (get_femoral_head_center, get_femoral_head_center_ct
     get_femoral_neck_center, get_femoral_neck_center_ct, get_femoral_shaft_axis,
     get_femoral_shaft_axis_ct, get_femoral_neck_transition, get_p1, get_p2,
     get_cartilage_inner_and_outer_surface_points)
+from morphometry.femur import get_proximal_reference_line
+from morphometry.measurements.femur import _proximal_angle
 
 from scipy.ndimage import center_of_mass, label, rotate
 from scipy.spatial import KDTree
@@ -222,44 +224,35 @@ def calculate_ccd_ct(femur_image: Segmentation, side: str = 'left', segmentation
 
     return ccd, ccd_projected
 
-def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, plot: Tuple[plt.axis, plt.axis] | bool = False) -> float | Tuple[float, plt.Figure]:
+def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, plot: Tuple[plt.Axes, plt.Axes] | bool = False) -> float:
     """
-    Calculate the anteversion of the femur.
-    :param segmentation_mask: A segmentation mask of the proximal femur.
+    Calculate the femoral neck anteversion (signed proximal neck angle).
+
+    This is the proximal half of the femoral torsion: the acute angle between the
+    femoral neck axis (Murphy reference line) and the medial-lateral axis, signed
+    negative when the neck end is anterior to the femoral head centre. It shares the
+    proximal-angle computation with :func:`morphometry.measurements.femur.calculate_femoral_torsion`.
+    :param segmentation_mask: An Image of the proximal-femur segmentation mask.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
-    :param plot: Whether to plot the results.
-    :return: The anteversion angle.
+    :param plot: A pair of matplotlib Axes to draw the reference line on, or False.
+    :return: The anteversion angle in degrees.
     """
-    # TODO revise
-    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+    # TODO revise: the anteversion convention here is provisional.
+    G.validate_side(side)
 
-    from morphometry.femur import get_proximal_reference_line
-    landmarks = get_proximal_reference_line(segmentation_mask, side=side, method='murphy', segmentation_label=segmentation_label, isotropic=isotropic, x_ratio=1)
-
-    hip_start = landmarks[0]
+    hip_start, hip_end = get_proximal_reference_line(
+        segmentation_mask, side=side, method='murphy', segmentation_label=segmentation_label,
+        isotropic=isotropic, x_ratio=1)[:2]
     fhc_layer = hip_start[2]
-    hip_end = landmarks[1]
-    hip_start[2] = hip_end[2]  # adjust axial coordinate to align layers
+    hip_start[2] = hip_end[2]  # align axial coordinate
 
-    proximal_line = hip_end - hip_start
-    x = np.array([-1, 0, 0]) if side == 'left' else np.array(
-        [1, 0, 0])  # need to distinguish between left and right image side
-    proximal_angle = calculate_angle_between_vectors(proximal_line, x)
+    angle = _proximal_angle(hip_start, hip_end, side)
+    if hip_end[1] - hip_start[1] < 0:  # neck end anterior to head centre -> negative
+        angle = -angle
 
-    if proximal_angle > 90:
-        proximal_angle = 180 - proximal_angle
-
-    proximal_orientation = hip_end[1] - hip_start[1]  # positive if hip_end is posterior to hip_start
-    if proximal_orientation < 0:  # if hip_end is anterior to hip_start, the angle is negative
-        proximal_angle = -proximal_angle
-
-    distal_angle = 0
-
-    angle = proximal_angle - distal_angle
-
-    if plot:
+    if plot is not False:
         plot[0].imshow(segmentation_mask.array[:, :, hip_start[2]].T, cmap='gray')
         tmp = segmentation_mask.array[:, :, fhc_layer].copy().T
         tmp = np.where(tmp == 0, np.nan, tmp)

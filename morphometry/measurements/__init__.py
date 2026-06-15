@@ -8,6 +8,11 @@ region modules at the package root (``morphometry.hip`` etc.).
 Convention reminder: the ``side`` argument everywhere refers to the *image* side
 (``array[:shape[0]//2]`` is "left"), which is the opposite of the patient side.
 """
+from morphometry.measurements.femur import (
+    calculate_femoral_torsion,
+    calculate_femoral_torsion_ct,
+    get_femoral_torsion_landmarks,
+)
 from morphometry.measurements.hip import (
     calculate_ccd,
     calculate_ccd_ct,
@@ -26,6 +31,9 @@ from morphometry.measurements.hip import (
 )
 
 __all__ = [
+    "calculate_femoral_torsion",
+    "calculate_femoral_torsion_ct",
+    "get_femoral_torsion_landmarks",
     "calculate_ccd",
     "calculate_ccd_ct",
     "calculate_anteversion",
