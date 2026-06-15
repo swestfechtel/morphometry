@@ -1,14 +1,9 @@
 import numpy as np
-from numpy import floating
+from typing import Tuple
+from scipy.ndimage import center_of_mass
 
 from morphometry.hip import get_femoral_head_center_ct
-from morphometry.knee import get_knee_center
-from morphometry.utils import get_minimum_distance_between_line_and_point, get_point_orientation_to_vertical_line, \
-    get_minimum_distance_between_line_and_point_, get_vector_through_point_perpendicular_to_line, \
-    calculate_angle_between_vectors
-from morphometry.image_io import Image, Segmentation, split_ct_image
-from typing import Tuple, Any
-from scipy.ndimage import center_of_mass
+from morphometry.image_io import Segmentation, split_ct_image
 
 
 def get_distal_articulating_surface(ankle_image: np.ndarray, tibia_label: int = 1) -> int:

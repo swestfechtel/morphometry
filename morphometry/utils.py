@@ -100,16 +100,6 @@ def circumference_points(array: np.ndarray, r: float, c: tuple, tol: float = 0.5
     return np.column_stack(np.nonzero(mask))
 
 
-def combine_masks(mask1: np.ndarray, mask2: np.ndarray) -> np.ndarray:
-    """
-    Combine two masks.
-    :param mask1: The first mask.
-    :param mask2: The second mask.
-    :return: The combined mask.
-    """
-    return np.concatenate((mask1, mask2), 0)
-
-
 def draw_circle(mask: np.ndarray, layer: int, r: float, center: np.ndarray, color_label=5) -> np.ndarray:
     """
     Draw a circle on a segmentation mask.
@@ -336,23 +326,6 @@ def get_layer_with_biggest_convex_area(mask: np.ndarray) -> int:
     # find index of the layer with the biggest diameter
     indices = np.argsort(area)
     return indices[-1]
-
-
-def get_minimum_distance_between_line_and_point_(p1: np.ndarray, p2: np.ndarray, p0: np.ndarray) -> float:
-    """
-    Get the minimum distance between a line that passes through two points p1 and p2 and a point p0.
-    Only defined for 2D points.
-    https://en.wikipedia.org/wiki/Distance_from_a_point_to_a_line
-    :param p1: The first point the line passes through.
-    :param p2: The second point the line passes through.
-    :param p0: The point.
-    :return: The minimum distance between the line and the point.
-    """
-    numerator = abs(
-        (p2[1] - p1[1]) * p0[0] - (p2[0] - p1[0]) * p0[1] + p2[0] * p1[1] - p2[1] *
-        p1[0])
-    denominator = math.sqrt((p2[1] - p1[1]) ** 2 + (p2[0] - p1[0]) ** 2)
-    return numerator / denominator
 
 
 def get_minimum_distance_between_line_and_point(p1: np.ndarray, p2: np.ndarray, p0: np.ndarray) -> float:
@@ -662,45 +635,6 @@ def sphere_fit(point_cloud: np.ndarray) -> Tuple[float, np.ndarray]:
     radius = math.sqrt(t)
 
     return radius, np.array([C[0], C[1], C[2]]).T[0]  # not sure why this is necessary, returns a column vector otherwise
-
-
-def split_masks(segmentation_mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Split a segmentation mask into two separate masks, one for the left and one for the right bone.
-    :param segmentation_mask: A 3D segmentation mask.
-    :return:
-    """
-    # Step 1: Label connected components
-    labels, num_features = scipy_label(segmentation_mask)
-
-    # Step 2: Compute properties of each component
-    components = []
-    for i in range(1, num_features + 1):
-        # Compute volume
-        volume = np.sum(labels == i)
-        # Compute centroid
-        centroid = center_of_mass(segmentation_mask, labels, i)
-        components.append({'label': i, 'volume': volume, 'centroid': centroid})
-
-    # Step 3: Identify the two largest components
-    components.sort(key=lambda x: x['volume'], reverse=True)
-    bone_1 = components[0]
-    bone_2 = components[1]
-
-    # Step 4: Determine which bone is left and which is right
-    # Adjust the index [2] if the left-right axis is not the first axis
-    if bone_1['centroid'][2] < bone_2['centroid'][2]:
-        left_label = bone_1['label']
-        right_label = bone_2['label']
-    else:
-        left_label = bone_2['label']
-        right_label = bone_1['label']
-
-    # Step 5: Create separate masks
-    left_mask = (labels == left_label)
-    right_mask = (labels == right_label)
-
-    return left_mask.astype(np.uint8), right_mask.astype(np.uint8)
 
 
 def transform_point(point: np.ndarray, origin: np.ndarray, angle: float, offset: np.ndarray = None) -> np.ndarray:
