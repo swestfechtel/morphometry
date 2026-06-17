@@ -36,6 +36,12 @@ def delete_examination(session: Session, examination_id: str) -> bool:
     examination = session.get(Examination, examination_id)
     if examination is None:
         return False
+    # remove dependent job rows first (jobs.examination_id FK -> examinations.id);
+    # flush so the job DELETEs execute before the examination DELETE (no relationship
+    # is defined, so the unit-of-work won't order them for us).
+    for job in session.exec(select(Job).where(Job.examination_id == examination_id)).all():
+        session.delete(job)
+    session.flush()
     session.delete(examination)
     return True
 

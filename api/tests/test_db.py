@@ -48,6 +48,19 @@ def test_delete_examination(engine):
         assert repository.delete_examination(s, "missing") is False
 
 
+def test_delete_examination_with_jobs(engine):
+    # deleting an examination must also remove its dependent job rows (FK constraint)
+    with session_scope(engine) as s:
+        repository.upsert_examination(s, Examination(id="ACCJ", examination_type="torsion"))
+        repository.create_job(s, Job(id=str(uuid.uuid4()), examination_id="ACCJ", kind="full"))
+        repository.create_job(s, Job(id=str(uuid.uuid4()), examination_id="ACCJ", kind="torsion"))
+    with session_scope(engine) as s:
+        assert repository.delete_examination(s, "ACCJ") is True
+    with session_scope(engine) as s:
+        assert repository.get_examination(s, "ACCJ") is None
+        assert repository.list_jobs_by_status(s, "queued") == []
+
+
 def test_job_lifecycle(engine):
     with session_scope(engine) as s:
         repository.upsert_examination(s, Examination(id="ACC3", examination_type="torsion"))
