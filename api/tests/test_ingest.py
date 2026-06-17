@@ -77,6 +77,31 @@ def test_materialize_survives_backing_file_deletion(tmp_path):
     assert reloaded.array.shape == (2, 3, 4)
 
 
+def test_ingest_torsion_multi_from_dirs_end_to_end(runtime, tmp_path):
+    """Full real multi-series ingest: three synthetic DICOM series -> row + files."""
+    from api.db import repository
+    from api.db.engine import session_scope
+    from api.ingest.dicom import ingest_torsion_multi_from_dirs
+
+    dirs = {}
+    for region in ("hip", "knee", "ankle"):
+        d = tmp_path / region
+        _write_dicom_series(d, n_slices=6)  # same in-plane shape across series (required)
+        dirs[region] = d
+
+    accession = ingest_torsion_multi_from_dirs(dirs["hip"], dirs["knee"], dirs["ankle"])
+
+    store, engine = runtime.get_store(), runtime.get_engine()
+    with session_scope(engine) as s:
+        row = repository.get_examination(s, accession)
+        assert row is not None and row.status == "unprocessed"
+        assert set(row.source_paths) == {"original", "transformed", "hip", "knee", "ankle"}
+        assert row.knee_offset == 6 and row.ankle_offset == 12  # 6 slices per series
+        paths = dict(row.source_paths)
+    for rel in paths.values():
+        assert store.abspath(rel).exists()
+
+
 def _stacked_volume():
     """A (16,16,30) volume with three z-regions of different in-plane footprints."""
     arr = np.zeros((16, 16, 30), dtype=np.float64)

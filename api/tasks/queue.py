@@ -6,6 +6,7 @@ API depend on an interface rather than RQ directly: the real implementation
 the job inline. Swapping to Celery later means writing one more implementation.
 """
 import importlib
+import logging
 import uuid
 from typing import Protocol
 
@@ -45,10 +46,21 @@ class RQQueue:
 
 
 class EagerQueue:
-    """Runs jobs synchronously in-process. For tests and single-user dev without Redis."""
+    """Runs jobs synchronously in-process. For tests and single-user dev without Redis.
+
+    Mirrors a real queue's contract: enqueue returns immediately with a job id and
+    never propagates the *job's* exception to the caller — a failing job records its
+    own failure (DB status), exactly as the RQ worker would.
+    """
+
+    def __init__(self):
+        self._logger = logging.getLogger("api")
 
     def enqueue(self, dotted_path: str, *args) -> str:
-        _resolve(dotted_path)(*args)
+        try:
+            _resolve(dotted_path)(*args)
+        except Exception:  # noqa: BLE001 - the job records its own failure; don't fail enqueue
+            self._logger.exception("Eager job %s failed", dotted_path)
         return str(uuid.uuid4())
 
     def enqueue_in(self, delay_seconds: int, dotted_path: str, *args) -> str:  # ignore delay
