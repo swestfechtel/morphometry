@@ -27,6 +27,20 @@ from api.examination import TorsionExamination, XRayExamination  # noqa: E402  (
 from api.runtime import get_engine, get_store       # noqa: E402
 from api.schemas.enums import ExaminationStatus, ExaminationType  # noqa: E402
 
+import nibabel as nib  # noqa: E402
+import numpy as np  # noqa: E402
+from morphometry.image_io import Image  # noqa: E402
+
+
+def _materialize(image):
+    """Rebuild an in-memory NIfTI from a (possibly proxy-backed) legacy image.
+
+    Legacy pickles store nibabel images as lazy proxies pointing at a temp file
+    from ``dicom_to_nibabel`` that no longer exists; ``nib.save`` would re-read it
+    and fail. The cached array is still available, so copy it into a fresh image.
+    """
+    return Image.from_nibabel(nib.Nifti1Image(np.ascontiguousarray(image.array), image.affine))
+
 
 def _study_fields(exam) -> dict:
     def _safe(getter):
@@ -56,22 +70,34 @@ def migrate_one(pkl_path: Path, replace: bool) -> str:
         for kind, attr in (("original", "original_image"), ("transformed", "transformed_image"),
                            ("hip", "hip"), ("knee", "knee"), ("ankle", "ankle")):
             image = getattr(exam, attr, None)
-            if image is not None:
-                source_paths[kind] = store.save_volume(accession, kind, image)
+            if image is None:
+                continue
+            try:
+                source_paths[kind] = store.save_volume(accession, kind, _materialize(image))
+            except Exception as exc:  # noqa: BLE001 - skip unreadable legacy proxies
+                print(f"  warn {accession}: could not save {kind}: {exc}")
         mask_paths = {}
         for region in ("hip", "knee", "ankle"):
             mask = getattr(exam, f"{region}_mask", None)
-            if mask is not None:
-                mask_paths[region] = store.save_mask(accession, region, mask)
+            if mask is None:
+                continue
+            try:
+                mask_paths[region] = store.save_mask(accession, region, _materialize(mask))
+            except Exception as exc:  # noqa: BLE001
+                print(f"  warn {accession}: could not save {region} mask: {exc}")
         encoded = None
         if getattr(exam, "image_b64", None) and getattr(exam, "image_segmentation_b64", None):
             encoded = store.save_encoded(accession, exam.image_b64, exam.image_segmentation_b64)
         torsion = exam.get_torsion_values() if getattr(exam, "femoral_torsion_left", None) is not None else None
+        knee_offset = int(exam.hip.shape[2]) if getattr(exam, "hip", None) is not None else None
+        ankle_offset = (knee_offset + int(exam.knee.shape[2])) if (
+            knee_offset is not None and getattr(exam, "knee", None) is not None) else None
         row = Examination(
             id=accession, examination_type=ExaminationType.TORSION.value, status=exam.status,
             source_paths=source_paths, mask_paths=mask_paths or None, encoded_paths=encoded,
             torsion_values=torsion, landmarks=getattr(exam, "landmarks", None),
             shape=list(exam.transformed_image.shape) if getattr(exam, "transformed_image", None) else None,
+            knee_offset=knee_offset, ankle_offset=ankle_offset,
             **_study_fields(exam),
         )
     elif isinstance(exam, XRayExamination):
