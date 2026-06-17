@@ -16,6 +16,11 @@ class ExaminationSummary(BaseModel):
     status: ExaminationStatus
 
 
+class ExaminationList(BaseModel):
+    """List response envelope — the UI reads ``result.examinations``."""
+    examinations: list[ExaminationSummary]
+
+
 class TorsionValues(BaseModel):
     """The six torsion angles, NaN-sanitized for display."""
     femoral_torsion_left: float = 0

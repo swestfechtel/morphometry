@@ -6,15 +6,16 @@ from api import serializers
 from api.db import repository
 from api.deps import get_session, get_store
 from api.errors import NotFoundError
-from api.schemas.examination import ExaminationSummary, ExaminationUpdate
+from api.schemas.examination import ExaminationList, ExaminationUpdate
 from api.storage.store import Store
 
 router = APIRouter(prefix="/examinations", tags=["examinations"])
 
 
-@router.get("/", response_model=list[ExaminationSummary])
+@router.get("/", response_model=ExaminationList)
 def list_examinations(session: Session = Depends(get_session)):
-    return [serializers.to_summary(row) for row in repository.list_examinations(session)]
+    # envelope shape {"examinations": [...]} preserved for the UI (reads result.examinations)
+    return ExaminationList(examinations=[serializers.to_summary(row) for row in repository.list_examinations(session)])
 
 
 @router.get("/{examination_id}")

@@ -37,7 +37,7 @@ def test_auth_required(client):
 def test_list_and_get_examination(client, runtime):
     _seed_examination(runtime)
     listing = client.get("/examinations/").json()
-    assert [e["accession_number"] for e in listing] == ["ACC1"]
+    assert [e["accession_number"] for e in listing["examinations"]] == ["ACC1"]
     detail = client.get("/examinations/ACC1").json()
     assert detail["type"] == "torsion"
     assert detail["status"] == "unprocessed"
