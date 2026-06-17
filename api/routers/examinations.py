@@ -1,5 +1,5 @@
 """Examination read/update/delete endpoints."""
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 from sqlmodel import Session
 
 from api import serializers
@@ -47,3 +47,5 @@ def delete_examination(examination_id: str, session: Session = Depends(get_sessi
     if not repository.delete_examination(session, examination_id):
         raise NotFoundError(f"Examination {examination_id} not found")
     store.delete_examination(examination_id)
+    # explicit empty body: a 205 must not carry content (avoids a Content-Length mismatch)
+    return Response(status_code=status.HTTP_205_RESET_CONTENT)

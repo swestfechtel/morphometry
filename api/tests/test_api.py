@@ -59,7 +59,9 @@ def test_patch_examination_whitelist(client, runtime):
 
 def test_delete_examination(client, runtime):
     _seed_examination(runtime)
-    assert client.delete("/examinations/ACC1").status_code == 205
+    resp = client.delete("/examinations/ACC1")
+    assert resp.status_code == 205
+    assert resp.content == b""  # 205 must carry no body
     assert client.get("/examinations/ACC1").status_code == 404
 
 

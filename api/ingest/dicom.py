@@ -76,7 +76,9 @@ def _split_volume(transformed: Image) -> dict[str, Image]:
     arr = transformed.array
     cleaned = np.where(arr < 50, 0, arr)
     num_pixels = np.array([np.count_nonzero(cleaned[:, :, z]) for z in range(arr.shape[2])])
-    knee_hip, ankle_knee = ruptures.KernelCPD().fit_predict(num_pixels, 2)
+    # ruptures returns [bkp1, bkp2, len(signal)] for n_bkps=2; the trailing length is ignored
+    breakpoints = ruptures.KernelCPD().fit_predict(num_pixels, 2)
+    knee_hip, ankle_knee = breakpoints[0], breakpoints[1]
     affine = transformed.affine
     return {
         "hip": Image.from_nibabel(nib.Nifti1Image(arr[:, :, :knee_hip], affine=affine)),
