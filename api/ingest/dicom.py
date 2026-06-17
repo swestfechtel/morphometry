@@ -71,6 +71,16 @@ def _accession(metadata) -> str:
     return accession
 
 
+def _materialize(image: Image) -> Image:
+    """Copy an image's data into a fresh in-memory NIfTI.
+
+    ``dicom_to_nibabel`` returns lazy proxies backed by a temp file that ingest
+    cleans up; without this, ``nib.save`` later re-reads the deleted file. Call
+    while the temp file still exists (before cleanup).
+    """
+    return Image.from_nibabel(nib.Nifti1Image(np.ascontiguousarray(image.array), image.affine))
+
+
 def _split_volume(transformed: Image) -> dict[str, Image]:
     """Split a stacked whole-leg volume into hip/knee/ankle via changepoint detection."""
     arr = transformed.array
@@ -137,7 +147,7 @@ def ingest_torsion_from_dir(dicom_dir: Path) -> str:
 
     nib_image, tmp = Image.dicom_to_nibabel(str(dicom_dir))
     try:
-        original = Image.from_nibabel(nib_image)
+        original = _materialize(Image.from_nibabel(nib_image))  # read before tmp is removed
         transformed = original.copy()
         transformed.transform_coordinate_system()
     finally:
@@ -189,7 +199,7 @@ def ingest_torsion_multi_from_dirs(hip_dir: Path, knee_dir: Path, ankle_dir: Pat
             tmps.append(tmp)
             img = Image.from_nibabel(nib_image)
             img.transform_coordinate_system()
-            images[region] = img
+            images[region] = _materialize(img)  # read before tmps are removed
 
         shapes = [images[r].array.shape[:2] for r in ("hip", "knee", "ankle")]
         if len(set(shapes)) != 1:
