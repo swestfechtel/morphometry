@@ -1,9 +1,58 @@
-"""Unit tests for ingest helpers (no real DICOM needed)."""
+"""Unit tests for ingest helpers + an end-to-end ingest against synthetic DICOM."""
+from pathlib import Path
+
 import nibabel as nib
 import numpy as np
+import pydicom
+from pydicom.dataset import FileDataset, FileMetaDataset
+from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, generate_uid
 
 from morphometry.image_io import Image
 from api.ingest.dicom import _materialize, _split_volume
+
+
+def _write_dicom_series(directory: Path, n_slices: int = 18, rows: int = 32, cols: int = 32) -> None:
+    """Write a minimal but valid CT DICOM series SITK can assemble into a volume.
+
+    The in-plane footprint changes across three z-thirds so the changepoint split
+    finds two breakpoints (hip/knee/ankle).
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    series_uid, study_uid = generate_uid(), generate_uid()
+    footprints = [28, 12, 20]  # square side per third
+    for i in range(n_slices):
+        meta = FileMetaDataset()
+        meta.MediaStorageSOPClassUID = CTImageStorage
+        meta.MediaStorageSOPInstanceUID = generate_uid()
+        meta.TransferSyntaxUID = ExplicitVRLittleEndian
+        ds = FileDataset(str(directory / f"{i:03d}.dcm"), {}, file_meta=meta, preamble=b"\0" * 128)
+        ds.SOPClassUID = CTImageStorage
+        ds.SOPInstanceUID = meta.MediaStorageSOPInstanceUID
+        ds.SeriesInstanceUID = series_uid
+        ds.StudyInstanceUID = study_uid
+        ds.Modality = "CT"
+        ds.AccessionNumber = "TESTACC1"
+        ds.StudyDate = "20240102"
+        ds.StudyTime = "153000"
+        ds.StudyDescription = "MRT Beinachsenmessung"
+        ds.PatientName = "Anon"
+        ds.Rows, ds.Columns = rows, cols
+        ds.PixelSpacing = [1.0, 1.0]
+        ds.SliceThickness = 1.0
+        ds.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
+        ds.ImagePositionPatient = [0.0, 0.0, float(i)]
+        ds.InstanceNumber = i + 1
+        ds.SamplesPerPixel = 1
+        ds.PhotometricInterpretation = "MONOCHROME2"
+        ds.BitsAllocated = 16
+        ds.BitsStored = 16
+        ds.HighBit = 15
+        ds.PixelRepresentation = 0
+        side = footprints[min(i // (n_slices // 3), 2)]
+        arr = np.zeros((rows, cols), dtype=np.uint16)
+        arr[:side, :side] = 1000
+        ds.PixelData = arr.tobytes()
+        ds.save_as(str(directory / f"{i:03d}.dcm"), enforce_file_format=True)
 
 
 def test_materialize_survives_backing_file_deletion(tmp_path):
@@ -35,6 +84,34 @@ def _stacked_volume():
     arr[:6, :6, 10:20] = 100    # knee: small footprint
     arr[:10, :10, 20:30] = 100  # ankle: medium footprint
     return Image.from_nibabel(nib.Nifti1Image(arr, np.eye(4)))
+
+
+def test_ingest_torsion_from_dir_end_to_end(runtime, tmp_path):
+    """Full real ingest: synthetic DICOM series -> row + .nii.gz files (no docker)."""
+    from api.db import repository
+    from api.db.engine import session_scope
+    from api.ingest.dicom import ingest_torsion_from_dir
+
+    series_dir = tmp_path / "series"
+    _write_dicom_series(series_dir)
+
+    accession = ingest_torsion_from_dir(series_dir)
+    assert accession == "TESTACC1"
+
+    store, engine = runtime.get_store(), runtime.get_engine()
+    with session_scope(engine) as s:  # read attributes while the session is open
+        row = repository.get_examination(s, accession)
+        assert row is not None
+        assert row.status == "unprocessed"
+        assert row.study_description == "MRT Beinachsenmessung"
+        assert set(row.source_paths) == {"original", "transformed", "hip", "knee", "ankle"}
+        assert row.knee_offset and row.ankle_offset and row.knee_offset < row.ankle_offset
+        source_paths = dict(row.source_paths)
+
+    # every recorded volume file actually exists and reloads
+    for rel in source_paths.values():
+        assert store.abspath(rel).exists()
+    assert store.load_image(source_paths["transformed"]).array.ndim == 3
 
 
 def test_split_volume_returns_three_regions_summing_to_input():
