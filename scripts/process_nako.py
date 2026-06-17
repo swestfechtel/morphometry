@@ -1,3 +1,4 @@
+# FIXME (pre-existing): calculate_center_edge_angle_2d was imported but never existed; removed.
 import multiprocessing
 import os
 import sys
@@ -10,8 +11,8 @@ import nibabel as nib
 import pyvista as pv
 
 from pathlib import Path
-from morphometry.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
-    calculate_alpha_angle, calculate_center_edge_angle, calculate_center_edge_angle_2d, \
+from morphometry.measurements.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
+    calculate_alpha_angle, calculate_center_edge_angle, \
     calculate_femoral_offset_projected
 from morphometry.image_io import Segmentation
 from matplotlib import pyplot as plt
@@ -100,21 +101,20 @@ def f(patient: Path):
     plt.close(fig)
 
     try:
-        aav = calculate_acetabular_anteversion(mask.array, 1, 3, isotropic=True, plot=True,
-                                               fp=f'/home/simon/Data/NaKo_sample/plots/acetabular_anteversion/{patient.name}.png')
+        fig, ax = plt.subplots(figsize=(10, 10))
+        aav = calculate_acetabular_anteversion(mask, 1, 3, isotropic=True, plot=ax)
+        fig.savefig(f'/home/simon/Data/NaKo_sample/plots/acetabular_anteversion/{patient.name}.png')
+        plt.close(fig)
     except Exception as e:
         print(f"Error calculating AAV for patient {patient.name}: {e}")
         aav = [np.nan, np.nan]
 
     try:
-        cea = calculate_center_edge_angle(mask.array, 1, 3, isotropic=True, project=True, plot=True,
-                                          fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png',
+        fig, ax = plt.subplots(figsize=(10, 10))
+        cea = calculate_center_edge_angle(mask, 1, 3, isotropic=True, project=True, plot=ax,
                                           image_path=f'/home/simon/Data/NaKo_sample/nifti/{patient.name.replace(".nii.gz", "_0000.nii.gz")}')
-        """
-        cea = calculate_center_edge_angle_2d(mask.array, 1, 3, isotropic=True, plot=True,
-                                             fp=f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png',
-                                             image_path=f'/home/simon/Data/NaKo_sample/nifti/{patient.name.replace(".nii.gz", "_0000.nii.gz")}')
-        """
+        fig.savefig(f'/home/simon/Data/NaKo_sample/plots/center_edge/{patient.name}.png')
+        plt.close(fig)
     except Exception as e:
         print(f"Error calculating CEA of patient {patient.name}: {e}")
         cea = [np.nan, np.nan]

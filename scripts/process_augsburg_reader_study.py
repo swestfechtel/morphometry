@@ -8,12 +8,12 @@ import nibabel as nib
 import traceback
 import pyvista as pv
 from pathlib import Path
-from morphometry.femur import calculate_femoral_torsion
-from morphometry.tibia import calculate_tibial_torsion
-from morphometry.knee import calculate_knee_rotation_angle
-from morphometry.whole_leg import calculate_mechanical_axis_deviation, calculate_bone_length
-from morphometry.ankle import calculate_pma_angle
-from morphometry.hip import calculate_ccd
+from morphometry.measurements.femur import calculate_femoral_torsion
+from morphometry.measurements.tibia import calculate_tibial_torsion
+from morphometry.measurements.knee import calculate_knee_rotation_angle
+from morphometry.measurements.whole_leg import calculate_bone_length
+from morphometry.measurements.ankle import calculate_pma_angle
+from morphometry.measurements.hip import calculate_ccd
 from morphometry.image_io import Segmentation
 from matplotlib import pyplot as plt
 from tqdm import tqdm
@@ -67,7 +67,8 @@ def process_patient(patient):
     right_ankle = Segmentation.from_nibabel(right_ankle)
 
     try:
-        at_lee_left, fig = calculate_femoral_torsion(left_hip, left_knee.array, side='left', x_ratio=x_ratio, plot=True)
+        fig, ax = plt.subplots(1, 2)
+        at_lee_left = calculate_femoral_torsion(left_hip, left_knee.array, side='left', x_ratio=x_ratio, plot=ax)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/femoral_torsion/{patient}_lee_left.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
@@ -76,7 +77,8 @@ def process_patient(patient):
         at_lee_left = np.nan
 
     try:
-        at_lee_right, fig = calculate_femoral_torsion(right_hip, right_knee.array, side='right', x_ratio=x_ratio, plot=True)
+        fig, ax = plt.subplots(1, 2)
+        at_lee_right = calculate_femoral_torsion(right_hip, right_knee.array, side='right', x_ratio=x_ratio, plot=ax)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/femoral_torsion/{patient}_lee_right.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
@@ -85,8 +87,9 @@ def process_patient(patient):
         at_lee_right = np.nan
 
     try:
-        at_murphy_left, fig = calculate_femoral_torsion(left_hip, left_knee.array, 'left', 'murphy', x_ratio=x_ratio,
-                                                 plot=True)
+        fig, ax = plt.subplots(1, 2)
+        at_murphy_left = calculate_femoral_torsion(left_hip, left_knee.array, 'left', 'murphy', x_ratio=x_ratio,
+                                                 plot=ax)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/femoral_torsion/{patient}_murphy_left.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
@@ -95,8 +98,9 @@ def process_patient(patient):
         at_murphy_left = np.nan
 
     try:
-        at_murphy_right, fig = calculate_femoral_torsion(right_hip, right_knee.array, 'right', 'murphy', x_ratio=x_ratio,
-                                                    plot=True)
+        fig, ax = plt.subplots(1, 2)
+        at_murphy_right = calculate_femoral_torsion(right_hip, right_knee.array, 'right', 'murphy', x_ratio=x_ratio,
+                                                    plot=ax)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/femoral_torsion/{patient}_murphy_right.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
@@ -105,9 +109,10 @@ def process_patient(patient):
         at_murphy_right = np.nan
 
     try:
-        tt_left, fig = calculate_tibial_torsion(left_knee.array, left_ankle.array, tibia_label_knee=2,
+        fig, ax = plt.subplots(1, 2)
+        tt_left = calculate_tibial_torsion(left_knee.array, left_ankle.array, tibia_label_knee=2,
                                            tibia_label_ankle=1,
-                                           fibula_label=2, side='left', plot=True)
+                                           fibula_label=2, side='left', plot=ax)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/tibial_torsion/{patient}_tt_left.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
@@ -115,9 +120,10 @@ def process_patient(patient):
         tt_left = np.nan
 
     try:
-        tt_right, fig = calculate_tibial_torsion(right_knee.array, right_ankle.array, tibia_label_knee=2,
+        fig, ax = plt.subplots(1, 2)
+        tt_right = calculate_tibial_torsion(right_knee.array, right_ankle.array, tibia_label_knee=2,
                                             tibia_label_ankle=1, fibula_label=2, side='right',
-                                            plot=True)
+                                            plot=ax)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/tibial_torsion/{patient}_tt_right.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
@@ -155,7 +161,8 @@ def process_patient(patient):
     p.close()
 
     try:
-        kra_left, fig = calculate_knee_rotation_angle(left_knee.array, 1, 2, 'left', True)
+        fig, ax = plt.subplots(1, 2)
+        kra_left = calculate_knee_rotation_angle(left_knee.array, 1, 2, 'left', plot=ax)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/kra/{patient}_kra_left.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
@@ -163,7 +170,8 @@ def process_patient(patient):
         kra_left = np.nan
 
     try:
-        kra_right, fig = calculate_knee_rotation_angle(right_knee.array, 1, 2, 'right', True)
+        fig, ax = plt.subplots(1, 2)
+        kra_right = calculate_knee_rotation_angle(right_knee.array, 1, 2, 'right', plot=ax)
         fig.savefig(f'/home/simon/Data/Augsburg_large/figures/training_without_finetuning/kra/{patient}_kra_right.png')
         plt.close(fig)
     except (ValueError, IndexError, RuntimeError) as e:
@@ -206,17 +214,12 @@ def process_patient(patient):
         print(patient, f'Failed to calculate tibia length for the right side.', e)
         tl_right = np.nan
 
-    try:
-        mld_left = calculate_mechanical_axis_deviation(left_hip, left_knee, left_ankle, 'left', x_ratio=x_ratio)
-    except (ValueError, IndexError, RuntimeError) as e:
-        print(patient, f'Failed to calculate MLD for the left side.', e)
-        mld_left = np.nan
-
-    try:
-        mld_right = calculate_mechanical_axis_deviation(right_hip, right_knee, right_ankle, 'right', x_ratio=x_ratio)
-    except (ValueError, IndexError, RuntimeError) as e:
-        print(patient, f'Failed to calculate MLD for the right side.', e)
-        mld_right = np.nan
+    # Mechanical-axis (Mikulicz) deviation is whole-leg CT only now:
+    # calculate_mechanical_axis_deviation takes a single whole-leg Segmentation
+    # (femur=1, tibia=2, ...) and cannot be derived from these separate MRI
+    # hip/knee/ankle masks, so it is not available for this cohort.
+    mld_left = np.nan
+    mld_right = np.nan
 
     return {'patient': patient, 'at_lee_left': at_lee_left, 'at_lee_right': at_lee_right, 'at_murphy_left': at_murphy_left, 'at_murphy_right': at_murphy_right, 'tt_left': tt_left, 'tt_right': tt_right, 'ccd_left': ccd_left, 'ccd_right': ccd_right,
             'kra_left': kra_left, 'kra_right': kra_right, 'll_left': ll_left, 'll_right': ll_right, 'fl_left': fl_left, 'fl_right': fl_right, 'tl_left': tl_left, 'tl_right': tl_right, 'mld_left': mld_left, 'mld_right': mld_right}

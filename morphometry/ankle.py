@@ -16,7 +16,6 @@ def get_plafond_reference_line(tibia_mask: np.ndarray) -> Tuple[np.ndarray, np.n
     # TODO: Implement a proper reference line for the tibial plateau with 3-dimensional plane fitting.
     return np.array([0, 0, 0]), np.array([0, 0, 1])
 
-
 def get_malleoli_reference_line(segmentation_mask: np.ndarray, tibia_label: int = 1, fibula_label: int = 2) -> Tuple[np.ndarray, np.ndarray]:
     """
     Get the reference line connecting the malleoli.
@@ -40,22 +39,3 @@ def get_malleoli_reference_line(segmentation_mask: np.ndarray, tibia_label: int 
     com_fibula = np.array([most_inferior_fibula_layer, com_fibula[0], com_fibula[1]])
 
     return com_tibia, com_fibula
-
-
-def calculate_pma_angle(segmentation_mask: np.ndarray, tibia_label: int = 1, fibula_label: int = 2) -> float:
-    """
-    Calculate the plafond malleolus angle.
-    :param segmentation_mask: A 3D segmentation mask of the ankle.
-    :param tibia_label: The segmentation label of the tibia.
-    :param fibula_label: The segmentation label of the fibula.
-    :return: The plafond malleolus angle in degrees.
-    """
-    plafond_start, plafond_end = get_plafond_reference_line(segmentation_mask)
-    malleoli_start, malleoli_end = get_malleoli_reference_line(segmentation_mask, tibia_label, fibula_label)
-    print(malleoli_start, malleoli_end)
-
-    plafond_line = plafond_end - plafond_start
-    malleoli_line = malleoli_end - malleoli_start
-
-    return calculate_angle_between_vectors(plafond_line, malleoli_line)
-

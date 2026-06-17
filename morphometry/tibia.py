@@ -38,7 +38,6 @@ def get_layer_with_largest_diameter(segmentation_mask: np.ndarray) -> int:
     indices = np.argsort(diameter)
     return indices[-1]
 
-
 def get_distal_reference_line(segmentation_mask: np.ndarray, tibia_label: int, fibula_label: int) -> Tuple[int, np.ndarray, np.ndarray]:
     """
     Get the distal reference line of a segmentation mask for calculating the tibial torsion.
@@ -64,95 +63,3 @@ def get_distal_reference_line(segmentation_mask: np.ndarray, tibia_label: int, f
     com_fibula = np.array([com_fibula[0], com_fibula[1], layer_index])
 
     return layer_index, com_tibia, com_fibula
-
-
-def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibia_label_knee: int, tibia_label_ankle: int,
-                             fibula_label: int, side: str = 'left', plot: bool = False, return_landmarks: bool = False) -> float | Tuple[float, plt.Figure] | Tuple[float, dict] | Tuple[float, plt.Figure, dict]:
-    """
-    Calculate the tibial torsion angle.
-
-    The tibial torsion angle is calculated as the angle between the line connecting the posterior condyles of the tibia
-    at knee level the line connecting the centers of mass of the tibia and fibula on the layer with the biggest diameter
-    of the tibia.
-    :param knee_mask: A 3D segmentation mask of the knee.
-    :param ankle_mask: A 3D segmentation mask of the ankle.
-    :param tibia_label_knee: The segmentation label of the tibia at knee level.
-    :param tibia_label_ankle: The segmentation label of the tibia at ankle level.
-    :param fibula_label: The segmentation label of the fibula.
-    :param side: Side of the image (not patient!), either 'left' or 'right'.
-    :param plot: If True, plot the distal reference line and the line connecting the center of mass points.
-    :param return_landmarks: Whether to return the landmarks as a dict.
-    :return: The tibial torsion angle in degrees.
-    """
-    assert side in ['left', 'right'], 'Side must be either "left" or "right"'
-
-    knee_mask = np.where(knee_mask == tibia_label_knee, 1, 0)
-    # get proximal reference line
-    knee_layer, knee_start, knee_end = get_knee_reference_line(knee_mask, 'tibia')
-
-    # knee_end is always left of knee_start
-    if knee_start[0] < knee_end[0]:  # if this is somehow not the case, swap the points
-        tmp = knee_start
-        knee_start = knee_end
-        knee_end = tmp
-
-    proximal_line = knee_end - knee_start
-
-    x = np.array([-1, 0, 0])  # because end is always left of start
-
-    proximal_angle = calculate_angle_between_vectors(proximal_line, x)
-
-    if proximal_angle > 90:
-        proximal_angle = 180 - proximal_angle
-
-    proximal_orientation = (knee_end[1] - knee_start[1]) if side == 'left' else (knee_start[1] - knee_end[1])  # positive if knee_end is posterior to knee_start
-
-    """
-    if side == 'left':
-        if proximal_orientation < 0:  # lateral condyle is anterior to medial condyle
-            proximal_angle = -proximal_angle
-    else:
-        if proximal_orientation > 0:  # lateral condyle is anterior to medial condyle
-            proximal_angle = -proximal_angle
-    """
-
-
-    # get distal reference line
-    ankle_layer, ankle_start, ankle_end = get_distal_reference_line(ankle_mask, tibia_label_ankle, fibula_label)
-    distal_line = ankle_end - ankle_start
-    x = np.array([-1, 0, 0]) if side == 'left' else np.array([1, 0, 0])
-    distal_angle = calculate_angle_between_vectors(distal_line, x)
-
-    if distal_angle > 90:
-        distal_angle = 180 - distal_angle
-
-    distal_orientation = ankle_end[1] - ankle_start[1]
-    """
-    if distal_orientation < 0:  # fibula is anterior to tibia
-        distal_angle = -distal_angle
-    """
-
-    if np.sign(proximal_orientation) != np.sign(distal_orientation):  # add angles
-        angle = distal_angle + proximal_angle
-    else:
-        angle = distal_angle - proximal_angle
-
-    if not return_landmarks and not plot:
-        return angle
-
-    if plot:
-        fig, ax = plt.subplots(1, 2)
-        ax[0].imshow(knee_mask[:, :, knee_layer].T)
-        ax[0].plot([knee_start[0], knee_end[0]], [knee_start[1], knee_end[1]], color='red')
-        ax[1].imshow(ankle_mask[:, :, ankle_layer].T)
-        ax[1].plot([ankle_start[0], ankle_end[0]], [ankle_start[1], ankle_end[1]], color='red')
-        if not return_landmarks:
-            return angle, fig
-
-    if return_landmarks:
-        landmarks = {'knee_start': knee_start, 'knee_end': knee_end,
-                    'ankle_start': ankle_start, 'ankle_end': ankle_end}
-        if not plot:
-            return angle, landmarks
-
-    return angle, fig, landmarks
