@@ -24,6 +24,18 @@ whole-leg CT, plus a FastAPI service and batch-processing scripts.
   and dispatches inference + measurement jobs to docker images.
 - **`scripts/`** — self-contained batch-processing scripts (hard-coded data
   paths; adapt before running elsewhere).
+- **`frontend/`** — the Next.js 15 / React 19 web UI for the API (DICOM upload,
+  job dispatch, and interactive landmark editing of results):
+
+  ```bash
+  cd frontend
+  npm install
+  npm run dev        # dev server on http://localhost:3000
+  ```
+
+  The API base URL defaults to `http://localhost:8000`; override it with the
+  `NEXT_PUBLIC_MODEL_API` env var (see `frontend/.env.example`). For local UI
+  development set the API's `MORPH_API_CORS_ALLOW_ORIGINS=http://localhost:3000`.
 
 Measurements operate on masks placed in **LPI** orientation; load with
 `Segmentation(...).read_image(path)` then call `transform_coordinate_system()`.

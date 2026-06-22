@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository layout
 
-The repo has three loosely-coupled parts that share a single virtualenv and the `morphometry` package:
+The repo has four loosely-coupled parts; the three Python parts share a single virtualenv and the `morphometry` package, and `frontend/` is a self-contained Node/Next.js app:
 
 - `morphometry/` — the analysis library, layered as an acyclic dependency graph:
   - **`morphometry/measurements/`** — all public `calculate_*` measurement functions, one submodule per region (`hip.py`, `femur.py`, `knee.py`, `tibia.py`, `ankle.py`, `whole_leg.py`, `cartilage.py`). This is the public surface (re-exported from `morphometry.measurements`). Import measurements from here, e.g. `from morphometry.measurements.femur import calculate_femoral_torsion`.
@@ -15,6 +15,7 @@ The repo has three loosely-coupled parts that share a single virtualenv and the 
   - Torsion `calculate_*` return only the angle; landmarks come from `get_femoral_torsion_landmarks` / `get_tibial_torsion_landmarks`. Measurement functions never change their return arity based on `plot` — pass a matplotlib `Axes` / PyVista `Plotter` to `plot=` to draw overlays.
 - `api/` — a FastAPI service (`api/main.py`) that ingests DICOM uploads or Orthanc callbacks, stores examination metadata in SQLite + images as `.nii.gz` files (`api/db`, `api/storage`), and dispatches model jobs to a **Redis/RQ worker** (`api/tasks`) that shells out to the docker images (see below). Layered: `routers` → `ingest`/`serializers`/`deps` → `db`/`storage`/`tasks` → `settings`/`runtime`. Config is env-driven via `api/settings.py` (`MORPH_API_*` / `.env`). `api/examination.py` is legacy, kept only for `scripts/migrate_pickles.py`.
 - `scripts/` — one-off batch processing scripts (`process_augsburg_*.py`, `process_nako*.py`, `combine_series.py`, etc.). Each script is self-contained and typically prepends `sys.path.append('/home/simon/Work/morphometry')` and hard-codes absolute data paths (e.g. `/home/simon/Data/...`); update paths when running elsewhere.
+- `frontend/` — the **Next.js 15 / React 19 / TypeScript** web UI for the API (Tailwind 4 + Flowbite, npm). It is the only client of the API and uses its exact contract: the `{examinations: [...]}` list envelope, base64 image/segmentation layers, and the `/examinations`, `/upload`, `/model/{segmentation,torsion}/{id}`, `/jobs/{id}` endpoints. App Router code lives under `frontend/app/`; the API base URL is `frontend/app/server_config.ts` (env `NEXT_PUBLIC_MODEL_API`, default `http://localhost:8000`). Node toolchain is independent of the Python venv. See `frontend/CLAUDE.md` for UI architecture.
 
 ## Core data flow
 
@@ -63,6 +64,24 @@ runs **inside an Orthanc process** and forwards stored instances to
 `MORPH_API_UPLOAD_URL` (default `http://localhost:8000/upload/orthanc`) with the
 `MORPH_API_API_KEY` header. Migrate legacy `api/data/*.pkl` with
 `python scripts/migrate_pickles.py`.
+
+## Running the UI
+
+The web client lives in `frontend/` and runs on its own Node toolchain (separate
+from the Python venv):
+
+```bash
+cd frontend
+npm install
+npm run dev        # dev server on http://localhost:3000
+```
+
+Point it at the API with `NEXT_PUBLIC_MODEL_API` (default `http://localhost:8000`;
+copy `frontend/.env.example` to `frontend/.env.local` to override — `NEXT_PUBLIC_*`
+is inlined at build time, so rebuild after changing). For local dev, allow the UI
+origin in the API's CORS: `MORPH_API_CORS_ALLOW_ORIGINS=http://localhost:3000`.
+The UI currently sends **no** `X-API-Key`, so run the API with `MORPH_API_API_KEYS`
+unset (auth disabled) when developing against it.
 
 ## Tests
 
