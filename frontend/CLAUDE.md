@@ -109,9 +109,12 @@ v5), not pre-rendered PNGs. The viewer lives in `app/components/cornerstone/`:
   **StackViewport** and seeds one reference-line annotation per measurement axis
   (`buildReferenceLines`); dragging either endpoint flows back to React state (live
   torsion recompute) and the PATCH save — both endpoints are rewritten per edit since
-  they share the slice. Tears everything down on unmount. A `ResizeObserver` keeps the
-  Cornerstone canvas in sync when the viewport is resized. (VOI derived from the
-  middle slice's actual intensities — see `computeVoiRange`.)
+  they share the slice. Scrolling the wheel WHILE dragging a handle moves the whole line
+  to the adjacent slice (a custom `wheel` handler, because Cornerstone blocks its own
+  StackScroll during tool interaction) — both endpoints move together to stay co-planar,
+  clamped to the line's hip/knee/ankle sub-volume. Tears everything down on unmount. A
+  `ResizeObserver` keeps the Cornerstone canvas in sync when the viewport is resized.
+  (VOI derived from the middle slice's actual intensities — see `computeVoiRange`.)
 - `cornerstone-torsion-viewer.tsx` — the client component (one axial viewport div,
   sized to fit the screen: the square grows to the column width but is capped at
   `calc(100vh - 9rem)` so the whole image shows without page scrolling), imported via

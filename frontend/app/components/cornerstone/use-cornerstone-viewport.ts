@@ -47,6 +47,7 @@ import {
   fromLoaderIndex,
   buildReferenceLines,
   referenceLineAngle,
+  zRangeForKey,
   Offsets,
   ReferenceLineSpec,
 } from './landmark-mapping';
@@ -173,6 +174,7 @@ export function useCornerstoneViewport(args: UseViewportArgs) {
     let engine: RenderingEngine | null = null;
     let destroyed = false;
     let resizeObserver: ResizeObserver | null = null;
+    let onWheel: ((e: WheelEvent) => void) | null = null;
     const element = refs[0].current;
 
     const onAnnotationModified = (evt: Event) => {
@@ -310,11 +312,67 @@ export function useCornerstoneViewport(args: UseViewportArgs) {
         try { engine?.resize(true, true); } catch { /* engine torn down */ }
       });
       resizeObserver.observe(element);
+
+      // Move a landmark ACROSS slices: while a reference-line handle is being dragged,
+      // Cornerstone blocks the wheel (StackScroll) because `isInteractingWithTool` is set,
+      // so scrolling can't change the slice. We intercept the wheel ourselves during a drag
+      // and relocate the whole line to the adjacent slice — both endpoints move together to
+      // stay co-planar (the measurement is defined in one axial plane), keeping their
+      // in-plane position; the dragged handle then continues tracking the mouse on the new
+      // slice. Clamped to the line's own sub-volume (hip/knee/ankle) z-range. When no drag
+      // is active we do nothing and let Cornerstone scroll normally.
+      onWheel = (e: WheelEvent) => {
+        const inst = tg.getToolInstance(ReferenceLineTool.toolName) as unknown as { editData?: { annotation?: unknown } } | undefined;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const editAnn = inst?.editData?.annotation as any;
+        if (!editAnn) return; // not dragging a reference line → normal scroll
+        const spec = annotationPaths.current.get(editAnn.annotationUID);
+        const pts = editAnn.data?.handles?.points as Types.Point3[] | undefined;
+        if (!spec || !pts || pts.length < 2) return;
+        e.preventDefault();
+
+        const cur = axialVp.getCurrentImageIdIndex();
+        // Keep the line inside its anatomical sub-volume so the stored landmark and the
+        // rendered slice stay consistent (applyEditedVoxel clamps the stored z the same way).
+        const key = spec.startPaths[0][spec.startPaths[0].length - 1];
+        const [lo, hi] = zRangeForKey(key, cbRef.current.offsets);
+        const target = cur + (e.deltaY > 0 ? 1 : -1);
+        const next = Math.max(lo, Math.min(hi - 1, Math.max(0, Math.min(imageIds.length - 1, target))));
+        if (next === cur) return;
+
+        const oldRefId = imageIds[cur];
+        const newRefId = imageIds[next];
+        if (!oldRefId || !newRefId) return;
+
+        // Re-place both endpoints on the new slice at their current in-plane (i, j).
+        const ij: { i: number; j: number }[] = [];
+        for (let k = 0; k < 2; k++) {
+          const p = stackVoxelFromWorld(oldRefId, pts[k]);
+          if (!p) return;
+          const w = stackSliceWorld(newRefId, p.i, p.j);
+          if (!w) return;
+          ij.push(p);
+          pts[k] = w;
+        }
+        editAnn.metadata.referencedImageId = newRefId;
+
+        // Update the landmark tree: both endpoints' frame → new slice, in-plane preserved.
+        let tree = landmarksRef.current;
+        for (const p of spec.startPaths) tree = applyEditedVoxel(tree, p, [Math.round(ij[0].i), Math.round(ij[0].j), next], cbRef.current.offsets);
+        for (const p of spec.endPaths) tree = applyEditedVoxel(tree, p, [Math.round(ij[1].i), Math.round(ij[1].j), next], cbRef.current.offsets);
+        editAnn.data.angleLabel = angleLabelFor(tree, spec);
+        cbRef.current.onChange(tree);
+
+        // Show the new slice (also re-renders the relocated line there).
+        axialVp.setImageIdIndex(next);
+      };
+      element.addEventListener('wheel', onWheel, { passive: false });
     })();
 
     return () => {
       destroyed = true;
       resizeObserver?.disconnect();
+      if (onWheel) element?.removeEventListener('wheel', onWheel);
       eventTarget.removeEventListener(csToolsEnums.Events.ANNOTATION_MODIFIED as unknown as string, onAnnotationModified);
       element?.removeEventListener('mouseup', onMouseUp);
       annotationPaths.current.forEach((_p, uid) => csAnnotation.state.removeAnnotation(uid));
