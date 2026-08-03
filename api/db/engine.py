@@ -32,8 +32,39 @@ def make_engine(database_url: str) -> Engine:
 
 
 def init_db(engine: Engine) -> None:
-    """Create all tables if they do not exist."""
+    """Create all tables, then add any columns missing from an existing DB.
+
+    ``create_all`` only creates absent tables — it never ALTERs an existing one — so
+    a column added to a model (e.g. ``Examination.series``) would be missing on a
+    pre-existing SQLite file and every read would fail. This lightweight, idempotent
+    migration adds such columns. (Swap to Alembic if migrations get non-trivial.)
+    """
     SQLModel.metadata.create_all(engine)
+    _ensure_columns(engine)
+
+
+# Columns added to models after the initial schema, and their SQLite type — added
+# to an existing DB if absent (see init_db).
+_ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "examinations": {"series": "JSON"},
+}
+
+
+def _ensure_columns(engine: Engine) -> None:
+    if not engine.url.get_backend_name().startswith("sqlite"):
+        return
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    for table, columns in _ADDED_COLUMNS.items():
+        if table not in tables:
+            continue
+        existing = {col["name"] for col in inspector.get_columns(table)}
+        with engine.begin() as conn:
+            for name, sql_type in columns.items():
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
 
 
 @contextmanager

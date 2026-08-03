@@ -7,8 +7,33 @@ declare module 'react' {
 }
 
 // Examination status and type
-export type ExaminationStatus = 'unprocessed' | 'segmented' | 'running' | 'processed';
+export type ExaminationStatus =
+    | 'pending_selection'   // uploaded; awaiting the user's series pick
+    | 'unprocessed'
+    | 'segmented'
+    | 'running'
+    | 'processed'
+    | 'failed';
 export type ExaminationType = 'torsion';
+
+// --- Series selection (two-phase upload) ---
+
+/** One candidate DICOM series offered for selection on a pending upload. */
+export interface SeriesInfo {
+    uid: string;
+    description: string | null;
+    modality: string | null;
+    instances: number;
+    rows: number | null;
+    cols: number | null;
+    preview_count: number;
+}
+
+/** Detail payload for a pending_selection examination (GET /examinations/{id}). */
+export interface PendingExamination extends BaseExamination {
+    type: 'pending';
+    series: SeriesInfo[];
+}
 
 // Shared base for all examination list entries
 export interface BaseExamination {
@@ -18,6 +43,8 @@ export interface BaseExamination {
     study_date: string;
     study_time: string;
     status: ExaminationStatus;
+    // Id of a queued/running job for this examination (null when nothing is in flight).
+    active_job_id?: string | null;
 }
 
 // --- Torsion (MRI) types ---
@@ -71,7 +98,12 @@ export interface TorsionExamination extends BaseExamination {
 
 // --- Job polling ---
 
+// `queued`/`running`/`finished`/`failed` come from the backend JobState; `error` is
+// a synthetic status the poller sets for transport failures (non-OK HTTP / network).
+export type JobStatus = 'queued' | 'running' | 'finished' | 'failed' | 'error';
+
 export interface JobData {
-    status: 'running' | 'finished' | 'error';
-    message?: string;
+    status: JobStatus;
+    error?: string;     // backend job error detail (JobStatus.error)
+    message?: string;   // poller-set transport error text
 }

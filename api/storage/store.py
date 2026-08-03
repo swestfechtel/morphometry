@@ -9,6 +9,8 @@ Layout per examination:
     {id}/source/{original,transformed,hip,knee,ankle}.nii.gz
     {id}/masks/{hip,knee,ankle}.nii.gz
     {id}/encoded/image_000.png … seg_000.png …
+    {id}/incoming/{series_uid}/NNNN.dcm   (staged candidate series, pre-selection)
+    {id}/previews/{series_uid}/NNNN.png   (per-series preview slices, pre-selection)
 Incoming Orthanc instances are staged under STORAGE_DIR/_incoming/{accession}/.
 """
 import base64
@@ -154,6 +156,40 @@ class Store:
     def load_encoded_b64(self, rel_paths: list[str]) -> list[str]:
         """Read PNG files and return them base64-encoded (UI contract)."""
         return [base64.b64encode(self.abspath(p).read_bytes()).decode("ascii") for p in rel_paths]
+
+    # --- pending series staging + previews -----------------------------------
+    # For the two-phase upload: all candidate series' raw DICOM are staged under
+    # {id}/incoming/{series_uid}/ and their preview PNGs under
+    # {id}/previews/{series_uid}/NNNN.png until the user picks a series to process.
+    def series_incoming_dir(self, examination_id: str, series_uid: str) -> Path:
+        return self.examination_dir(examination_id) / "incoming" / series_uid
+
+    def stage_series_file(self, examination_id: str, series_uid: str, index: int, data: bytes) -> Path:
+        """Write one staged DICOM instance (ordered by ``index``) for a candidate series."""
+        directory = self.series_incoming_dir(examination_id, series_uid)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{index:04d}.dcm"
+        path.write_bytes(data)
+        return path
+
+    def previews_dir(self, examination_id: str, series_uid: str) -> Path:
+        return self.examination_dir(examination_id) / "previews" / series_uid
+
+    def save_preview(self, examination_id: str, series_uid: str, index: int, png: bytes) -> str:
+        """Write one preview PNG slice for a candidate series; return its rel path."""
+        directory = self.previews_dir(examination_id, series_uid)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{index:04d}.png"
+        path.write_bytes(png)
+        return str(path.relative_to(self.storage_dir))
+
+    def preview_path(self, examination_id: str, series_uid: str, index: int) -> Path:
+        return self.previews_dir(examination_id, series_uid) / f"{index:04d}.png"
+
+    def clear_series_staging(self, examination_id: str) -> None:
+        """Drop the staged raw DICOM + previews once a series has been materialized."""
+        shutil.rmtree(self.examination_dir(examination_id) / "incoming", ignore_errors=True)
+        shutil.rmtree(self.examination_dir(examination_id) / "previews", ignore_errors=True)
 
     # --- lifecycle -----------------------------------------------------------
     def delete_examination(self, examination_id: str) -> None:

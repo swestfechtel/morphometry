@@ -32,3 +32,11 @@ export function imageVolumeUrl(accession: string): string {
 export function maskVolumeUrl(accession: string): string {
   return withKey(`${server_config.model_api}/examinations/${accession}/volume/mask.nii.gz`);
 }
+
+// A candidate series' preview slice PNG. Loaded via <img>, so like the volumes it
+// relies on the `?api_key=` query-param fallback when auth is enabled.
+export function seriesPreviewUrl(accession: string, seriesUid: string, index: number): string {
+  return withKey(
+    `${server_config.model_api}/examinations/${accession}/series/${encodeURIComponent(seriesUid)}/preview/${index}.png`,
+  );
+}

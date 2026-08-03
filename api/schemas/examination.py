@@ -14,6 +14,9 @@ class ExaminationSummary(BaseModel):
     study_description: str | None = None
     accession_number: str
     status: ExaminationStatus
+    # Id of a currently queued/running job for this examination (else null). Lets the
+    # list show live progress and poll the right job; null means nothing is in flight.
+    active_job_id: str | None = None
 
 
 class ExaminationList(BaseModel):
@@ -41,6 +44,27 @@ class TorsionDetail(ExaminationSummary):
     ankle_offset: int | None = None
     torsion: TorsionValues = TorsionValues()
     landmarks: dict = {}
+
+
+class SeriesInfo(BaseModel):
+    """One candidate DICOM series offered for selection on a pending upload."""
+    uid: str
+    description: str | None = None
+    modality: str | None = None
+    instances: int = 0
+    rows: int | None = None
+    cols: int | None = None
+    preview_count: int = 0
+
+
+class PendingDetail(ExaminationSummary):
+    """Detail view for a pending_selection examination: its candidate series.
+
+    Preview slices are served separately as PNGs at
+    ``/examinations/{id}/series/{uid}/preview/{index}.png`` (0 … preview_count-1).
+    """
+    type: Literal["pending"] = "pending"
+    series: list[SeriesInfo] = []
 
 
 class ExaminationUpdate(BaseModel):

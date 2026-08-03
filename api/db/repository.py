@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from sqlmodel import Session, select
 
 from api.db.models import Examination, Job
+from api.schemas.enums import JobState
 
 
 def _touch(examination: Examination) -> None:
@@ -65,3 +66,17 @@ def update_job(session: Session, job: Job) -> Job:
 
 def list_jobs_by_status(session: Session, status: str) -> list[Job]:
     return list(session.exec(select(Job).where(Job.status == status)).all())
+
+
+def active_jobs_by_examination(session: Session) -> dict[str, str]:
+    """Map each examination id to its latest still-active (queued/running) job id.
+
+    Used by the examinations list so a row can tell it has processing in flight
+    (hide "Start Processing", show progress) and knows which job to poll.
+    """
+    active = (JobState.QUEUED.value, JobState.RUNNING.value)
+    jobs = session.exec(
+        select(Job).where(Job.status.in_(active)).order_by(Job.created_at)
+    ).all()
+    # created_at ascending -> a newer job overwrites an older one, so latest wins
+    return {job.examination_id: job.id for job in jobs}

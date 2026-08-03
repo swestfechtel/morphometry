@@ -1,44 +1,16 @@
 """Model-dispatch and job-status endpoints."""
-import uuid
-
 from fastapi import APIRouter, Depends, status
 from sqlmodel import Session
 
-from api import runtime
 from api.db import repository
-from api.db.engine import session_scope
-from api.db.models import Job
 from api.deps import get_queue, get_session
 from api.errors import NotFoundError
 from api.schemas.enums import ExaminationStatus, JobKind, JobState
 from api.schemas.jobs import JobCreated, JobStatus
+from api.tasks.dispatch import dispatch_job as _dispatch
 from api.tasks.queue import TaskQueue
 
 router = APIRouter(tags=["jobs"])
-
-_TORSION_TASK = "api.tasks.torsion.run_torsion"
-
-
-def _dispatch(examination_id: str, kind: JobKind, mode: str, queue: TaskQueue) -> JobCreated:
-    """Create a (committed) job row, enqueue it, then record the RQ id.
-
-    The job row is committed before enqueueing so the worker (a separate process —
-    or the eager in-process queue) reliably sees it.
-    """
-    engine = runtime.get_engine()
-    job_id = str(uuid.uuid4())
-    with session_scope(engine) as session:
-        if repository.get_examination(session, examination_id) is None:
-            raise NotFoundError(f"Examination {examination_id} not found")
-        repository.create_job(session, Job(id=job_id, examination_id=examination_id, kind=kind.value))
-
-    rq_id = queue.enqueue(_TORSION_TASK, examination_id, job_id, mode)
-
-    with session_scope(engine) as session:
-        job = repository.get_job(session, job_id)
-        job.rq_job_id = rq_id
-        repository.update_job(session, job)
-    return JobCreated(job_id=job_id, examination_id=examination_id)
 
 
 @router.post("/model/torsion/{examination_id}", status_code=status.HTTP_202_ACCEPTED, response_model=JobCreated)

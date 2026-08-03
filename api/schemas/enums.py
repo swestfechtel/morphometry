@@ -11,6 +11,7 @@ class ExaminationType(str, Enum):
 
 
 class ExaminationStatus(str, Enum):
+    PENDING_SELECTION = "pending_selection"  # series enumerated, awaiting the user's pick
     UNPROCESSED = "unprocessed"
     RUNNING = "running"
     SEGMENTED = "segmented"

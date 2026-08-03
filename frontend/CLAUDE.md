@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Medical morphometry web application for orthopedic analysis. Provides interactive landmark-based measurements on medical images (MRI torsion, X-ray morphometry). **Not intended for clinical use.**
+Medical morphometry web application for orthopedic analysis. Provides interactive landmark-based measurements on MRI torsion examinations. **Not intended for clinical use.**
 
 This is the `frontend/` part of the `morphometry` monorepo — the web client for the FastAPI service in `../api/`. See the repository root `README.md` / `CLAUDE.md` for the library and API. All commands below run from this `frontend/` directory.
 
@@ -41,42 +41,47 @@ Uses Next.js App Router file-based routing under `app/`:
 - `/examinations` — Server component that fetches and lists all examinations
 - `/examinations/[...slug]` — Catch-all route handling both filtered lists (e.g., `/examinations/mr-torsion`) and individual examination detail views (by accession number)
 - `/upload` — Client-side file upload form
-- `/mad` — MAD (Morphometry Assistant Display) viewer
 
 ### Component Pattern
 
-Each examination type has a paired **examination component** + **image component**:
-
-- `TorsionExaminationComponent` + `TorsionImageComponent` — MRI torsion (femoral/tibial angles, Lee/Murphy methods)
-- `XrayExaminationComponent` + `XrayImageComponent` — X-ray foot/knee morphometry
-- `MadComponent` — MAD analysis viewer
-
-Examination components manage state and API calls. Image components render the image with an SVG overlay for draggable landmarks and handle mouse interaction for landmark editing.
+- `TorsionExaminationComponent` — MRI torsion (femoral/tibial angles, Lee/Murphy methods).
+  It owns the landmark state and API calls and renders the **Cornerstone3D** viewer
+  (`app/components/cornerstone/`), which draws the volume and the draggable reference-line
+  landmarks. See the "Torsion viewer (Cornerstone3D)" section below.
 
 ### Data Flow
 
-1. **Upload**: Files posted to `/upload/` → backend returns accession number
-2. **Processing**: POST to `/model/segmentation/{id}` or `/model/torsion/{id}` → returns `job_id`
-3. **Polling**: `PollingComponent` polls `/jobs/{job_id}` until status is `finished` or `error`
+1. **Upload (torsion, two-phase)**: `app/upload/page.tsx` posts the whole examination
+   directory to `/upload/torsion/series`; the backend returns a `pending_selection`
+   examination with its candidate DICOM series. `SeriesPicker`
+   (`app/components/series-picker.tsx`) shows the series as cards with scrollable
+   multi-slice previews (`/examinations/{id}/series/{uid}/preview/{i}.png`) and a mode
+   toggle — single **whole-leg** series (pick one) or **separate hip/knee/ankle** (assign
+   three). On confirm it POSTs `/upload/torsion/select`, which materializes the pick and
+   **auto-starts** the full pipeline, returning a `job_id`. A pending examination is
+   resumable: the list shows a "Select series" action and the detail route
+   (`examinations/[...slug]`) renders `SeriesPicker` for `type: "pending"`.
+2. **Processing**: started automatically on series selection, or manually via
+   POST to `/model/segmentation/{id}` / `/model/torsion/{id}` → returns `job_id`
+3. **Polling**: `PollingComponent` polls `/jobs/{job_id}` until status is `finished` or
+   `error`; the picker's callback navigates to the viewer on `finished`
 4. **Viewing**: Examination detail fetched from `/examinations/{accession_number}`
 5. **Editing**: Landmarks modified via drag → PATCH to `/examinations/{accession_number}`
 
 ### State Management
 
-Local `useState` throughout — no global state library. Parent examination components own landmark state and pass `saveChangesCallback`/`setLandmarksCallback` props to image components.
+Local `useState` throughout — no global state library. `TorsionExaminationComponent` owns landmark state and passes `saveChangesCallback`/`setLandmarksCallback` props to the Cornerstone viewer.
 
 ### Shared Utilities (`app/utils.tsx`)
 
 Vector math and medical angle computation functions:
 - `computeFemoralTorsion()` / `computeTibialTorsion()` — 3D torsion angles from proximal/distal landmark pairs, side-aware
 - `femoralProximalAngle()` / `femoralDistalAngle()` / `tibialProximalAngle()` / `tibialDistalAngle()` — the signed per-reference-line components; the torsion is their difference (femur: prox − dist, tibia: dist − prox). Shown on each reference line's slice in the viewer.
-- `computeHalluxValgusAngle()` — 2D angle from indexed landmark array
-- `angleBetweenVectors()` / `angleBetweenVectors2D()` — generic vector angle helpers
+- `angleBetweenVectors()` — generic 3D vector angle helper
 
 ### Landmark Data Structures
 
 - **Torsion**: Nested object keyed by `{femur,tibia}.{lee,murphy}.{left,right}` with `[x, y, z]` coordinates
-- **X-ray**: Array of `[x, y]` points indexed by anatomical position
 
 ### Layout
 

@@ -7,7 +7,7 @@ import numpy as np
 from morphometry.image_io import Image
 from api.db import repository
 from api.db.engine import session_scope
-from api.db.models import Examination
+from api.db.models import Examination, Job
 
 
 def _img():
@@ -163,6 +163,20 @@ def test_torsion_detail_serves_encoded_images(client, runtime):
     assert d["type"] == "torsion"
     assert len(d["image"]) == 2 and len(d["segmentation"]) == 2  # base64 PNGs read from disk
     assert d["torsion"]["femoral_torsion_left"] == 9.0
+
+
+def test_list_reports_active_job_id(client, runtime):
+    """The list surfaces a queued/running job's id (so the row can poll it), but not
+    a finished one — this is what lets the UI show progress and hide 'Start Processing'."""
+    _seed_examination(runtime, accession="ACTIVE", status="running")
+    _seed_examination(runtime, accession="IDLE", status="unprocessed")
+    with session_scope(runtime.get_engine()) as s:
+        repository.create_job(s, Job(id="job-active", examination_id="ACTIVE", kind="full", status="running"))
+        repository.create_job(s, Job(id="job-done", examination_id="IDLE", kind="full", status="finished"))
+
+    listing = {e["accession_number"]: e for e in client.get("/examinations/").json()["examinations"]}
+    assert listing["ACTIVE"]["active_job_id"] == "job-active"
+    assert listing["IDLE"]["active_job_id"] is None
 
 
 def test_compute_segmentation_endpoint(client, runtime, fake_docker_run, monkeypatch):

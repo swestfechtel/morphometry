@@ -1,62 +1,75 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import server_config from "@/app/server_config";
+import server_config from '@/app/server_config';
+import { authHeaders } from '@/app/components/cornerstone/cs-volume-url';
+import { SeriesPicker } from '@/app/components/series-picker';
+import { PendingExamination } from '@/app/types';
 
 export default function UploadPage() {
-    const [selectedFile, setSelectedFile] = useState<FileList | null>(null);
-    const [examinationType, setExaminationType] = useState('Torsion');
+    const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
     const [message, setMessage] = useState('');
-    const router = useRouter();
+    const [busy, setBusy] = useState(false);
+    // When a directory has been enumerated, its candidate series are shown for
+    // selection; picking one starts processing (see SeriesPicker).
+    const [pending, setPending] = useState<PendingExamination | null>(null);
 
-    // Handle file input change
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files.length > 0) {
-            setSelectedFile(e.target.files);
+            setSelectedFiles(e.target.files);
         }
     };
 
-    // Submit the form to the API endpoint
+    // Torsion: enumerate the series in the selected examination directory.
+    async function enumerateTorsionSeries(files: FileList) {
+        const formData = new FormData();
+        for (const file of files) formData.append('files', file);
+        const response = await fetch(server_config.model_api + '/upload/torsion/series', {
+            method: 'POST',
+            headers: { ...authHeaders() },
+            body: formData,
+        });
+        if (response.status === 201) {
+            setPending((await response.json()) as PendingExamination);
+        } else if (response.status === 400) {
+            setMessage('This examination already exists on the server.');
+        } else {
+            const data = await response.json().catch(() => ({}));
+            setMessage('Error uploading examination: ' + (data.detail ?? response.statusText));
+        }
+    }
+
     async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
         e.preventDefault();
-
-        if (!selectedFile) {
-            setMessage('Please select a file first.');
+        setMessage('');
+        if (!selectedFiles) {
+            setMessage('Please select an examination directory first.');
             return;
         }
-
-        // Create FormData to send the file
-        const formData = new FormData();
-
-        for (const file of selectedFile) {
-            formData.append('files', file);
-            formData.append('examination_type', examinationType);
-        }
-
+        setBusy(true);
         try {
-            const response = await fetch(server_config.model_api + '/upload/', {
-                method: 'POST',
-                body: formData,
-            });
-
-            if (response.status == 201) {
-                const data = await response.json();
-                setMessage('File sent successfully!');
-
-                // router.push(`/results/${data.examination_id}`);
-
-            } else if (response.status == 400) {
-                setMessage('Examination already exists on server.');
-            }
-            else {
-                const data = await response.json();
-                setMessage('Error sending file: ' + data.error);
-            }
+            await enumerateTorsionSeries(selectedFiles);
         } catch (error) {
-            console.error('Error uploading file:', error);
+            console.error('Error uploading:', error);
             setMessage('Network error occurred.');
+        } finally {
+            setBusy(false);
         }
+    }
+
+    // Once a torsion directory is enumerated, replace the form with the series picker.
+    // "Upload another" resets back to the form so more exams can be queued without
+    // waiting for the previous one to finish processing.
+    if (pending) {
+        return (
+            <div className="min-h-screen bg-gray-100 dark:bg-gray-900">
+                <SeriesPicker
+                    examinationId={pending.accession_number}
+                    series={pending.series}
+                    onUploadAnother={() => { setPending(null); setMessage(''); setSelectedFiles(null); }}
+                />
+            </div>
+        );
     }
 
     return (
@@ -65,9 +78,13 @@ export default function UploadPage() {
                 onSubmit={handleSubmit}
                 className="bg-white dark:bg-gray-800 p-8 rounded shadow-md w-full max-w-md"
             >
-                <h2 className="text-2xl font-bold mb-4 text-gray-800 dark:text-gray-100">
-                    Upload Files
+                <h2 className="text-2xl font-bold mb-2 text-gray-800 dark:text-gray-100">
+                    Upload Examination
                 </h2>
+                <p className="mb-4 text-sm text-gray-600 dark:text-gray-300">
+                    Select the whole torsion examination folder exported from the PACS. The
+                    server lists the DICOM series it contains so you can pick the correct one.
+                </p>
                 <div className="mb-4">
                     <input
                         type="file"
@@ -78,25 +95,12 @@ export default function UploadPage() {
                         multiple
                     />
                 </div>
-                <div className="mb-4">
-                    <label className="block mb-2 text-gray-800 dark:text-gray-100" htmlFor="examinationType">
-                        Examination Type
-                    </label>
-                    <select
-                        id="examinationType"
-                        value={examinationType}
-                        onChange={e => setExaminationType(e.target.value)}
-                        className="w-full p-2 border border-gray-300 dark:border-gray-700 rounded text-gray-800 dark:text-gray-100 bg-white dark:bg-gray-800"
-                    >
-                        <option value="default" disabled>Select a type</option>
-                        <option value="torsion" className="text-gray-800 dark:text-gray-100">Torsion</option>
-                    </select>
-                </div>
                 <button
                     type="submit"
-                    className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded transition duration-300"
+                    disabled={busy}
+                    className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                    Send Files
+                    {busy ? 'Uploading…' : 'Upload & list series'}
                 </button>
                 {message && (
                     <p className="mt-4 text-center text-gray-800 dark:text-gray-100">

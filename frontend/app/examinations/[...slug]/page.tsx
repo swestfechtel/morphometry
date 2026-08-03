@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ListComponent } from "@/app/components/list-component";
 import FilterComponent from "@/app/components/filter-component";
 import { TorsionExaminationComponent } from '@/app/components/torsion-examination-component';
+import { SeriesPicker } from "@/app/components/series-picker";
 import { BaseExamination } from "@/app/types";
 
 export default async function page({params,}: {params: Promise<{slug: string}>}){
@@ -66,6 +67,9 @@ export default async function page({params,}: {params: Promise<{slug: string}>})
                 </div>
                 }
                 <div className="min-h-screen bg-white dark:bg-gray-800">
+                    { examination.type === 'pending' &&
+                        <SeriesPicker examinationId={examination.accession_number} series={examination.series} />
+                    }
                     { examination.type === 'torsion' &&
                     <TorsionExaminationComponent examination={examination}/>
                     }

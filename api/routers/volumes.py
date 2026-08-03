@@ -65,3 +65,23 @@ def get_mask_volume(examination_id: str, session: Session = Depends(get_session)
         raise NotFoundError(f"Mask volume not available for {examination_id}")
     rel = store.ensure_combined_mask(examination_id, mask_paths, transformed)
     return FileResponse(store.abspath(rel), media_type=_NIFTI_MEDIA_TYPE, filename="mask.nii.gz")
+
+
+@router.get("/{examination_id}/series/{series_uid}/preview/{index}.png")
+def get_series_preview(examination_id: str, series_uid: str, index: int,
+                       session: Session = Depends(get_session),
+                       store: Store = Depends(get_store)) -> FileResponse:
+    """Stream one preview slice PNG of a candidate series on a pending examination.
+
+    Served here (with header-or-query-param auth) because the UI loads previews via
+    ``<img>`` tags, which cannot set a custom header.
+    """
+    row = repository.get_examination(session, examination_id)
+    if row is None:
+        raise NotFoundError(f"Examination {examination_id} not found")
+    if series_uid not in {(s or {}).get("uid") for s in (row.series or [])}:
+        raise NotFoundError(f"Series {series_uid} not found for {examination_id}")
+    path = store.preview_path(examination_id, series_uid, index)
+    if not path.exists():
+        raise NotFoundError(f"Preview {index} not available for series {series_uid}")
+    return FileResponse(path, media_type="image/png")

@@ -30,6 +30,10 @@ class Examination(SQLModel, table=True):
     study_description: str | None = None
 
     dicom_metadata: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    # Candidate DICOM series for a pending_selection examination (list of dicts:
+    # uid/description/modality/instances/rows/cols/preview_count). Cleared once a
+    # series is selected and the examination is materialized.
+    series: list | None = Field(default=None, sa_column=Column(JSON))
     torsion_values: dict | None = Field(default=None, sa_column=Column(JSON))
     landmarks: dict | None = Field(default=None, sa_column=Column(JSON))
     source_paths: dict = Field(default_factory=dict, sa_column=Column(JSON))

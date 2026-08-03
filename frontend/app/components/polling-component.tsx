@@ -15,7 +15,9 @@ function usePolling(apiEndpoint: string, interval: number, onData: (data: JobDat
                 if (!isMounted) return;
                 if (response.ok) {
                     const data = await response.json() as JobData;
-                    if (data.status === 'finished' || data.status === 'error') {
+                    // Terminal states end the poll. The backend emits 'failed' (not
+                    // 'error') for a failed job — without this it would poll forever.
+                    if (data.status === 'finished' || data.status === 'failed' || data.status === 'error') {
                         clearInterval(intervalId);
                     }
                     onDataRef.current(data);
@@ -38,22 +40,29 @@ function usePolling(apiEndpoint: string, interval: number, onData: (data: JobDat
     }, [apiEndpoint, interval]);
 }
 
-export function PollingComponent({ job_id, callback }: { job_id: string; callback: (jobId: string) => void }) {
+export function PollingComponent(
+    { job_id, callback, onError }:
+    { job_id: string; callback: (jobId: string) => void; onError?: (data: JobData) => void },
+) {
     const [data, setData] = useState<JobData | null>(null);
     const callbackRef = useRef(callback);
     callbackRef.current = callback;
+    const onErrorRef = useRef(onError);
+    onErrorRef.current = onError;
 
     usePolling(server_config.model_api + '/jobs/' + job_id, 5000, setData);
 
     useEffect(() => {
         if (data?.status === 'finished') {
             callbackRef.current(job_id);
+        } else if (data?.status === 'failed' || data?.status === 'error') {
+            onErrorRef.current?.(data);
         }
     }, [data?.status, job_id]);
 
     return (
         <div className="ml-2">
-            {data && data.status === 'running' &&
+            {data && (data.status === 'running' || data.status === 'queued') &&
                 <span
                     className="inline-flex items-center rounded bg-blue-50 px-4 py-2 font-semibold text-blue-700 ring-1 ring-blue-700/10 ring-inset">
                 Processing...
@@ -76,16 +85,17 @@ export function PollingComponent({ job_id, callback }: { job_id: string; callbac
                 </svg>
             </span>
             }
-            {data && data.status === 'error' &&
+            {data && (data.status === 'failed' || data.status === 'error') &&
                 <span
                     className="inline-flex items-center rounded bg-red-50 px-4 py-2 font-semibold text-red-700 ring-1 ring-red-700/10 ring-inset">
-                Error processing data: {data.message}
+                Processing failed{(data.error || data.message) ? `: ${data.error || data.message}` : '.'}
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
-                         className="bi bi-explicit" viewBox="0 0 16 16">
+                         className="bi bi-explicit ml-2" viewBox="0 0 16 16">
                   <path d="M6.826 10.88H10.5V12h-5V4.002h5v1.12H6.826V7.4h3.457v1.073H6.826z"/>
                   <path
                       d="M2.5 0A2.5 2.5 0 0 0 0 2.5v11A2.5 2.5 0 0 0 2.5 16h11a2.5 2.5 0 0 0 2.5-2.5v-11A2.5 2.5 0 0 0 13.5 0zM1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5z"/>
                 </svg>
+                <a href="/examinations" className="ml-3 underline hover:no-underline">Back to examinations</a>
             </span>
             }
         </div>

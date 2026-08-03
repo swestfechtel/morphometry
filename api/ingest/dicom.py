@@ -10,10 +10,12 @@ import logging
 import random
 import string
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 
 import nibabel as nib
 import numpy as np
+import pydicom
 import ruptures
 
 from morphometry.image_io import Image
@@ -21,7 +23,7 @@ from morphometry.image_io import Image
 from api.db import repository
 from api.db.engine import session_scope
 from api.db.models import Examination
-from api.errors import DuplicateError
+from api.errors import DuplicateError, IngestError, NotFoundError
 from api.runtime import get_engine, get_settings, get_store
 from api.schemas.enums import ExaminationStatus, ExaminationType
 
@@ -201,12 +203,13 @@ def _persist_torsion(accession: str, study: dict, original: Image, transformed: 
     return accession
 
 
-def ingest_torsion_from_dir(dicom_dir: Path) -> str:
-    """Ingest a single stacked DICOM series (UI single upload / Orthanc finalize)."""
-    metadata = Image.read_dicom_metadata(str(dicom_dir))
-    accession = _accession(metadata)
-    _check_duplicate(accession)
+def _ingest_whole_leg_dir(dicom_dir: Path, accession: str, metadata) -> str:
+    """Convert one stacked whole-leg series to volumes, split it, and persist the row.
 
+    The duplicate check and accession derivation are the caller's responsibility, so
+    this can be reused both for a fresh upload (:func:`ingest_torsion_from_dir`) and to
+    materialize an already-staged, user-selected series (:func:`materialize_torsion_selection`).
+    """
     nib_image, tmp = Image.dicom_to_nibabel(str(dicom_dir))
     try:
         original = _materialize(Image.from_nibabel(nib_image))  # read before tmp is removed
@@ -220,12 +223,20 @@ def ingest_torsion_from_dir(dicom_dir: Path) -> str:
     return _persist_torsion(accession, _study_fields(metadata), original, transformed, regions)
 
 
-def ingest_torsion_multi_from_dirs(hip_dir: Path, knee_dir: Path, ankle_dir: Path) -> str:
-    """Ingest three separate DICOM series (hip/knee/ankle), already split."""
-    metadata = Image.read_dicom_metadata(str(hip_dir))
+def ingest_torsion_from_dir(dicom_dir: Path) -> str:
+    """Ingest a single stacked DICOM series (UI single upload / Orthanc finalize)."""
+    metadata = Image.read_dicom_metadata(str(dicom_dir))
     accession = _accession(metadata)
     _check_duplicate(accession)
+    return _ingest_whole_leg_dir(dicom_dir, accession, metadata)
 
+
+def _ingest_multi_dirs(hip_dir: Path, knee_dir: Path, ankle_dir: Path, accession: str, metadata) -> str:
+    """Concatenate three already-split region series into a volume and persist the row.
+
+    Duplicate check / accession derivation are the caller's responsibility (see
+    :func:`_ingest_whole_leg_dir` for the rationale).
+    """
     images, tmps = {}, []
     try:
         for region, directory in (("hip", hip_dir), ("knee", knee_dir), ("ankle", ankle_dir)):
@@ -237,7 +248,6 @@ def ingest_torsion_multi_from_dirs(hip_dir: Path, knee_dir: Path, ankle_dir: Pat
 
         shapes = [images[r].array.shape[:2] for r in ("hip", "knee", "ankle")]
         if len(set(shapes)) != 1:
-            from api.errors import IngestError
             raise IngestError(f"In-plane shapes differ between series: {shapes}")
 
         combined = np.concatenate([images[r].array for r in ("hip", "knee", "ankle")], axis=2)
@@ -247,3 +257,208 @@ def ingest_torsion_multi_from_dirs(hip_dir: Path, knee_dir: Path, ankle_dir: Pat
             tmp.cleanup()
 
     return _persist_torsion(accession, _study_fields(metadata), transformed.copy(), transformed, images)
+
+
+def ingest_torsion_multi_from_dirs(hip_dir: Path, knee_dir: Path, ankle_dir: Path) -> str:
+    """Ingest three separate DICOM series (hip/knee/ankle), already split."""
+    metadata = Image.read_dicom_metadata(str(hip_dir))
+    accession = _accession(metadata)
+    _check_duplicate(accession)
+    return _ingest_multi_dirs(hip_dir, knee_dir, ankle_dir, accession, metadata)
+
+
+# --- series enumeration + previews (two-phase upload) ------------------------
+
+def _hdr_str(ds, name: str) -> str | None:
+    value = getattr(ds, name, None)
+    return str(value) if value not in (None, "") else None
+
+
+def _hdr_int(ds, name: str) -> int | None:
+    try:
+        return int(getattr(ds, name))
+    except (TypeError, ValueError):
+        return None
+
+
+def _group_series(source_dir: Path) -> dict[str, dict]:
+    """Group every parseable image-DICOM file under ``source_dir`` by SeriesInstanceUID.
+
+    Non-DICOM files (and non-image DICOM objects such as DICOMDIR) are silently
+    discarded — they either fail to parse or lack a SeriesInstanceUID / pixel
+    geometry. Files within a series are sorted by InstanceNumber.
+
+    :param source_dir: A directory tree of mixed uploaded files.
+    :return: ``{series_uid: {"files_sorted": [Path, ...], "header": Dataset}}``.
+    """
+    groups: dict[str, dict] = {}
+    for path in sorted(Path(source_dir).rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            ds = pydicom.dcmread(str(path), stop_before_pixels=True)
+        except Exception:  # noqa: BLE001 - anything unreadable as DICOM is junk to discard
+            continue
+        uid = getattr(ds, "SeriesInstanceUID", None)
+        # require an image series: has a series UID and pixel geometry (excludes DICOMDIR etc.)
+        if not uid or not (getattr(ds, "Rows", None) and getattr(ds, "Columns", None)):
+            continue
+        group = groups.setdefault(str(uid), {"files": [], "header": ds})
+        instance = getattr(ds, "InstanceNumber", None)
+        order = int(instance) if instance is not None else len(group["files"])
+        group["files"].append((order, path))
+    for group in groups.values():
+        group["files"].sort(key=lambda item: item[0])
+        group["files_sorted"] = [p for _, p in group["files"]]
+    return groups
+
+
+def _array_to_png(arr: np.ndarray) -> bytes | None:
+    """Window a 2D slice by its 1st–99th intensity percentile and encode it as a PNG."""
+    from PIL import Image as PILImage
+
+    data = np.squeeze(np.asarray(arr)).astype(np.float64)
+    if data.ndim == 3:  # multi-frame / RGB slice -> take the middle frame
+        data = data[data.shape[0] // 2]
+    if data.ndim != 2:
+        return None
+    finite = data[np.isfinite(data)]
+    if finite.size == 0:
+        return None
+    lo, hi = float(np.percentile(finite, 1)), float(np.percentile(finite, 99))
+    if hi <= lo:
+        lo, hi = float(finite.min()), float(finite.max())
+    if hi <= lo:
+        hi = lo + 1.0
+    u8 = (np.clip((data - lo) / (hi - lo), 0.0, 1.0) * 255).astype(np.uint8)
+    buffer = BytesIO()
+    PILImage.fromarray(u8, mode="L").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _render_series_previews(files: list[Path], max_slices: int = 16) -> list[bytes]:
+    """Render up to ``max_slices`` evenly-sampled preview PNGs across a DICOM series.
+
+    Uses SimpleITK (GDCM) to decode each slice, matching the volume-read path, so
+    compressed transfer syntaxes work. Unreadable slices are skipped.
+    """
+    import SimpleITK as sitk
+
+    n = len(files)
+    if n == 0:
+        return []
+    count = min(max_slices, n)
+    indices = [round(i * (n - 1) / (count - 1)) for i in range(count)] if count > 1 else [0]
+    previews: list[bytes] = []
+    for i in indices:
+        try:
+            arr = sitk.GetArrayFromImage(sitk.ReadImage(str(files[i])))
+        except Exception:  # noqa: BLE001 - skip a slice we cannot decode
+            continue
+        png = _array_to_png(arr)
+        if png is not None:
+            previews.append(png)
+    return previews
+
+
+def _replace_for_enumerate(accession: str) -> None:
+    """Clear any prior state for this accession before staging a fresh enumeration.
+
+    A half-finished pending upload for the same study is always replaceable; a
+    fully-ingested examination respects the ``on_duplicate`` policy.
+    """
+    with session_scope(get_engine()) as session:
+        existing = repository.get_examination(session, accession)
+    if existing is None:
+        return
+    if existing.status == ExaminationStatus.PENDING_SELECTION.value:
+        get_store().delete_examination(accession)
+        with session_scope(get_engine()) as session:
+            repository.delete_examination(session, accession)
+        return
+    _check_duplicate(accession)  # raises or replaces per settings.on_duplicate
+
+
+def enumerate_torsion_series(source_dir: Path) -> str:
+    """Enumerate all DICOM series in an uploaded examination directory (phase 1).
+
+    Groups files by series, discards non-DICOM junk, stages each series' raw DICOM
+    and renders per-series preview slices, and records a ``pending_selection``
+    examination row carrying the candidate-series metadata. No volumes are produced
+    yet — that happens in :func:`materialize_torsion_selection` once the user picks.
+
+    :param source_dir: Directory of the whole uploaded examination (mixed files).
+    :return: The examination id (accession number).
+    """
+    groups = _group_series(source_dir)
+    if not groups:
+        raise IngestError("No DICOM image series found in the upload")
+
+    first_header = next(iter(groups.values()))["header"]
+    accession = _accession(first_header)
+    _replace_for_enumerate(accession)
+
+    store = get_store()
+    series_meta: list[dict] = []
+    for uid, group in groups.items():
+        files = group["files_sorted"]
+        for index, path in enumerate(files):
+            store.stage_series_file(accession, uid, index, path.read_bytes())
+        previews = _render_series_previews(files)
+        for index, png in enumerate(previews):
+            store.save_preview(accession, uid, index, png)
+        header = group["header"]
+        series_meta.append({
+            "uid": uid,
+            "description": _hdr_str(header, "SeriesDescription"),
+            "modality": _hdr_str(header, "Modality"),
+            "instances": len(files),
+            "rows": _hdr_int(header, "Rows"),
+            "cols": _hdr_int(header, "Columns"),
+            "preview_count": len(previews),
+        })
+
+    with session_scope(get_engine()) as session:
+        repository.upsert_examination(session, Examination(
+            id=accession,
+            examination_type=ExaminationType.TORSION.value,
+            status=ExaminationStatus.PENDING_SELECTION.value,
+            series=series_meta,
+            **_study_fields(first_header),
+        ))
+    return accession
+
+
+def _require_staged(series_dir: Path, accession: str) -> None:
+    if not series_dir.exists() or not any(series_dir.glob("*.dcm")):
+        raise NotFoundError(f"Series {series_dir.name} not staged for examination {accession}")
+
+
+def materialize_torsion_selection(accession: str, mode: str, selection: dict) -> str:
+    """Materialize the user-selected series into a processable examination (phase 2).
+
+    :param accession: The pending examination id.
+    :param mode: ``"whole_leg"`` (one series, auto-split) or ``"regions"`` (three
+        already-split hip/knee/ankle series).
+    :param selection: For ``whole_leg`` ``{"series_uid": ...}``; for ``regions``
+        ``{"hip": uid, "knee": uid, "ankle": uid}``.
+    :return: The examination id (unchanged accession), now ``unprocessed``.
+    """
+    store = get_store()
+    if mode == "whole_leg":
+        series_dir = store.series_incoming_dir(accession, selection["series_uid"])
+        _require_staged(series_dir, accession)
+        metadata = Image.read_dicom_metadata(str(series_dir))
+        _ingest_whole_leg_dir(series_dir, accession, metadata)
+    elif mode == "regions":
+        dirs = {region: store.series_incoming_dir(accession, selection[region])
+                for region in ("hip", "knee", "ankle")}
+        for series_dir in dirs.values():
+            _require_staged(series_dir, accession)
+        metadata = Image.read_dicom_metadata(str(dirs["hip"]))
+        _ingest_multi_dirs(dirs["hip"], dirs["knee"], dirs["ankle"], accession, metadata)
+    else:
+        raise IngestError(f"Unknown selection mode: {mode}")
+
+    store.clear_series_staging(accession)  # staged DICOM + previews now consumed
+    return accession

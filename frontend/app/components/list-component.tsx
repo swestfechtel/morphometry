@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { PollingComponent } from "@/app/components/polling-component";
 import server_config from "@/app/server_config";
@@ -79,15 +79,10 @@ export function ListComponent({ examinations, description }: { examinations: Bas
 }
 
 function ListElementComponent({ examination }: { examination: BaseExamination }) {
-    const [jobId, setJobId] = useState<string | undefined>(undefined);
+    // Resume polling for an examination that already has a job in flight. Seed from
+    // active_job_id (the real job UUID) — polling /jobs/{accession} would 404.
+    const [jobId, setJobId] = useState<string | undefined>(examination.active_job_id ?? undefined);
     const router = useRouter();
-
-    // Start polling if the examination comes back from the server already in 'running' state
-    useEffect(() => {
-        if (examination.status === 'running') {
-            setJobId(examination.accession_number);
-        }
-    }, [examination.status, examination.accession_number]);
 
     const segment = async () => {
         const tmp = await fetch(server_config.model_api + '/model/segmentation/' + examination.accession_number, { method: 'POST' });
@@ -132,7 +127,10 @@ function ListElementComponent({ examination }: { examination: BaseExamination })
                 {examination.status === 'processed' &&
                 <a href={`/examinations/${examination.accession_number}`} className="text-blue-500 hover:underline">View Examination</a>
                 }
-                {(examination.status === 'unprocessed' || examination.status === 'segmented') && jobId === undefined &&
+                {examination.status === 'pending_selection' &&
+                <a href={`/examinations/${examination.accession_number}`} className="text-blue-500 hover:underline">Select series</a>
+                }
+                {(examination.status === 'unprocessed' || examination.status === 'segmented') && jobId === undefined && !examination.active_job_id &&
                 <a href="#" onClick={process} className="text-blue-500 hover:underline">Start Processing</a>
                 }
                 <br/>

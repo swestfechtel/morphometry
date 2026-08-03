@@ -15,7 +15,10 @@ router = APIRouter(prefix="/examinations", tags=["examinations"])
 @router.get("/", response_model=ExaminationList)
 def list_examinations(session: Session = Depends(get_session)):
     # envelope shape {"examinations": [...]} preserved for the UI (reads result.examinations)
-    return ExaminationList(examinations=[serializers.to_summary(row) for row in repository.list_examinations(session)])
+    active = repository.active_jobs_by_examination(session)
+    return ExaminationList(examinations=[
+        serializers.to_summary(row, active.get(row.id)) for row in repository.list_examinations(session)
+    ])
 
 
 @router.get("/{examination_id}")
