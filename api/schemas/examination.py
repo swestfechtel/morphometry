@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from api.schemas.enums import ExaminationStatus, ExaminationType
+from api.schemas.enums import ExaminationStatus
 
 
 class ExaminationSummary(BaseModel):
@@ -40,13 +40,6 @@ class TorsionDetail(ExaminationSummary):
     knee_offset: int | None = None
     ankle_offset: int | None = None
     torsion: TorsionValues = TorsionValues()
-    landmarks: dict = {}
-
-
-class XRayDetail(ExaminationSummary):
-    """Detail view for an x-ray examination."""
-    type: Literal["xray"] = "xray"
-    image: str | None = None
     landmarks: dict = {}
 
 

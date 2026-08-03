@@ -1,8 +1,8 @@
 """Build response schemas from DB rows (loading encoded images from the Store)."""
 from api.db.models import Examination
 from api.schemas.docker_io import _sanitize
-from api.schemas.enums import ExaminationStatus, ExaminationType
-from api.schemas.examination import ExaminationSummary, TorsionDetail, TorsionValues, XRayDetail
+from api.schemas.enums import ExaminationStatus
+from api.schemas.examination import ExaminationSummary, TorsionDetail, TorsionValues
 from api.storage.store import Store
 
 
@@ -20,11 +20,6 @@ def to_summary(row: Examination) -> ExaminationSummary:
 def to_detail(row: Examination, store: Store):
     """Build the discriminated detail response, loading encoded slices on demand."""
     summary = to_summary(row).model_dump()
-
-    if row.examination_type == ExaminationType.XRAY.value:
-        paths = (row.encoded_paths or {}).get("image", [])
-        image = store.load_encoded_b64(paths)[0] if paths else None
-        return XRayDetail(**summary, image=image, landmarks=row.landmarks or {})
 
     encoded = row.encoded_paths or {}
     return TorsionDetail(

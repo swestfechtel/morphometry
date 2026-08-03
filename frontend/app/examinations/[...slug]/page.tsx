@@ -3,7 +3,6 @@ import Link from "next/link";
 import { ListComponent } from "@/app/components/list-component";
 import FilterComponent from "@/app/components/filter-component";
 import { TorsionExaminationComponent } from '@/app/components/torsion-examination-component';
-import { XrayExaminationComponent } from "@/app/components/xray-examination-component";
 import { BaseExamination } from "@/app/types";
 
 export default async function page({params,}: {params: Promise<{slug: string}>}){
@@ -25,111 +24,6 @@ export default async function page({params,}: {params: Promise<{slug: string}>})
                     <FilterComponent state={slug[0]}/>
                     <section id="content" className="py-12">
                         <ListComponent examinations={examinations} description="Torsionsbemaßung (MRT)"/>
-                    </section>
-                </div>
-            </div>
-        );
-    }
-    else if (slug[0] === 'cr-morph-foot-ap') {
-        const dummyData: BaseExamination[] = [
-            { 'accession_number': '12345', 'patient_name': 'John Doe', 'study_description': 'Morphometrie Fuß AP', 'study_date': '2023-10-01', 'study_time': '', 'status': 'processed' },
-            { 'accession_number': '54321', 'patient_name': 'Jane Smith', 'study_description': 'Morphometrie Fuß AP', 'study_date': '2023-10-02', 'study_time': '', 'status': 'unprocessed' },
-        ];
-        return (
-            <div className="min-h-screen bg-white dark:bg-gray-800">
-                {/* Header */}
-                <header className="bg-white dark:bg-gray-700 shadow mb-2 my-auto px-4 py-4">
-                    <h1 className="text-4xl font-bold text-gray-800 dark:text-white">Examinations</h1>
-                </header>
-                {/* Main Content */}
-                <div className="container mx-auto px-4 shadow">
-                    <FilterComponent state={slug[0]}/>
-                    <section id="content" className="py-12">
-                        <ListComponent examinations={dummyData} description="Morphometrie Fuß AP"/>
-                    </section>
-                </div>
-            </div>
-        );
-    }
-    else if (slug[0] === 'cr-morph-foot-lat') {
-        const dummyData: BaseExamination[] = [
-            { 'accession_number': '12345', 'patient_name': 'John Doe', 'study_description': 'Morphometrie Fuß lateral', 'study_date': '2023-10-01', 'study_time': '', 'status': 'processed' },
-            { 'accession_number': '54321', 'patient_name': 'Jane Smith', 'study_description': 'Morphometrie Fuß lateral', 'study_date': '2023-10-02', 'study_time': '', 'status': 'unprocessed' },
-        ];
-        return (
-            <div className="min-h-screen bg-white dark:bg-gray-800">
-                {/* Header */}
-                <header className="bg-white dark:bg-gray-700 shadow mb-2 my-auto px-4 py-4">
-                    <h1 className="text-4xl font-bold text-gray-800 dark:text-white">Examinations</h1>
-                </header>
-                {/* Main Content */}
-                <div className="container mx-auto px-4 shadow">
-                    <FilterComponent state={slug[0]}/>
-                    <section id="content" className="py-12">
-                        <ListComponent examinations={dummyData} description="Morphometrie Fuß lateral"/>
-                    </section>
-                </div>
-            </div>
-        );
-    }
-    else if (slug[0] === 'cr-morph-knee-ap') {
-        const dummyData: BaseExamination[] = [
-            { 'accession_number': '12345', 'patient_name': 'John Doe', 'study_description': 'Morphometrie Knie AP', 'study_date': '2023-10-01', 'study_time': '', 'status': 'processed' },
-            { 'accession_number': '54321', 'patient_name': 'Jane Smith', 'study_description': 'Morphometrie Knie AP', 'study_date': '2023-10-02', 'study_time': '', 'status': 'unprocessed' },
-        ];
-        return (
-            <div className="min-h-screen bg-white dark:bg-gray-800">
-                {/* Header */}
-                <header className="bg-white dark:bg-gray-700 shadow mb-2 my-auto px-4 py-4">
-                    <h1 className="text-4xl font-bold text-gray-800 dark:text-white">Examinations</h1>
-                </header>
-                {/* Main Content */}
-                <div className="container mx-auto px-4 shadow">
-                    <FilterComponent state={slug[0]}/>
-                    <section id="content" className="py-12">
-                        <ListComponent examinations={dummyData} description="Morphometrie Knie AP"/>
-                    </section>
-                </div>
-            </div>
-        );
-    }
-    else if (slug[0] === 'cr-morph-knee-lat') {
-        const dummyData: BaseExamination[] = [
-            { 'accession_number': '12345', 'patient_name': 'John Doe', 'study_description': 'Morphometrie Knie lateral', 'study_date': '2023-10-01', 'study_time': '', 'status': 'processed' },
-            { 'accession_number': '54321', 'patient_name': 'Jane Smith', 'study_description': 'Morphometrie Knie lateral', 'study_date': '2023-10-02', 'study_time': '', 'status': 'unprocessed' },
-        ];
-        return (
-            <div className="min-h-screen bg-white dark:bg-gray-800">
-                {/* Header */}
-                <header className="bg-white dark:bg-gray-700 shadow mb-2 my-auto px-4 py-4">
-                    <h1 className="text-4xl font-bold text-gray-800 dark:text-white">Examinations</h1>
-                </header>
-                {/* Main Content */}
-                <div className="container mx-auto px-4 shadow">
-                    <FilterComponent state={slug[0]}/>
-                    <section id="content" className="py-12">
-                        <ListComponent examinations={dummyData} description="Morphometrie Knie lateral"/>
-                    </section>
-                </div>
-            </div>
-        );
-    }
-    else if (slug[0] === 'cr-morph-foot-pat-axial') {
-        const dummyData: BaseExamination[] = [
-            { 'accession_number': '12345', 'patient_name': 'John Doe', 'study_description': 'Morphometrie Tibia AP', 'study_date': '2023-10-01', 'study_time': '', 'status': 'processed' },
-            { 'accession_number': '54321', 'patient_name': 'Jane Smith', 'study_description': 'Morphometrie Tibia AP', 'study_date': '2023-10-02', 'study_time': '', 'status': 'unprocessed' },
-        ];
-        return (
-            <div className="min-h-screen bg-white dark:bg-gray-800">
-                {/* Header */}
-                <header className="bg-white dark:bg-gray-700 shadow mb-2 my-auto px-4 py-4">
-                    <h1 className="text-4xl font-bold text-gray-800 dark:text-white">Examinations</h1>
-                </header>
-                {/* Main Content */}
-                <div className="container mx-auto px-4 shadow">
-                    <FilterComponent state={slug[0]}/>
-                    <section id="content" className="py-12">
-                        <ListComponent examinations={dummyData} description="Morphometrie Tibia AP"/>
                     </section>
                 </div>
             </div>
@@ -174,9 +68,6 @@ export default async function page({params,}: {params: Promise<{slug: string}>})
                 <div className="min-h-screen bg-white dark:bg-gray-800">
                     { examination.type === 'torsion' &&
                     <TorsionExaminationComponent examination={examination}/>
-                    }
-                    { examination.type === 'xray' &&
-                        <XrayExaminationComponent examination={examination} />
                     }
                 </div>
             </div>

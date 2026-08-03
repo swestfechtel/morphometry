@@ -39,9 +39,6 @@ async def upload(examination_type: str = Form(...), files: list[UploadFile] = Fi
         await _save_uploads(files, tmpdir)
         if etype == "torsion":
             examination_id = await run_in_threadpool(dicom.ingest_torsion_from_dir, tmpdir)
-        elif etype == "x_ray_foot_ap":
-            first = next(p for p in tmpdir.iterdir() if p.is_file())
-            examination_id = await run_in_threadpool(dicom.ingest_xray, first)
         else:
             raise IngestError(f"Unknown examination_type: {examination_type}")
     return ExaminationCreated(examination_id=examination_id)

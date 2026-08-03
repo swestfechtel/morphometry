@@ -72,35 +72,6 @@ export function angleBetweenVectors(a: number[], b: number[]): number {
 }
 
 /**
- * Calculates the angle in degrees between two 2D vectors.
- * @param a First 2D vector [x, y]
- * @param b Second 2D vector [x, y]
- * @returns Angle in degrees between vectors a and b
- */
-export function angleBetweenVectors2D(a: number[], b: number[]): number {
-    if (a.length !== 2 || b.length !== 2) {
-        throw new Error("Both vectors must be two-dimensional.");
-    }
-
-    // Calculate the dot product
-    const dotProduct = a[0] * b[0] + a[1] * b[1];
-
-    // Calculate the magnitudes of the vectors
-    const magnitudeA = Math.sqrt(a[0] ** 2 + a[1] ** 2);
-    const magnitudeB = Math.sqrt(b[0] ** 2 + b[1] ** 2);
-
-    if (magnitudeA === 0 || magnitudeB === 0) {
-        return 0;
-    }
-
-    // Clamp value to avoid NaN due to floating point errors
-    const cosTheta = Math.max(-1, Math.min(1, dotProduct / (magnitudeA * magnitudeB)));
-    const angleInRadians = Math.acos(cosTheta);
-
-    return (angleInRadians * 180) / Math.PI;
-}
-
-/**
  * Signed angle (degrees) of the femoral neck (proximal) reference line, measured in the
  * axial plane relative to the medio-lateral axis. This is the proximal component of the
  * femoral torsion; the total torsion is this minus {@link femoralDistalAngle}.
@@ -230,16 +201,4 @@ export function computeTibialTorsion(proximal_start: number[], proximal_end: num
     const proximal_angle = tibialProximalAngle(proximal_start, proximal_end, side);
     const distal_angle = tibialDistalAngle(distal_start, distal_end, side);
     return (distal_angle - proximal_angle).toFixed(1);
-}
-
-export function computeHalluxValgusAngle(landmarks: number[][]): string {
-    const longitudinal_first_metatarsal_axis = subtract_arrays(landmarks[16], landmarks[17]);
-    const longitudinal_phalanx_axis = subtract_arrays(landmarks[32], landmarks[33]);
-
-    const angle = angleBetweenVectors2D(longitudinal_first_metatarsal_axis, longitudinal_phalanx_axis);
-    return angle.toFixed(1);
-}
-
-export function vectorLength(vector: number[]): number {
-    return Math.sqrt(vector.reduce((sum, component) => sum + component * component, 0));
 }

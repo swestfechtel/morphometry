@@ -8,7 +8,7 @@ declare module 'react' {
 
 // Examination status and type
 export type ExaminationStatus = 'unprocessed' | 'segmented' | 'running' | 'processed';
-export type ExaminationType = 'torsion' | 'xray';
+export type ExaminationType = 'torsion';
 
 // Shared base for all examination list entries
 export interface BaseExamination {
@@ -67,22 +67,6 @@ export interface TorsionExamination extends BaseExamination {
     shape: number[];        // [x, y, z] of the combined volume
     knee_offset: number;
     ankle_offset: number;
-}
-
-// --- X-ray types ---
-
-export type Point2D = [number, number];
-
-export interface XrayAxis {
-    start: Point2D;
-    end: Point2D;
-}
-
-export type XrayLandmarks = Record<string, XrayAxis>;
-
-export interface XrayExamination extends BaseExamination {
-    image: string;
-    landmarks: XrayLandmarks;
 }
 
 // --- Job polling ---

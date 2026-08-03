@@ -165,15 +165,6 @@ def test_torsion_detail_serves_encoded_images(client, runtime):
     assert d["torsion"]["femoral_torsion_left"] == 9.0
 
 
-def test_xray_detail(client, runtime):
-    _seed_examination(runtime, accession="XR1", status="processed", with_encoded=True,
-                      examination_type="x_ray_foot_ap", landmarks={"axis": {"start": [1, 2], "end": [3, 4]}})
-    d = client.get("/examinations/XR1").json()
-    assert d["type"] == "xray"
-    assert isinstance(d["image"], str) and d["image"]              # single base64 image
-    assert d["landmarks"]["axis"]["start"] == [1, 2]
-
-
 def test_compute_segmentation_endpoint(client, runtime, fake_docker_run, monkeypatch):
     _seed_examination(runtime, with_volumes=True)
     monkeypatch.setattr(subprocess, "run", fake_docker_run(returncode=0))

@@ -8,7 +8,6 @@ from enum import Enum
 
 class ExaminationType(str, Enum):
     TORSION = "torsion"
-    XRAY = "x_ray_foot_ap"
 
 
 class ExaminationStatus(str, Enum):

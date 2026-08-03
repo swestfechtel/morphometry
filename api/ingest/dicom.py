@@ -220,35 +220,6 @@ def ingest_torsion_from_dir(dicom_dir: Path) -> str:
     return _persist_torsion(accession, _study_fields(metadata), original, transformed, regions)
 
 
-def ingest_xray(image_path: Path) -> str:
-    """Ingest a single 2D x-ray image (stored as a base64 PNG)."""
-    import base64
-    from io import BytesIO
-    from PIL import Image as PILImage
-
-    store = get_store()
-    accession = _random_accession()
-    image = PILImage.open(image_path).convert("RGB")
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    encoded = store.save_encoded(accession, [base64.b64encode(buffer.getvalue()).decode("ascii")], [])
-
-    landmarks = {
-        "longitudinal_firstmetatarsal_axis": {"start": [50, 50], "end": [150, 150]},
-        "longitudinal_phalanx_axis": {"start": [100, 100], "end": [200, 200]},
-    }
-    with session_scope(get_engine()) as session:
-        repository.upsert_examination(session, Examination(
-            id=accession,
-            examination_type=ExaminationType.XRAY.value,
-            status=ExaminationStatus.PROCESSED.value,
-            patient_name="Anonymised",
-            encoded_paths=encoded,
-            landmarks=landmarks,
-        ))
-    return accession
-
-
 def ingest_torsion_multi_from_dirs(hip_dir: Path, knee_dir: Path, ankle_dir: Path) -> str:
     """Ingest three separate DICOM series (hip/knee/ankle), already split."""
     metadata = Image.read_dicom_metadata(str(hip_dir))

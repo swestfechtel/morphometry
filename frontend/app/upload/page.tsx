@@ -90,7 +90,6 @@ export default function UploadPage() {
                     >
                         <option value="default" disabled>Select a type</option>
                         <option value="torsion" className="text-gray-800 dark:text-gray-100">Torsion</option>
-                        <option value="x_ray_foot_ap" className="text-gray-800 dark:text-gray-100">X-ray foot AP</option>
                     </select>
                 </div>
                 <button
