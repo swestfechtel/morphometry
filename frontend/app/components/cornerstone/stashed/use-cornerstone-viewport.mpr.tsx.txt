@@ -1,0 +1,385 @@
+'use client';
+
+// The Cornerstone3D viewer lifecycle for a torsion examination.
+//
+// The torsion MRI is highly anisotropic (≈0.6 mm in-plane, ≈9 mm through-plane)
+// and is really a 2D slice stack, not an isotropic 3D volume. Rendering it as a
+// resliced volume in all three planes was fragile: exactly axis-aligned volumes
+// rendered black (a vtk volume-mapper degeneracy), and on gantry-tilted volumes
+// the landmark annotations never coincided with the world-aligned MPR planes, so
+// none showed. So the primary AXIAL view is a native-slice **StackViewport** (no
+// reslicing, no volume mapper — renders reliably, and landmark probes match by
+// slice like the acquisition itself), while SAGITTAL/CORONAL stay volume MPR for
+// spatial context. The image *volume* is still loaded: the MPR panes need it, and
+// it provides the world↔voxel transform used for landmark editing.
+//
+// Landmarks are seeded as draggable Probe annotations whose edits flow back to
+// React state (live torsion recompute) and a save callback. All Cornerstone state
+// is torn down on unmount.
+//
+// Known limitation (Phase 1): the SAG/COR panes are volume viewports, so they hit
+// the same volume-mapper bug and render black on exactly axis-aligned volumes, and
+// they are not yet crosshair-synced to the axial slice. The axial stack is the
+// reliable, interactive workhorse; MPR sync + axial segmentation overlay are
+// follow-ups.
+import { useEffect, useRef } from 'react';
+import {
+  RenderingEngine,
+  Enums,
+  eventTarget,
+  metaData,
+  setVolumesForViewports,
+  volumeLoader,
+  cache,
+  type Types,
+} from '@cornerstonejs/core';
+import {
+  addTool,
+  ToolGroupManager,
+  StackScrollTool,
+  PanTool,
+  ZoomTool,
+  ProbeTool,
+  WindowLevelTool,
+  segmentation as csSegmentation,
+  annotation as csAnnotation,
+  Enums as csToolsEnums,
+} from '@cornerstonejs/tools';
+import { createNiftiImageIdsAndCacheMetadata } from '@cornerstonejs/nifti-volume-loader';
+
+import { TorsionLandmarks } from '@/app/types';
+import { ensureCornerstoneInit } from './cs-init';
+import { imageVolumeUrl, maskVolumeUrl } from './cs-volume-url';
+import {
+  listLandmarks,
+  applyEditedVoxel,
+  fromLoaderIndex,
+  Offsets,
+} from './landmark-mapping';
+
+const { ViewportType, OrientationAxis } = Enums;
+const { SegmentationRepresentations } = csToolsEnums;
+const LABELMAP = SegmentationRepresentations.Labelmap;
+
+const AXIAL_VIEWPORT = 'CS-AX';
+const VOLUME_VIEWPORTS = ['CS-SAG', 'CS-COR'] as const;
+const ALL_VIEWPORTS = [AXIAL_VIEWPORT, ...VOLUME_VIEWPORTS] as const;
+const VOLUME_ORIENTATIONS: Record<string, Enums.OrientationAxis> = {
+  'CS-SAG': OrientationAxis.SAGITTAL,
+  'CS-COR': OrientationAxis.CORONAL,
+};
+
+// Distinct colors for the hip / knee / ankle labels (segment indices 1/2/3).
+const SEGMENT_COLORS: Record<number, Types.Color> = {
+  1: [255, 220, 60, 255],
+  2: [180, 80, 220, 255],
+  3: [60, 200, 220, 255],
+};
+
+interface VolumeLike {
+  voxelManager?: {
+    getCompleteScalarDataArray?: () => ArrayLike<number> | undefined;
+    getRange?: () => [number, number];
+  };
+}
+
+interface PlaneModule {
+  imagePositionPatient?: number[];
+  imageOrientationPatient?: number[];
+  rowPixelSpacing?: number;
+  columnPixelSpacing?: number;
+}
+
+/**
+ * World position of in-plane voxel (i, j) on stack slice `imageId`, from the
+ * slice's OWN geometry (imagePlaneModule). The NIfTI loader's per-slice frame
+ * differs from the vtk volume's index→world, so a probe placed via the volume
+ * transform projects onto a tilted acquisition slice shifted (it sits far in the
+ * slice-normal direction, and projecting along the tilt skews the in-plane spot).
+ * Placing it at the slice's own world puts it exactly on voxel (i, j).
+ */
+function stackSliceWorld(imageId: string, i: number, j: number): Types.Point3 | null {
+  const p = metaData.get('imagePlaneModule', imageId) as PlaneModule | undefined;
+  const ipp = p?.imagePositionPatient, iop = p?.imageOrientationPatient;
+  const dI = p?.columnPixelSpacing, dJ = p?.rowPixelSpacing;
+  if (!ipp || !iop || dI == null || dJ == null) return null;
+  const [rx, ry, rz, cx, cy, cz] = iop;
+  return [
+    ipp[0] + i * dI * rx + j * dJ * cx,
+    ipp[1] + i * dI * ry + j * dJ * cy,
+    ipp[2] + i * dI * rz + j * dJ * cz,
+  ];
+}
+
+/** Inverse of {@link stackSliceWorld}: the in-plane voxel (i, j) of a world point on `imageId`. */
+function stackVoxelFromWorld(imageId: string, world: Types.Point3): { i: number; j: number } | null {
+  const p = metaData.get('imagePlaneModule', imageId) as PlaneModule | undefined;
+  const ipp = p?.imagePositionPatient, iop = p?.imageOrientationPatient;
+  const dI = p?.columnPixelSpacing, dJ = p?.rowPixelSpacing;
+  if (!ipp || !iop || dI == null || dJ == null) return null;
+  const [rx, ry, rz, cx, cy, cz] = iop;
+  const dx = world[0] - ipp[0], dy = world[1] - ipp[1], dz = world[2] - ipp[2];
+  return { i: (dx * rx + dy * ry + dz * rz) / dI, j: (dx * cx + dy * cy + dz * cz) / dJ };
+}
+
+/**
+ * A robust display window derived from the volume's actual intensities: the
+ * 1st–99th percentile of a strided sample. The NIfTI loader forces a fixed CT
+ * window (400/40) that renders MRI as black; a plain min→max window is fragile
+ * too, because a handful of bright outlier voxels widen it until real tissue
+ * collapses to near-black. Percentiles ignore those outliers. Falls back to the
+ * full data range, then null if nothing usable is available.
+ */
+function computeVoiRange(volume: VolumeLike): { lower: number; upper: number } | null {
+  const vm = volume.voxelManager;
+  let data: ArrayLike<number> | undefined;
+  try { data = vm?.getCompleteScalarDataArray?.(); } catch { data = undefined; }
+  if (data && data.length) {
+    const stride = Math.max(1, Math.floor(data.length / 500_000)); // cap the sort cost
+    const sample: number[] = [];
+    for (let i = 0; i < data.length; i += stride) {
+      const val = data[i];
+      if (Number.isFinite(val)) sample.push(val);
+    }
+    if (sample.length > 4) {
+      sample.sort((a, b) => a - b);
+      const lower = sample[Math.floor(sample.length * 0.01)];
+      const upper = sample[Math.floor(sample.length * 0.99)];
+      if (Number.isFinite(lower) && Number.isFinite(upper) && upper > lower) return { lower, upper };
+    }
+  }
+  const range = vm?.getRange?.();
+  if (range && Number.isFinite(range[0]) && Number.isFinite(range[1]) && range[1] > range[0]) {
+    return { lower: range[0], upper: range[1] };
+  }
+  return null;
+}
+
+export interface UseViewportArgs {
+  accession: string;
+  landmarks: TorsionLandmarks;
+  offsets: Offsets;
+  showSegmentation: boolean;
+  /** Called on every landmark edit with the updated tree (drives live recompute). */
+  onLandmarksChange: (next: TorsionLandmarks) => void;
+  /** Called when a drag finishes, to arm the PATCH save. */
+  onDragEnd: (next: TorsionLandmarks) => void;
+}
+
+export function useCornerstoneViewport(args: UseViewportArgs) {
+  const refs = [useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null)];
+
+  // Stable per-mount ids (avoid Date.now/Math.random for SSR-safety; accession is unique enough).
+  const engineId = `torsion-engine-${args.accession}`;
+  const toolGroupId = `torsion-tg-${args.accession}`;
+  const segmentationId = `torsion-seg-${args.accession}`;
+  const imageVolumeId = `nifti:${imageVolumeUrl(args.accession)}`;
+  const maskVolumeId = `nifti:${maskVolumeUrl(args.accession)}`;
+
+  // Latest landmarks/callbacks for the annotation-modified handler, without re-running setup.
+  const landmarksRef = useRef(args.landmarks);
+  landmarksRef.current = args.landmarks;
+  const cbRef = useRef({ onChange: args.onLandmarksChange, onDragEnd: args.onDragEnd, offsets: args.offsets });
+  cbRef.current = { onChange: args.onLandmarksChange, onDragEnd: args.onDragEnd, offsets: args.offsets };
+
+  // annotationUID -> landmark path, to route edits back into the tree.
+  const annotationPaths = useRef<Map<string, string[]>>(new Map());
+
+  // --- setup / teardown (runs once per accession) --------------------------
+  useEffect(() => {
+    let engine: RenderingEngine | null = null;
+    let destroyed = false;
+    let onVolumeLoaded: ((evt: Event) => void) | null = null;
+    const elements = refs.map((r) => r.current).filter((e): e is HTMLDivElement => !!e);
+
+    const onAnnotationModified = (evt: Event) => {
+      // @ts-expect-error CustomEvent detail shape from Cornerstone
+      const ann = evt.detail?.annotation;
+      if (!ann?.annotationUID) return;
+      const path = annotationPaths.current.get(ann.annotationUID);
+      const world = ann.data?.handles?.points?.[0] as Types.Point3 | undefined;
+      const refId = ann.metadata?.referencedImageId as string | undefined;
+      if (!path || !world || !refId) return;
+      // Map the dragged world point back to a combined-volume voxel using the SAME
+      // stack-slice geometry the landmark was placed with (in-plane i,j), and keep
+      // its slice fixed (a probe drag stays on its own acquisition slice). Frame is
+      // the combined-volume z, parsed from the referenced imageId (`?frame=N`).
+      const ij = stackVoxelFromWorld(refId, world);
+      const frame = refId.includes('?frame=') ? Number(refId.split('?frame=')[1]) : NaN;
+      if (!ij || !Number.isFinite(frame)) return;
+      const combined: Types.Point3 = [Math.round(ij.i), Math.round(ij.j), frame];
+      const next = applyEditedVoxel(landmarksRef.current, path, combined, cbRef.current.offsets);
+      cbRef.current.onChange(next);
+    };
+    const onMouseUp = () => cbRef.current.onDragEnd(landmarksRef.current);
+
+    (async () => {
+      await ensureCornerstoneInit();
+
+      const imageIds = await createNiftiImageIdsAndCacheMetadata({ url: imageVolumeUrl(args.accession) });
+      const volume = await volumeLoader.createAndCacheVolume(imageVolumeId, { imageIds });
+      if (destroyed) return;
+
+      engine = new RenderingEngine(engineId);
+      engine.setViewports([
+        { viewportId: AXIAL_VIEWPORT, type: ViewportType.STACK, element: elements[0] },
+        ...VOLUME_VIEWPORTS.map((viewportId, i) => ({
+          viewportId,
+          type: ViewportType.ORTHOGRAPHIC,
+          element: elements[i + 1],
+          defaultOptions: { orientation: VOLUME_ORIENTATIONS[viewportId] },
+        })),
+      ]);
+
+      // Axial: native 2D slice stack (reliable; renders regardless of orientation).
+      const axialVp = engine.getViewport(AXIAL_VIEWPORT) as Types.IStackViewport;
+      await axialVp.setStack([...imageIds], Math.floor(imageIds.length / 2));
+      // Sag/cor: volume reslices for spatial context.
+      await setVolumesForViewports(engine, [{ volumeId: imageVolumeId }], [...VOLUME_VIEWPORTS]);
+
+      // The NIfTI loader hardcodes the window (windowWidth 400 / windowCenter 40, a
+      // CT window) regardless of the real intensities, so MRI renders black under the
+      // default VOI. Once the volume finishes streaming, derive the VOI from its
+      // actual data range and apply it to the stack and both MPR panes. We listen to
+      // IMAGE_VOLUME_LOADING_COMPLETED (fires regardless of who started the load;
+      // volume.load(cb) drops the callback once loading is already in progress).
+      const applyImageVoi = () => {
+        if (destroyed || !engine) return;
+        const voiRange = computeVoiRange(volume as VolumeLike);
+        if (voiRange) {
+          try { (engine.getViewport(AXIAL_VIEWPORT) as Types.IStackViewport)?.setProperties({ voiRange }); }
+          catch { /* not ready */ }
+          for (const v of VOLUME_VIEWPORTS) {
+            const vp = engine.getViewport(v) as Types.IVolumeViewport | undefined;
+            try { vp?.setProperties({ voiRange }, imageVolumeId); } catch { /* not ready */ }
+          }
+        }
+        engine.renderViewports([...ALL_VIEWPORTS]);
+      };
+      onVolumeLoaded = (evt: Event) => {
+        const id = (evt as CustomEvent).detail?.volumeId as string | undefined;
+        if (id === imageVolumeId) applyImageVoi();
+        else if (id === maskVolumeId && engine && !destroyed) engine.renderViewports([...VOLUME_VIEWPORTS]);
+      };
+      eventTarget.addEventListener(Enums.Events.IMAGE_VOLUME_LOADING_COMPLETED, onVolumeLoaded);
+      volume.load();
+      // If it streamed in before the listener was attached (e.g. cached remount).
+      if ((volume as { loadStatus?: { loaded?: boolean } }).loadStatus?.loaded) applyImageVoi();
+
+      // --- labelmap overlay (mask volume aligned to the image volume) ------
+      // Phase 1: shown on the volume MPR panes only. An axial-stack labelmap needs
+      // a separate stack representation (mask imageIds) and is a follow-up.
+      try {
+        const maskIds = await createNiftiImageIdsAndCacheMetadata({ url: maskVolumeUrl(args.accession) });
+        const maskVolume = await volumeLoader.createAndCacheVolume(maskVolumeId, { imageIds: maskIds });
+        // Streams the mask in; onVolumeLoaded re-renders when it completes so the
+        // labelmap paints (load(cb) would drop the callback, same as the image).
+        maskVolume.load();
+        csSegmentation.addSegmentations([
+          { segmentationId, representation: { type: LABELMAP, data: { volumeId: maskVolumeId } } },
+        ]);
+        await csSegmentation.addLabelmapRepresentationToViewportMap(
+          Object.fromEntries(VOLUME_VIEWPORTS.map((v) => [v, [{ segmentationId, type: LABELMAP }]])),
+        );
+        for (const [index, color] of Object.entries(SEGMENT_COLORS)) {
+          for (const v of VOLUME_VIEWPORTS) {
+            csSegmentation.config.color.setSegmentIndexColor(v, segmentationId, Number(index), color);
+          }
+        }
+      } catch (err) {
+        console.warn('Segmentation labelmap not available', err);
+      }
+
+      // --- tools: scroll/pan/zoom/window-level + landmark probes -----------
+      // No CrosshairsTool: it assumes volume viewports and does not sync cleanly
+      // across a stack + volume mix (MPR sync is a follow-up). StackScroll works on
+      // both stack and volume viewports.
+      [StackScrollTool, PanTool, ZoomTool, ProbeTool, WindowLevelTool].forEach(addTool);
+      const tg = ToolGroupManager.createToolGroup(toolGroupId);
+      if (!tg) return;
+      ALL_VIEWPORTS.forEach((v) => tg.addViewport(v, engineId));
+      tg.addTool(StackScrollTool.toolName);
+      tg.addTool(PanTool.toolName);
+      tg.addTool(ZoomTool.toolName);
+      tg.addTool(ProbeTool.toolName);
+      tg.addTool(WindowLevelTool.toolName);
+      tg.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: csToolsEnums.MouseBindings.Wheel }] });
+      tg.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: csToolsEnums.MouseBindings.Auxiliary }] });
+      tg.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: csToolsEnums.MouseBindings.Secondary }] });
+      // Window/level (contrast/brightness) on plain left-drag.
+      tg.setToolActive(WindowLevelTool.toolName, {
+        bindings: [{ mouseButton: csToolsEnums.MouseBindings.Primary }],
+      });
+      // Passive: existing probe handles stay draggable, but clicks don't add points.
+      tg.setToolPassive(ProbeTool.toolName);
+
+      // --- seed landmark annotations from voxel coords ---------------------
+      // Placed in world/patient space via the image volume transform, so they show
+      // on the axial stack (matched by slice) and the MPR panes (matched by plane).
+      const frameOfReferenceUID = engine.getViewport(AXIAL_VIEWPORT)?.getFrameOfReferenceUID?.();
+      const imageData = volume.imageData;
+      for (const { path, voxel } of imageData ? listLandmarks(args.landmarks, args.offsets) : []) {
+        // Tie each landmark to its acquisition slice (frame = combined-volume z) via
+        // referencedImageId — the stack matches by imageId, not plane distance — and
+        // place it using that slice's own geometry (see stackSliceWorld). Fall back
+        // to the volume transform if the slice's plane metadata is unavailable.
+        const loader = fromLoaderIndex(voxel);
+        const frame = Math.round(loader[2]);
+        const referencedImageId = imageIds[frame];
+        const world = (referencedImageId && stackSliceWorld(referencedImageId, loader[0], loader[1]))
+          ?? (imageData!.indexToWorld(loader) as unknown as Types.Point3);
+        const ann = {
+          metadata: { toolName: ProbeTool.toolName, FrameOfReferenceUID: frameOfReferenceUID, referencedImageId },
+          data: { handles: { points: [world] }, label: path.join('.'), cachedStats: {} },
+        };
+        const uid = csAnnotation.state.addAnnotation(ann as never, frameOfReferenceUID as never);
+        if (uid) annotationPaths.current.set(uid, path);
+      }
+
+      elements.forEach((el) => {
+        el.addEventListener(csToolsEnums.Events.ANNOTATION_MODIFIED as unknown as string, onAnnotationModified);
+        el.addEventListener('mouseup', onMouseUp);
+      });
+      engine.renderViewports([...ALL_VIEWPORTS]);
+    })();
+
+    return () => {
+      destroyed = true;
+      if (onVolumeLoaded) {
+        eventTarget.removeEventListener(Enums.Events.IMAGE_VOLUME_LOADING_COMPLETED, onVolumeLoaded);
+      }
+      elements.forEach((el) => {
+        el.removeEventListener(csToolsEnums.Events.ANNOTATION_MODIFIED as unknown as string, onAnnotationModified);
+        el.removeEventListener('mouseup', onMouseUp);
+      });
+      annotationPaths.current.forEach((_p, uid) => csAnnotation.state.removeAnnotation(uid));
+      annotationPaths.current.clear();
+      try { csSegmentation.removeSegmentation(segmentationId); } catch { /* not added */ }
+      ToolGroupManager.destroyToolGroup(toolGroupId);
+      engine?.destroy();
+      // Only purge volumes that actually made it into the cache. In React dev
+      // (StrictMode) the cleanup can run before the async load finished caching a
+      // volume (and the mask load may have failed outright); removeVolumeLoadObject
+      // throws on an unknown id, so guard with getVolume first.
+      for (const id of [imageVolumeId, maskVolumeId]) {
+        if (cache.getVolume(id)) {
+          try { cache.removeVolumeLoadObject(id); } catch { /* already gone */ }
+        }
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [args.accession]);
+
+  // --- segmentation visibility toggle (volume MPR panes) -------------------
+  useEffect(() => {
+    for (const v of VOLUME_VIEWPORTS) {
+      try {
+        csSegmentation.config.visibility.setSegmentationRepresentationVisibility(
+          v, { segmentationId, type: LABELMAP }, args.showSegmentation,
+        );
+      } catch { /* representation not ready yet */ }
+    }
+  }, [args.showSegmentation, segmentationId]);
+
+  return { refs };
+}

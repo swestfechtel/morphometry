@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 });
 
 export default function RootLayout({children,}: Readonly<{ children: React.ReactNode; }>) {
-    const [darkMode, setDarkMode] = useState(false);
+    const [darkMode, setDarkMode] = useState(true);
 
     const toggleDarkMode = () => {
         setDarkMode((prevMode) => !prevMode);

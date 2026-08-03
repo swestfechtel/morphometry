@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 452" width="400" height="452">
+  <rect class="bg" x="0" y="0" width="400" height="452"/>
+  <style>
+    .bg{fill:#ffffff}
+    .bone{fill:#ECE3D0;stroke:#A9946A;stroke-width:2;stroke-linejoin:round}
+    .bone2{fill:#F5EFE1;stroke:#C3B48E;stroke-width:1.6;stroke-linejoin:round}
+    .A{stroke:#2563EB;stroke-width:3;fill:none;stroke-linecap:round}
+    .B{stroke:#DC2626;stroke-width:3;fill:none;stroke-linecap:round}
+    .C{stroke:#94A3B8;stroke-width:1.6;stroke-dasharray:6 4;fill:none}
+    .arc{stroke:#0E9F6E;stroke-width:2.6;fill:none}
+    .dist{stroke:#7C3AED;stroke-width:2.6;fill:none}
+    .ptl{fill:#334155;stroke:#fff;stroke-width:1.5}
+    .t{font:700 15px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;fill:#0F172A}
+    .s{font:400 11px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;fill:#64748B}
+    .lA{font:600 12px system-ui,sans-serif;fill:#2563EB}
+    .lB{font:600 12px system-ui,sans-serif;fill:#DC2626}
+    .lC{font:600 12px system-ui,sans-serif;fill:#7C3AED}
+    .v{font:800 15px system-ui,sans-serif;fill:#0E9F6E}
+    .l{font:500 12px system-ui,sans-serif;fill:#334155}
+  </style>
+
+  <defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="7.5" refY="5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#7C3AED"/></marker>
+    <marker id="ahs" markerWidth="10" markerHeight="10" refX="2.5" refY="5" orient="auto">
+      <path d="M10 0 L0 5 L10 10 z" fill="#7C3AED"/></marker>
+  </defs>
+
+  <text class="t" x="16" y="28">Subchondral distance (hip joint space)</text>
+  <text class="s" x="16" y="46">Rays from the femoral head centre through the joint space</text>
+  <polygon class="bone" points="166.1,374.9 198.1,456.9 253.9,435.1 221.9,353.1"/>
+  <circle class="bone" cx="196.0" cy="330.0" r="76.0"/>
+  <polygon class="bone2" points="57.6,262.5 63.3,251.9 69.7,241.8 77.0,232.3 84.9,223.3 93.6,215.0 102.8,207.4 112.6,200.5 123.0,194.4 133.7,189.1 144.9,184.7 156.3,181.2 168.0,178.6 179.9,176.8 191.9,176.1 203.9,176.2 215.8,177.3 227.6,179.3 239.2,182.2 250.6,186.0 261.6,190.7 272.3,196.2 282.5,202.6 292.1,209.7 301.2,217.5 309.6,226.0 317.4,235.2 292.1,254.9 286.0,247.6 279.3,240.9 272.1,234.7 264.5,229.0 256.4,224.0 248.0,219.6 239.3,215.9 230.3,212.9 221.0,210.6 211.7,209.0 202.2,208.2 192.7,208.0 183.2,208.7 173.8,210.0 164.6,212.1 155.5,214.9 146.7,218.4 138.1,222.6 130.0,227.4 122.2,232.9 114.9,238.9 108.0,245.5 101.7,252.6 96.0,260.2 90.8,268.2 86.3,276.5"/>
+  <line class="C" x1="196.0" y1="330.0" x2="63.9" y2="223.0"/>
+  <line class="C" x1="196.0" y1="330.0" x2="303.0" y2="197.9"/>
+  <line x1="196.0" y1="330.0" x2="101.2" y2="253.2" stroke="#DC2626" stroke-width="1.4" stroke-opacity="0.75" stroke-linecap="round"/>
+  <line x1="196.0" y1="330.0" x2="124.3" y2="231.3" stroke="#DC2626" stroke-width="1.4" stroke-opacity="0.75" stroke-linecap="round"/>
+  <line x1="196.0" y1="330.0" x2="152.3" y2="216.1" stroke="#DC2626" stroke-width="1.4" stroke-opacity="0.75" stroke-linecap="round"/>
+  <line x1="196.0" y1="330.0" x2="215.1" y2="209.5" stroke="#DC2626" stroke-width="1.4" stroke-opacity="0.75" stroke-linecap="round"/>
+  <line x1="196.0" y1="330.0" x2="245.6" y2="218.5" stroke="#DC2626" stroke-width="1.4" stroke-opacity="0.75" stroke-linecap="round"/>
+  <line x1="196.0" y1="330.0" x2="272.8" y2="235.2" stroke="#DC2626" stroke-width="1.4" stroke-opacity="0.75" stroke-linecap="round"/>
+  <line class="A" x1="196.0" y1="330.0" x2="181.6" y2="192.8"/>
+  <path class="arc" d="M189.7 270.3 A60 60 0 0 1 233.8 283.4"/>
+  <circle class="ptl" cx="181.6" cy="192.8" r="4"/>
+  <line x1="196.0" y1="330.0" x2="226.9" y2="260.6" stroke="#DC2626" stroke-width="2.4" stroke-opacity="1.0" stroke-linecap="round"/>
+  <line class="dist" x1="226.9" y1="260.6" x2="245.6" y2="218.5"/>
+  <circle class="ptl" cx="226.9" cy="260.6" r="4.5"/>
+  <circle class="ptl" cx="245.6" cy="218.5" r="4.5"/>
+  <circle class="ptl" cx="196.0" cy="330.0" r="4"/>
+  <text class="l" x="184.0" y="335.0" text-anchor="end">FHC</text>
+  <text class="l" x="182.0" y="150.0" text-anchor="middle">acetabulum</text>
+  <text class="l" x="70.0" y="372.0" text-anchor="start">femoral head</text>
+  <text class="lA" x="175.6" y="184.8" text-anchor="end">cone axis</text>
+  <text class="v" x="232.0" y="292.0" text-anchor="start">45°</text>
+  <text class="l" x="236.9" y="274.6" text-anchor="start">head exit</text>
+  <text class="l" x="253.6" y="210.5" text-anchor="start">acetabulum hit</text>
+  <text class="lC" x="256.0" y="244.0" text-anchor="start">≈4 mm</text>
+  <text class="s" x="16" y="438">Mean femoral-head→acetabulum gap over a 45° cone of rays.</text>
+</svg>

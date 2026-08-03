@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 404" width="380" height="404">
+  <rect class="bg" x="0" y="0" width="380" height="404"/>
+  <style>
+    .bg{fill:#ffffff}
+    .bone{fill:#ECE3D0;stroke:#A9946A;stroke-width:2;stroke-linejoin:round}
+    .bone2{fill:#F5EFE1;stroke:#C3B48E;stroke-width:1.6;stroke-linejoin:round}
+    .A{stroke:#2563EB;stroke-width:3;fill:none;stroke-linecap:round}
+    .B{stroke:#DC2626;stroke-width:3;fill:none;stroke-linecap:round}
+    .C{stroke:#94A3B8;stroke-width:1.6;stroke-dasharray:6 4;fill:none}
+    .arc{stroke:#0E9F6E;stroke-width:2.6;fill:none}
+    .dist{stroke:#7C3AED;stroke-width:2.6;fill:none}
+    .ptl{fill:#334155;stroke:#fff;stroke-width:1.5}
+    .t{font:700 15px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;fill:#0F172A}
+    .s{font:400 11px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;fill:#64748B}
+    .lA{font:600 12px system-ui,sans-serif;fill:#2563EB}
+    .lB{font:600 12px system-ui,sans-serif;fill:#DC2626}
+    .lC{font:600 12px system-ui,sans-serif;fill:#7C3AED}
+    .v{font:800 15px system-ui,sans-serif;fill:#0E9F6E}
+    .l{font:500 12px system-ui,sans-serif;fill:#334155}
+  </style>
+
+  <defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="7.5" refY="5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#7C3AED"/></marker>
+    <marker id="ahs" markerWidth="10" markerHeight="10" refX="2.5" refY="5" orient="auto">
+      <path d="M10 0 L0 5 L10 10 z" fill="#7C3AED"/></marker>
+  </defs>
+
+  <text class="t" x="16" y="28">Tibial torsion</text>
+  <text class="s" x="16" y="46">Transverse plane — proximal condylar vs malleolar line</text>
+  <ellipse class="bone" cx="178.0" cy="150.0" rx="74.0" ry="30.0"/>
+  <line class="A" x1="112.0" y1="168.0" x2="244.0" y2="168.0"/>
+  <circle class="ptl" cx="112.0" cy="168.0" r="4"/>
+  <circle class="ptl" cx="244.0" cy="168.0" r="4"/>
+  <line class="C" x1="178.0" y1="186.0" x2="178.0" y2="268.0"/>
+  <ellipse class="bone" cx="150.0" cy="330.0" rx="37.0" ry="31.0"/>
+  <circle class="bone" cx="206.0" cy="296.0" r="16.0"/>
+  <line class="B" x1="150.0" y1="330.0" x2="221.4" y2="286.7"/>
+  <line class="C" x1="150.0" y1="330.0" x2="278.0" y2="330.0"/>
+  <path class="arc" d="M222.0 330.0 A72 72 0 0 0 211.5 292.6"/>
+  <circle class="ptl" cx="150.0" cy="330.0" r="4.5"/>
+  <circle class="ptl" cx="206.0" cy="296.0" r="4.5"/>
+  <text class="v" x="212.0" y="316.0" text-anchor="start">≈30°</text>
+  <text class="lA" x="112.0" y="158.0" text-anchor="start">proximal condylar line</text>
+  <text class="lB" x="227.4" y="288.7" text-anchor="start">malleolar line</text>
+  <text class="s" x="16" y="390">Proximal condylar vs distal trans-malleolar line.</text>
+</svg>

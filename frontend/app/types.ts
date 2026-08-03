@@ -59,10 +59,12 @@ export interface TorsionLandmarks {
 }
 
 export interface TorsionExamination extends BaseExamination {
-    image: string[];
-    segmentation: string[];
+    // Legacy base64 PNG slice lists — no longer served once the Cornerstone
+    // viewer is in use (kept optional for backward compatibility).
+    image?: string[];
+    segmentation?: string[];
     landmarks: TorsionLandmarks;
-    shape: [number, number];
+    shape: number[];        // [x, y, z] of the combined volume
     knee_offset: number;
     ankle_offset: number;
 }

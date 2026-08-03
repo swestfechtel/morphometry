@@ -18,6 +18,7 @@ from morphometry.image_io import Segmentation
 from api.db import repository
 from api.db.engine import session_scope
 from api.domain.encode import encode_torsion_images
+from api.domain.masks import combine_region_masks
 from api.runtime import get_engine, get_settings, get_store
 from api.schemas.docker_io import ErrorsModel, LandmarksModel, ResultsModel
 from api.schemas.enums import ExaminationStatus, JobState
@@ -96,6 +97,11 @@ def _segment(examination_id: str) -> None:
     image_b64, seg_b64 = encode_torsion_images(
         transformed, masks["hip"], masks["knee"], masks["ankle"], settings.encode_pool_size)
     encoded_paths = store.save_encoded(examination_id, image_b64, seg_b64)
+
+    # Persist a combined label mask aligned to the transformed volume, for the
+    # Cornerstone labelmap overlay (served by GET /examinations/{id}/volume/mask.nii.gz).
+    combined = combine_region_masks(masks["hip"], masks["knee"], masks["ankle"])
+    mask_paths["combined"] = store.save_combined_mask(examination_id, combined, transformed.affine)
 
     with session_scope(engine) as session:
         ex = repository.get_examination(session, examination_id)

@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 404" width="380" height="404">
+  <rect class="bg" x="0" y="0" width="380" height="404"/>
+  <style>
+    .bg{fill:#ffffff}
+    .bone{fill:#ECE3D0;stroke:#A9946A;stroke-width:2;stroke-linejoin:round}
+    .bone2{fill:#F5EFE1;stroke:#C3B48E;stroke-width:1.6;stroke-linejoin:round}
+    .A{stroke:#2563EB;stroke-width:3;fill:none;stroke-linecap:round}
+    .B{stroke:#DC2626;stroke-width:3;fill:none;stroke-linecap:round}
+    .C{stroke:#94A3B8;stroke-width:1.6;stroke-dasharray:6 4;fill:none}
+    .arc{stroke:#0E9F6E;stroke-width:2.6;fill:none}
+    .dist{stroke:#7C3AED;stroke-width:2.6;fill:none}
+    .ptl{fill:#334155;stroke:#fff;stroke-width:1.5}
+    .t{font:700 15px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;fill:#0F172A}
+    .s{font:400 11px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;fill:#64748B}
+    .lA{font:600 12px system-ui,sans-serif;fill:#2563EB}
+    .lB{font:600 12px system-ui,sans-serif;fill:#DC2626}
+    .lC{font:600 12px system-ui,sans-serif;fill:#7C3AED}
+    .v{font:800 15px system-ui,sans-serif;fill:#0E9F6E}
+    .l{font:500 12px system-ui,sans-serif;fill:#334155}
+  </style>
+
+  <defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="7.5" refY="5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#7C3AED"/></marker>
+    <marker id="ahs" markerWidth="10" markerHeight="10" refX="2.5" refY="5" orient="auto">
+      <path d="M10 0 L0 5 L10 10 z" fill="#7C3AED"/></marker>
+  </defs>
+
+  <text class="t" x="16" y="28">Femoral torsion (anteversion)</text>
+  <text class="s" x="16" y="46">Transverse plane — neck axis vs posterior condylar line</text>
+  <polygon class="bone" points="132.7,169.5 230.7,197.5 237.3,174.5 139.3,146.5"/>
+  <circle class="bone" cx="120.0" cy="152.0" r="30.0"/>
+  <ellipse class="bone" cx="150.0" cy="322.0" rx="30.0" ry="37.0"/>
+  <ellipse class="bone" cx="216.0" cy="322.0" rx="30.0" ry="37.0"/>
+  <line class="C" x1="190.0" y1="214.0" x2="190.0" y2="276.0"/>
+  <line class="B" x1="112.0" y1="352.0" x2="254.0" y2="352.0"/>
+  <circle class="ptl" cx="112.0" cy="352.0" r="4"/>
+  <circle class="ptl" cx="254.0" cy="352.0" r="4"/>
+  <line class="A" x1="120.0" y1="152.0" x2="258.9" y2="193.4"/>
+  <line class="C" x1="120.0" y1="152.0" x2="266.0" y2="152.0"/>
+  <path class="arc" d="M186.0 152.0 A66 66 0 0 1 183.2 170.9"/>
+  <circle class="ptl" cx="120.0" cy="152.0" r="4.5"/>
+  <circle class="ptl" cx="234.0" cy="186.0" r="4.5"/>
+  <text class="v" x="196.0" y="176.0" text-anchor="start">≈15°</text>
+  <text class="lA" x="264.9" y="197.4" text-anchor="start">neck axis</text>
+  <text class="lB" x="254.0" y="372.0" text-anchor="end">condylar line</text>
+  <text class="s" x="16" y="390">Neck axis vs posterior condylar line, transverse plane.</text>
+</svg>

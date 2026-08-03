@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 360" width="380" height="360">
+  <rect class="bg" x="0" y="0" width="380" height="360"/>
+  <style>
+    .bg{fill:#ffffff}
+    .bone{fill:#ECE3D0;stroke:#A9946A;stroke-width:2;stroke-linejoin:round}
+    .bone2{fill:#F5EFE1;stroke:#C3B48E;stroke-width:1.6;stroke-linejoin:round}
+    .A{stroke:#2563EB;stroke-width:3;fill:none;stroke-linecap:round}
+    .B{stroke:#DC2626;stroke-width:3;fill:none;stroke-linecap:round}
+    .C{stroke:#94A3B8;stroke-width:1.6;stroke-dasharray:6 4;fill:none}
+    .arc{stroke:#0E9F6E;stroke-width:2.6;fill:none}
+    .dist{stroke:#7C3AED;stroke-width:2.6;fill:none}
+    .ptl{fill:#334155;stroke:#fff;stroke-width:1.5}
+    .t{font:700 15px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;fill:#0F172A}
+    .s{font:400 11px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;fill:#64748B}
+    .lA{font:600 12px system-ui,sans-serif;fill:#2563EB}
+    .lB{font:600 12px system-ui,sans-serif;fill:#DC2626}
+    .lC{font:600 12px system-ui,sans-serif;fill:#7C3AED}
+    .v{font:800 15px system-ui,sans-serif;fill:#0E9F6E}
+    .l{font:500 12px system-ui,sans-serif;fill:#334155}
+  </style>
+
+  <defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="7.5" refY="5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#7C3AED"/></marker>
+    <marker id="ahs" markerWidth="10" markerHeight="10" refX="2.5" refY="5" orient="auto">
+      <path d="M10 0 L0 5 L10 10 z" fill="#7C3AED"/></marker>
+  </defs>
+
+  <text class="t" x="16" y="28">Joint-line convergence angle (JLCA)</text>
+  <text class="s" x="16" y="46">Coronal knee — femoral vs tibial joint line</text>
+  <ellipse class="bone" cx="150.0" cy="132.0" rx="30.0" ry="34.0"/>
+  <ellipse class="bone" cx="214.0" cy="132.0" rx="30.0" ry="34.0"/>
+  <ellipse class="bone" cx="182.0" cy="250.0" rx="78.0" ry="28.0"/>
+  <line class="A" x1="104.0" y1="172.0" x2="250.0" y2="190.0"/>
+  <line class="B" x1="104.0" y1="214.0" x2="250.0" y2="196.0"/>
+  <path class="arc" d="M218.8 186.1 A56 56 0 0 0 218.8 199.9"/>
+  <circle class="ptl" cx="104.0" cy="172.0" r="4"/>
+  <circle class="ptl" cx="104.0" cy="214.0" r="4"/>
+  <text class="v" x="208.3" y="189.0" text-anchor="end">≈1–2°</text>
+  <text class="lA" x="104.0" y="162.0" text-anchor="start">femoral joint line</text>
+  <text class="lB" x="104.0" y="232.0" text-anchor="start">tibial joint line</text>
+  <text class="s" x="16" y="346">Convergence of femoral and tibial joint lines (exaggerated).</text>
+</svg>

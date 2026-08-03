@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 372" width="380" height="372">
+  <rect class="bg" x="0" y="0" width="380" height="372"/>
+  <style>
+    .bg{fill:#ffffff}
+    .bone{fill:#ECE3D0;stroke:#A9946A;stroke-width:2;stroke-linejoin:round}
+    .bone2{fill:#F5EFE1;stroke:#C3B48E;stroke-width:1.6;stroke-linejoin:round}
+    .A{stroke:#2563EB;stroke-width:3;fill:none;stroke-linecap:round}
+    .B{stroke:#DC2626;stroke-width:3;fill:none;stroke-linecap:round}
+    .C{stroke:#94A3B8;stroke-width:1.6;stroke-dasharray:6 4;fill:none}
+    .arc{stroke:#0E9F6E;stroke-width:2.6;fill:none}
+    .dist{stroke:#7C3AED;stroke-width:2.6;fill:none}
+    .ptl{fill:#334155;stroke:#fff;stroke-width:1.5}
+    .t{font:700 15px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;fill:#0F172A}
+    .s{font:400 11px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;fill:#64748B}
+    .lA{font:600 12px system-ui,sans-serif;fill:#2563EB}
+    .lB{font:600 12px system-ui,sans-serif;fill:#DC2626}
+    .lC{font:600 12px system-ui,sans-serif;fill:#7C3AED}
+    .v{font:800 15px system-ui,sans-serif;fill:#0E9F6E}
+    .l{font:500 12px system-ui,sans-serif;fill:#334155}
+  </style>
+
+  <defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="7.5" refY="5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#7C3AED"/></marker>
+    <marker id="ahs" markerWidth="10" markerHeight="10" refX="2.5" refY="5" orient="auto">
+      <path d="M10 0 L0 5 L10 10 z" fill="#7C3AED"/></marker>
+  </defs>
+
+  <text class="t" x="16" y="28">Acetabular version (anteversion)</text>
+  <text class="s" x="16" y="46">Transverse slice — anterior is up</text>
+  <circle class="bone" cx="108.0" cy="196.0" r="26.0"/>
+  <circle class="bone" cx="272.0" cy="196.0" r="26.0"/>
+  <path class="bone" d="M272 150 Q334 152 330 196 Q332 240 300 234 L306 222 Q318 196 314 174 Q308 158 278 160 Z"/>
+  <line class="A" x1="108.0" y1="196.0" x2="272.0" y2="196.0"/>
+  <line class="B" x1="300.0" y1="234.0" x2="272.0" y2="150.0"/>
+  <line class="C" x1="300.0" y1="234.0" x2="300.0" y2="134.0"/>
+  <path class="arc" d="M300.0 168.0 A66 66 0 0 0 279.1 171.4"/>
+  <circle class="ptl" cx="300.0" cy="234.0" r="4.5"/>
+  <circle class="ptl" cx="272.0" cy="150.0" r="4.5"/>
+  <circle class="ptl" cx="108.0" cy="196.0" r="4"/>
+  <circle class="ptl" cx="272.0" cy="196.0" r="4"/>
+  <text class="v" x="236.0" y="164.0" text-anchor="start">≈18°</text>
+  <text class="lA" x="150.0" y="186.0" text-anchor="start">line G</text>
+  <text class="lB" x="310.0" y="138.0" text-anchor="start">rim line</text>
+  <text class="s" x="150.0" y="330.0" text-anchor="start">anterior ↑   posterior ↓</text>
+  <text class="s" x="16" y="358">Rim line vs the perpendicular to the inter-head line.</text>
+</svg>

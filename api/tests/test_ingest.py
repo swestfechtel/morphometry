@@ -8,7 +8,7 @@ from pydicom.dataset import FileDataset, FileMetaDataset
 from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, generate_uid
 
 from morphometry.image_io import Image
-from api.ingest.dicom import _materialize, _split_volume
+from api.ingest.dicom import _materialize, _orient_superoinferior, _split_volume
 
 
 def _write_dicom_series(directory: Path, n_slices: int = 18, rows: int = 32, cols: int = 32) -> None:
@@ -145,3 +145,27 @@ def test_split_volume_returns_three_regions_summing_to_input():
     z = [regions[r].array.shape[2] for r in ("hip", "knee", "ankle")]
     assert all(n > 0 for n in z), z          # no empty sub-volume (the old unpacking bug)
     assert sum(z) == 30                        # partitions the full stack
+
+
+def test_orient_superoinferior_leaves_correct_volume_unchanged():
+    """A hip-first (superior-first) volume must not be flipped."""
+    volume = _stacked_volume()
+    oriented = _orient_superoinferior(volume)
+    np.testing.assert_array_equal(oriented.array, volume.array)
+
+
+def test_orient_superoinferior_flips_upside_down_volume():
+    """An ankle-first (upside-down) volume is reversed so hip lands at low z."""
+    correct = _stacked_volume().array
+    flipped = Image.from_nibabel(nib.Nifti1Image(correct[:, :, ::-1].copy(), np.eye(4)))
+
+    oriented = _orient_superoinferior(flipped)
+    # reversing the upside-down volume reproduces the correctly-oriented one
+    np.testing.assert_array_equal(oriented.array, correct)
+    # affine is kept (stays LPI) so downstream re-transforms remain no-ops
+    np.testing.assert_array_equal(oriented.affine, flipped.affine)
+    # and the split now puts the large hip footprint at low z
+    regions = _split_volume(oriented)
+    hip_area = np.count_nonzero(regions["hip"].array)
+    ankle_area = np.count_nonzero(regions["ankle"].array)
+    assert hip_area > ankle_area, (hip_area, ankle_area)

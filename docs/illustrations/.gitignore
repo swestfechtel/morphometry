@@ -1,0 +1,8 @@
+# Generated 3D renders from plot_subchondral_3d.py — large and fully regenerable
+# from the script + sample data, so don't commit them (the schematic SVGs/PDFs
+# are the committed didactic set).
+subchondral_distance_3d_*.png
+subchondral_distance_3d_*.html
+
+# Batch case gallery (render_case_gallery.py) — inspection artifacts, regenerable
+cases/

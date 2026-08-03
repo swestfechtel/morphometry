@@ -142,6 +142,9 @@ export default async function page({params,}: {params: Promise<{slug: string}>})
 
         return (
             <div>
+                {/* The torsion view renders its own details panel beside the viewer, so the
+                    header is only shown for other examination types. */}
+                { examination.type !== 'torsion' &&
                 <div className="bg-white dark:bg-gray-700 shadow sticky top-4 z-40 w-full mx-auto px-4 py-6">
                     <h1 className="text-4xl font-bold text-gray-800 dark:text-white">Examination Details</h1>
                     <p className="text-lg text-gray-700 dark:text-gray-200 mt-2 px-2 py-1">
@@ -167,6 +170,7 @@ export default async function page({params,}: {params: Promise<{slug: string}>})
                     </span>
                     </p>
                 </div>
+                }
                 <div className="min-h-screen bg-white dark:bg-gray-800">
                     { examination.type === 'torsion' &&
                     <TorsionExaminationComponent examination={examination}/>

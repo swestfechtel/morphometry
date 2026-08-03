@@ -16,6 +16,8 @@ from matplotlib.figure import Figure
 
 from morphometry.image_io import Image, Segmentation
 
+from api.domain.masks import combine_region_masks
+
 
 def encode_figure(layer: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]) -> str:
     """Render one axial slice (optionally with a segmentation overlay) to a base64 PNG."""
@@ -54,10 +56,7 @@ def encode_torsion_images(transformed_image: Image, hip_mask: Segmentation, knee
     with multiprocessing.Pool(pool_size) as pool:
         image_b64 = pool.map(encode_figure, image_layers)
 
-    relabelled_ankle = ankle_mask.array.copy()
-    relabelled_ankle = np.where(relabelled_ankle == 2, 3, relabelled_ankle)
-    relabelled_ankle = np.where(relabelled_ankle == 1, 2, relabelled_ankle)
-    segmented = np.concatenate((hip_mask.array, knee_mask.array, relabelled_ankle), axis=2)
+    segmented = combine_region_masks(hip_mask, knee_mask, ankle_mask)
     pairs = [(image_layers[i], segmented[:, :, i]) for i in range(len(image_layers))]
 
     with multiprocessing.Pool(pool_size) as pool:

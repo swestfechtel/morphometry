@@ -18,7 +18,7 @@ from api.db.engine import session_scope
 from api.deps import require_api_key
 from api.errors import DomainError
 from api.logging_config import configure_logging
-from api.routers import examinations, health, jobs, uploads
+from api.routers import examinations, health, jobs, uploads, volumes
 from api.schemas.enums import JobState
 from api.schemas.errors import ErrorResponse
 
@@ -56,6 +56,9 @@ def create_app() -> FastAPI:
         allow_credentials=not allow_all,  # '*' + credentials is invalid
         allow_methods=["*"],
         allow_headers=["*"],
+        # Expose range headers so the browser/Cornerstone loader can stream the
+        # cross-origin .nii.gz volumes with byte-range (206) requests.
+        expose_headers=["Content-Range", "Accept-Ranges", "Content-Length"],
     )
 
     @app.exception_handler(DomainError)
@@ -71,6 +74,9 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     for router in (examinations.router, uploads.router, jobs.router):
         app.include_router(router, dependencies=[Depends(require_api_key)])
+    # Volume streaming uses its own header-or-query-param auth (require_volume_access),
+    # so it is not wrapped by the header-only require_api_key dependency.
+    app.include_router(volumes.router)
 
     return app
 

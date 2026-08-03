@@ -651,6 +651,31 @@ def calculate_min_distance_between_femoral_head_and_acetabulum(segmentation_mask
 
     return calculate_min_distance_between_point_clouds(femoral_head_points, acetabulum_points)
 
+def _physical_distances_from_point(image: Image, voxels: np.ndarray, ref_index: np.ndarray) -> np.ndarray:
+    """
+    Euclidean physical (mm) distance from each voxel index to a reference index.
+
+    Distances are measured in physical space so they are correct under anisotropic
+    voxel spacing. For nibabel images the index->physical map is the affine's linear
+    block, so the whole set is transformed in one vectorised matrix product (the
+    translation cancels in a difference); other backends fall back to per-voxel
+    ``transform_index_to_physical_point``.
+    :param image: The Image/Segmentation providing the index<->physical transform.
+    :param voxels: An (N, 3) array of integer voxel indices to measure.
+    :param ref_index: The reference point in index (voxel) coordinates.
+    :return: An (N,) array of physical distances (mm) from each voxel to ``ref_index``.
+    """
+    voxels = np.asarray(voxels, dtype=float)
+    ref_index = np.asarray(ref_index, dtype=float)
+    if getattr(image, 'type', None) == 'nibabel':
+        linear = np.asarray(image.affine)[:3, :3]          # index-delta -> physical-delta
+        offsets_phys = (voxels - ref_index) @ linear.T
+        return np.linalg.norm(offsets_phys, axis=1)
+    ref_phys = np.asarray(image.transform_index_to_physical_point(ref_index), dtype=float)
+    voxels_phys = np.array([image.transform_index_to_physical_point(v) for v in voxels])
+    return np.linalg.norm(voxels_phys - ref_phys, axis=1)
+
+
 def _sample_cone_directions(axis: np.ndarray, n_rays: int, cone_angle: float) -> np.ndarray:
     """
     Sample unit direction vectors evenly within a cone around a central axis.
@@ -696,6 +721,7 @@ def _subchondral_distance_ray_tracing(image: Image, fhc_index: np.ndarray, fhc_r
                                       femur_mask: np.ndarray, acetabulum_mask: np.ndarray,
                                       n_rays: int = 200, cone_angle: float = 45.0,
                                       ray_length_factor: float = 3.0,
+                                      acetabulum_radius_factor: float | None = 1.5,
                                       plot: bool | plt.Axes | pv.Plotter = False) -> Tuple[float, float, float, float, np.ndarray, np.ndarray, np.ndarray]:
     """
     Measure the subchondral femoral-head-to-acetabulum distance by ray tracing.
@@ -708,6 +734,14 @@ def _subchondral_distance_ray_tracing(image: Image, fhc_index: np.ndarray, fhc_r
     (mm) space. All cone/direction geometry is done in physical space so the result
     is correct under anisotropic voxel spacing; only ray endpoints are converted to
     index space for the Bresenham walk.
+
+    The ``acetabulum_mask`` is typically a whole-pelvis label (the MRI acetabulum
+    label / the CT hip-bone label both include the iliac wing), so its raw centroid
+    sits far superiorly in the ilium and tilts the cone axis, over-sampling the
+    acetabular roof. ``acetabulum_radius_factor`` restricts the mask to the
+    peri-acetabular region — voxels within that many femoral-head radii of the FHC —
+    before the centroid and hit search, dropping the wing so the cone centres on the
+    bone that actually cups the head. Pass ``None`` to disable and use the full mask.
     :param image: The Image/Segmentation providing index<->physical transforms.
     :param fhc_index: The femoral head center in index (voxel) coordinates.
     :param fhc_radius_index: The femoral head radius in index (voxel) units.
@@ -716,6 +750,8 @@ def _subchondral_distance_ray_tracing(image: Image, fhc_index: np.ndarray, fhc_r
     :param n_rays: The number of rays to cast within the cone.
     :param cone_angle: The half-angle of the cone in degrees.
     :param ray_length_factor: Ray length as a multiple of the femoral head radius (mm).
+    :param acetabulum_radius_factor: Keep only acetabulum voxels within this many
+        femoral-head radii of the FHC (physical distance); ``None`` uses the full mask.
     :param plot: A matplotlib Axes / PyVista Plotter to overlay the rays on, or False.
     :return: A tuple ``(mean, std, min, max, distances, exit_points, hit_points)`` where
         the distances are in mm and the exit/hit point arrays are (K, 3) physical coordinates
@@ -730,10 +766,22 @@ def _subchondral_distance_ray_tracing(image: Image, fhc_index: np.ndarray, fhc_r
     fhc_radius_mm = np.linalg.norm(radius_surface_phys - fhc_phys)
     ray_length_mm = ray_length_factor * fhc_radius_mm
 
-    # cone axis: FHC -> acetabulum centroid, in physical space
     acetabulum_voxels = np.argwhere(acetabulum_mask)
     if acetabulum_voxels.size == 0:
         raise ValueError('Acetabulum mask is empty; cannot measure subchondral distance')
+
+    # restrict the (whole-pelvis) acetabulum label to the peri-acetabular region so
+    # the iliac wing does not drag the centroid / cone axis superiorly (see above)
+    if acetabulum_radius_factor is not None and np.isfinite(acetabulum_radius_factor):
+        distances_from_fhc = _physical_distances_from_point(image, acetabulum_voxels, fhc_index)
+        keep = distances_from_fhc <= acetabulum_radius_factor * fhc_radius_mm
+        if keep.any():  # guard against a factor so small it empties the mask
+            acetabulum_voxels = acetabulum_voxels[keep]
+            restricted = np.zeros_like(acetabulum_mask)
+            restricted[acetabulum_voxels[:, 0], acetabulum_voxels[:, 1], acetabulum_voxels[:, 2]] = 1
+            acetabulum_mask = restricted
+
+    # cone axis: FHC -> peri-acetabular centroid, in physical space
     acetabulum_centroid_phys = np.asarray(image.transform_index_to_physical_point(acetabulum_voxels.mean(axis=0)), dtype=float)
     axis = acetabulum_centroid_phys - fhc_phys
     if np.linalg.norm(axis) < 1e-6:
@@ -818,6 +866,7 @@ def _subchondral_distance_ray_tracing(image: Image, fhc_index: np.ndarray, fhc_r
 def calculate_subchondral_distance_ray_tracing(image: Segmentation, side: str = 'left', femur_label: int = 1,
                                                acetabulum_label: int = 3, isotropic: bool = False,
                                                n_rays: int = 200, cone_angle: float = 45.0,
+                                               acetabulum_radius_factor: float | None = 1.5,
                                                plot: bool | plt.Axes | pv.Plotter = False) -> Tuple[float, float, float, float, np.ndarray, np.ndarray, np.ndarray]:
     """
     Measure the subchondral femoral-head-to-acetabulum distance on an MRI hip segmentation.
@@ -834,6 +883,9 @@ def calculate_subchondral_distance_ray_tracing(image: Segmentation, side: str = 
     :param isotropic: Whether the image has isotropic voxels.
     :param n_rays: The number of rays to cast within the cone.
     :param cone_angle: The half-angle of the cone in degrees.
+    :param acetabulum_radius_factor: Restrict the acetabulum label to voxels within this
+        many femoral-head radii of the FHC before aiming the cone, so a whole-pelvis label
+        does not bias the axis toward the iliac wing; ``None`` uses the full mask.
     :param plot: A matplotlib Axes / PyVista Plotter to overlay the rays on, or False.
     :return: A tuple ``(mean, std, min, max, distances, exit_points, hit_points)`` in mm.
     """
@@ -844,10 +896,12 @@ def calculate_subchondral_distance_ray_tracing(image: Segmentation, side: str = 
     acetabulum_mask = np.where(image.array == acetabulum_label, 1, 0)
 
     return _subchondral_distance_ray_tracing(image, fhc_idx, r_idx, femur_mask, acetabulum_mask,
-                                             n_rays=n_rays, cone_angle=cone_angle, plot=plot)
+                                             n_rays=n_rays, cone_angle=cone_angle,
+                                             acetabulum_radius_factor=acetabulum_radius_factor, plot=plot)
 
 def calculate_subchondral_distance_ray_tracing_ct(femur_image: Segmentation, side: str = 'left', femur_label: int = 1,
                                                   acetabulum_label: int = 7, n_rays: int = 200, cone_angle: float = 45.0,
+                                                  acetabulum_radius_factor: float | None = 1.5,
                                                   plot: bool | plt.Axes | pv.Plotter = False) -> Tuple[float, float, float, float, np.ndarray, np.ndarray, np.ndarray]:
     """
     Measure the subchondral femoral-head-to-acetabulum distance on a whole-leg CT segmentation.
@@ -863,6 +917,9 @@ def calculate_subchondral_distance_ray_tracing_ct(femur_image: Segmentation, sid
     :param acetabulum_label: The label of the hip bone (acetabulum) in the segmentation mask.
     :param n_rays: The number of rays to cast within the cone.
     :param cone_angle: The half-angle of the cone in degrees.
+    :param acetabulum_radius_factor: Restrict the hip-bone label to voxels within this many
+        femoral-head radii of the FHC before aiming the cone, so the iliac wing does not bias
+        the axis; ``None`` uses the full mask.
     :param plot: A matplotlib Axes / PyVista Plotter to overlay the rays on, or False.
     :return: A tuple ``(mean, std, min, max, distances, exit_points, hit_points)`` in mm.
     """
@@ -877,7 +934,8 @@ def calculate_subchondral_distance_ray_tracing_ct(femur_image: Segmentation, sid
     acetabulum_mask = np.where(femur_image.array == acetabulum_label, 1, 0)
 
     return _subchondral_distance_ray_tracing(femur_image, fhc_idx, r_idx, femur_mask, acetabulum_mask,
-                                             n_rays=n_rays, cone_angle=cone_angle, plot=plot)
+                                             n_rays=n_rays, cone_angle=cone_angle,
+                                             acetabulum_radius_factor=acetabulum_radius_factor, plot=plot)
 
 def calculate_cartilage_thickness_knn(segmentation_mask: np.ndarray, cartilage_label: int = 2) -> Tuple[float, float, float, float]:
     """

@@ -7,7 +7,7 @@ dicts) with ``Depends``-injected dependencies, so they can be overridden in test
 from collections.abc import Iterator
 
 from fastapi import Depends, HTTPException, Security, status
-from fastapi.security import APIKeyHeader
+from fastapi.security import APIKeyHeader, APIKeyQuery
 from sqlmodel import Session
 
 from api import runtime
@@ -16,6 +16,7 @@ from api.storage.store import Store
 from api.tasks.queue import TaskQueue, make_queue
 
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+_api_key_query = APIKeyQuery(name="api_key", auto_error=False)
 
 
 def get_settings() -> Settings:
@@ -44,4 +45,22 @@ def require_api_key(api_key: str | None = Security(_api_key_header)) -> None:
     if not settings.auth_enabled:
         return
     if api_key is None or api_key not in settings.api_keys:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing API key")
+
+
+def require_volume_access(header_key: str | None = Security(_api_key_header),
+                          query_key: str | None = Security(_api_key_query)) -> None:
+    """Auth for the volume-streaming endpoints: accept the key from the X-API-Key
+    header OR an ``?api_key=`` query param.
+
+    Cornerstone's NIfTI loader fetches the volume URL itself and cannot easily
+    attach a custom header, so these endpoints also accept a query-param token.
+    The header is preferred; the query param is the loader fallback. No-op when
+    auth is disabled (empty ``api_keys``).
+    """
+    settings = runtime.get_settings()
+    if not settings.auth_enabled:
+        return
+    key = header_key or query_key
+    if key is None or key not in settings.api_keys:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing API key")

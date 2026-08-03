@@ -1,0 +1,365 @@
+\documentclass[10pt]{article}
+
+% --- Encoding & fonts -------------------------------------------------------
+\usepackage[utf8]{inputenc}   % accented author names (Tönnis, Reikerås, ...)
+\usepackage[T1]{fontenc}
+\usepackage{textcomp}         % \textdegree
+\usepackage{amsmath}          % \text, \tfrac
+\usepackage{lmodern}
+
+% --- Page geometry: landscape to fit the five wide columns ------------------
+\usepackage[a4paper,landscape,margin=1.2cm]{geometry}
+
+% --- Tables -----------------------------------------------------------------
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{graphicx}         % illustration figures (vector PDFs)
+\graphicspath{{illustrations/pdf/}}
+\usepackage{xcolor}
+\definecolor{refblue}{HTML}{2563EB}
+\definecolor{refred}{HTML}{DC2626}
+\definecolor{refgreen}{HTML}{0E9F6E}
+\definecolor{refpurple}{HTML}{7C3AED}
+\newcommand{\incl}[1]{\includegraphics[width=8.4cm,height=6.4cm,keepaspectratio]{#1}}
+
+% Left-aligned, ragged-right fixed-width paragraph column.
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.15}
+
+\title{Morphometric Parameter Reference Table}
+\date{}
+
+\begin{document}
+\maketitle
+
+A companion to \texttt{reader\_measurement\_guide.md}. For each parameter measured by
+the pipeline this table gives the textbook definition, the clinical rationale, a
+step-by-step summary of how the algorithm implements it (condensed from the guide),
+and a normal-adult reference range with a literature citation.
+
+\subsection*{Important caveats}
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt,topsep=2pt]
+  \item Reference ranges are \textbf{method- and modality-dependent}. Where the
+        algorithm's landmark choice materially shifts the expected value (most
+        strongly for femoral and tibial torsion), this is flagged in the range
+        column. Always interpret the algorithm's output against a range obtained
+        with a comparable technique.
+  \item Distances are in millimetres in patient (world) coordinates; angles are
+        unsigned degrees unless a sign convention is stated.
+  \item ``Side'' is the \emph{image} side, not the patient side (see guide \S0.2).
+\end{itemize}
+
+Citations are keyed [n] to the References section.
+
+\begin{footnotesize}
+\begin{longtable}{L{2.5cm} L{4.0cm} L{4.0cm} L{9.2cm} L{5.4cm}}
+\toprule
+\textbf{Parameter} & \textbf{Textbook definition} & \textbf{Clinical rationale} &
+\textbf{Implementation} & \textbf{Reference range} \\
+\midrule
+\endfirsthead
+
+\multicolumn{5}{l}{\emph{\ldots continued}} \\
+\toprule
+\textbf{Parameter} & \textbf{Textbook definition} & \textbf{Clinical rationale} &
+\textbf{Implementation} & \textbf{Reference range} \\
+\midrule
+\endhead
+
+\midrule
+\multicolumn{5}{r}{\emph{continued on next page\ldots}} \\
+\endfoot
+
+\bottomrule
+\endlastfoot
+
+% --- 1. Femoral torsion ----------------------------------------------------
+\textbf{Femoral torsion (anteversion)} &
+Transverse-plane angle between the femoral neck axis (proximal reference) and the
+posterior condylar line of the distal femur (distal reference). &
+Quantifies rotational deformity of the femur; excessive anteversion or retroversion
+contributes to patellofemoral instability, gait abnormality, in-/out-toeing, and
+femoroacetabular impingement, and guides derotation osteotomy planning. &
+(1) Fit a sphere to the femoral head $\rightarrow$ centre and radius \emph{r}.
+(2) \textbf{Proximal line, two methods.} \emph{Lee:} on the first inferior slice
+where the femur is a single outline and a circle of radius $2\cdot r$ still hits
+bone, keep outline points in a ring ${\approx}0.9\text{--}1.1\cdot r$ near the neck
+centre of mass and fit a line through them and the head centre. \emph{Murphy:} find
+the slice where the lesser trochanter is most prominent; the neck base is the shaft
+cross-section centroid there; the line runs head centre $\rightarrow$ neck base.
+(3) \textbf{Distal line:} on the slice with the largest convex condylar bone area,
+the tangent to the two posterior condyles. (4) Measure each line's angle to the
+medial--lateral axis in the transverse plane, fold to 0--90\textdegree{}, and add
+(opposite AP tilt) or subtract (same tilt). Both Lee and Murphy values are reported. &
+Strongly method-dependent. \emph{Lee} (proximal neck landmark) $\approx$
+\textbf{8--15\textdegree{}} (CT 11\textdegree{}$\pm$11\textdegree{}); \emph{Murphy}
+(distal neck landmark) $\approx$ \textbf{18--28\textdegree{}}
+(CT 28\textdegree{}$\pm$13\textdegree{}) --- the two differ by ${\sim}17$\textdegree{}
+on the same hip. Classic mixed-method normal $\approx$ 10--15\textdegree{}
+(broad 8--20\textdegree{}); retroversion $<$5\textdegree{}, excessive $>$20\textdegree{}.
+CT and MRI agree closely. [1][2] \\
+\midrule
+
+% --- 2. Tibial torsion -----------------------------------------------------
+\textbf{Tibial torsion} &
+Transverse-plane angle between the posterior condylar line of the proximal tibia and
+the distal trans-malleolar / tibia--fibula line. &
+Quantifies rotational deformity of the tibia; excessive external torsion causes
+out-toeing and patellofemoral malalignment; relevant to derotation osteotomy and to
+interpreting overall lower-limb torsional profile. &
+(1) \textbf{Proximal line:} as for the femoral condylar line (\S1.2) but on the tibia
+--- on the proximal tibial slice with the largest convex bone area, the tangent to the
+two posterior plateau aspects. (2) \textbf{Distal line:} on the slice with the largest
+tibial (equivalent-ellipse) diameter at the ankle, connect the tibia centroid to the
+fibula centroid. (3) Measure each line's angle to the medial--lateral axis, fold to
+0--90\textdegree{}, add/subtract by AP tilt direction. &
+External (positive) and governed by the \emph{distal} landmark: trans-malleolar axis
+$\approx$ \textbf{40\textdegree{}$\pm$9\textdegree{}}; bimalleolar axis $\approx$
+\textbf{20--30\textdegree{}}. Whole-limb CT cohorts $\approx$ 33--35\textdegree{}. This
+pipeline uses tibia--fibula centroids (closer to the trans-malleolar family). MRI is a
+valid CT substitute. [3][4] \\
+\midrule
+
+% --- 3. Knee rotation angle ------------------------------------------------
+\textbf{Knee rotation angle} &
+Transverse-plane angle between the posterior condylar line of the distal femur and the
+posterior condylar line of the proximal tibia (rotational femoro-tibial mismatch). &
+Captures rotational alignment of the knee joint itself; relevant to patellofemoral
+tracking and to component rotation in arthroplasty planning. &
+(1) \textbf{Femoral line} as in femoral torsion \S1.2. (2) \textbf{Tibial line} as in
+tibial torsion \S2.1, both taken at the knee. (3) Transverse-plane angle between them,
+folded to 0--90\textdegree{} and combined by AP tilt direction; an exact 180\textdegree{}
+result is reset to 0\textdegree{}. &
+No standardized normative range for this exact bony pairing exists in the literature;
+the posterior condylar lines are near-parallel in extension, so the isolated angle is
+small (single-digit degrees). Nearest published surrogates (different reference lines):
+EOS femoro-tibial rotation 2.3\textdegree{}$\pm$7.2\textdegree{}; CT tibiofemoral
+rotation ${\sim}4.1$\textdegree{}$\pm$5.3\textdegree{}. State your reference lines
+explicitly. [5][6] \\
+\midrule
+
+% --- 4. CCD angle ----------------------------------------------------------
+\textbf{CCD angle (caput--collum--diaphyseal / neck--shaft)} &
+Angle between the femoral shaft axis and the femoral neck axis. &
+Used to detect deformities such as coxa valga and coxa vara, and to plan hip
+replacement or osteosynthesis after proximal femur fractures. &
+(1) Fit sphere to femoral head to determine its centre. (2) Define femoral neck centre
+as the centroid of the femoral voxels in a hollow shell (between \emph{r} and
+$1.2\cdot r$) that lie both distal and lateral to the head centre; neck axis = head
+centre $\rightarrow$ neck centre. (3) Determine the shaft axis from the distal-slice
+centroid of the proximal femur to the proximal-slice centroid of the knee femur (or,
+without a knee image, up to the greater-trochanter region). (4) Compute the angle
+between shaft and neck axes, reported as the obtuse value; also a coronal-plane
+projection (AP component zeroed). &
+Adult normal $\approx$ \textbf{126--132\textdegree{}} (rotation-corrected CT:
+M 129.6\textdegree{}$\pm$5.9\textdegree{}, F 131.9\textdegree{}$\pm$6.8\textdegree{});
+teaching range 120--135\textdegree{}. Coxa vara $<$120\textdegree{}, coxa valga
+$>$135\textdegree{}. Reference plane and rotation correction shift the value by a few
+degrees. [7] \\
+\midrule
+
+% --- 5. Bone length --------------------------------------------------------
+\textbf{Bone length (femur / tibia / whole leg)} &
+Straight-line (Euclidean) distance in mm between the proximal-most and distal-most
+bone centroids. &
+Quantifies limb and segment length for leg-length-discrepancy assessment and
+surgical/orthotic planning. &
+(1) \textbf{Proximal point:} centre of mass on the most proximal (superior) bone slice.
+(2) \textbf{Distal point:} centroid of the most distal slice (femur / whole leg), or
+--- for the tibia --- the centroid of the distal articulating surface (plafond slice,
+the most distal slice before the cross-sectional area changes abruptly), not the
+malleolus tip. (3) 3D distance between the two centroids in patient coordinates (mm),
+accounting for slice spacing. &
+Highly sex- and population-dependent. Radiographic (standing, full-length): femur
+$\approx$ \textbf{500 mm} (range ${\sim}393\text{--}584$), tibia $\approx$
+\textbf{390 mm} (range ${\sim}308\text{--}465$), femorotibial ratio ${\sim}1.28{:}1$.
+Cadaveric ``maximum length'' runs ${\sim}5\text{--}6$ cm shorter than radiographic
+length --- definitions are not interchangeable. [8] \\
+\midrule
+
+% --- 6. Acetabular version -------------------------------------------------
+\textbf{Acetabular version (anteversion)} &
+Transverse-plane angle describing how anteverted the acetabular opening is, on a single
+transverse slice. &
+Abnormal acetabular version (retroversion or excessive anteversion) is associated with
+femoroacetabular impingement, instability, and hip osteoarthritis. &
+(1) Locate both femoral head centres (sphere fit); the measurement slice is midway
+between them. (2) On that slice, per acetabulum, find the posterior rim point p1 (most
+lateral bone in the posterior portion) and anterior rim point p2 (most lateral bone in
+the anterior portion). (3) Build reference line G joining the two head centres.
+(4) Construct the perpendicular to G through p1; the version is the angle between the
+rim line (p1 $\rightarrow$ p2) and that perpendicular. &
+$\approx$ \textbf{15\textdegree{}$\pm$6\textdegree{}}; normal band roughly
+\textbf{10--25\textdegree{}} ($<$10\textdegree{} too little, $>$25\textdegree{} too much,
+both linked to OA). CT cohort means cluster 16--21\textdegree{}, a few degrees higher in
+women. Strongly plane-/modality-dependent. [9] \\
+\midrule
+
+% --- 7. Center-edge angle --------------------------------------------------
+\textbf{Center-edge (CE) angle of Wiberg (LCEA)} &
+Coronal-plane angle between a vertical reference through the femoral head centre and the
+line from the head centre to the lateral edge of the acetabular roof. &
+Primary measure of lateral acetabular coverage of the femoral head; low values indicate
+hip dysplasia (undercoverage), high values pincer-type overcoverage. &
+(1) Locate both femoral head centres (sphere fit) and reference line G joining them; the
+vertical reference is the line through the head centre perpendicular to G, directed
+superiorly. (2) Lateral acetabular edge = the most lateral (then most superior) bony
+point of the acetabular roof above the head (search starts ${\sim}1.1\text{--}1.5\cdot r$
+above the head centre). (3) CE angle = angle between the vertical reference and the
+head-centre $\rightarrow$ lateral-edge line, in the coronal plane. &
+Mean \textbf{33.6\textdegree{}} (2.5th--97.5th pct 18.1--48.0\textdegree{}). Thresholds:
+$<$20\textdegree{} dysplasia, 20--25\textdegree{} borderline, \textbf{25--40\textdegree{}
+normal}, $>$40\textdegree{} overcoverage (pincer FAI). Underestimated on plain films vs
+3D CT. [10] \\
+\midrule
+
+% --- 8. Femoral offset -----------------------------------------------------
+\textbf{Femoral offset} &
+Perpendicular distance (mm) from the femoral head centre to the femoral shaft axis. &
+Determines the hip abductor moment arm; restoring native offset in total hip
+arthroplasty is important for abductor strength, stability, and wear. &
+(1) Femoral head centre (sphere fit). (2) Femoral shaft axis (same construction as CCD
+\S4.1 step 3). (3) Drop a perpendicular from the head centre onto the shaft axis;
+offset = its length in mm in patient coordinates. (A projected variant zeroes the AP
+component for a pure coronal measurement; default is full 3D.) &
+Mean $\approx$ \textbf{43 mm} (43.0$\pm$6.8 mm; range ${\sim}24\text{--}61$ mm). Larger
+in men, scales with femur size; plain radiographs underestimate vs CT. [11] \\
+\midrule
+
+% --- 9. HKA ----------------------------------------------------------------
+\textbf{Hip--knee--ankle (HKA) angle} &
+Coronal-plane mechanical-axis angle at the knee between the femoral-head$\rightarrow$knee
+segment and the knee$\rightarrow$ankle segment. \textbf{This pipeline reports deviation
+from straight (0\textdegree{} = perfectly straight), not the 180\textdegree{}-based
+convention.} &
+The principal measure of coronal limb alignment (varus/valgus); central to osteotomy and
+arthroplasty planning and to osteoarthritis risk assessment. &
+(1) \textbf{Hip point:} femoral head centre (sphere fit). (2) \textbf{Knee point:} tibia
+centre of mass in the knee region. (3) \textbf{Ankle point:} centroid of the distal
+tibial articulating surface (plafond slice). (4) Project hip$\rightarrow$knee and
+knee$\rightarrow$ankle vectors to the coronal plane (AP component zeroed) and report the
+angle between them; a straight axis $\approx$ 0\textdegree{}, varus/valgus increases it. &
+Neutral $\approx$ \textbf{0\textdegree{}} deviation; mechanically-normal limbs run to
+${\sim}\textbf{1.5\textdegree{} varus}$ (constitutional aHKA
+1.14\textdegree{}$\pm$1.85\textdegree{} varus; normal band ${\sim}1$\textdegree{}
+valgus--3.2\textdegree{} varus). Equivalent to conventional HKA $\approx$
+178.5\textdegree{}$\pm$2\textdegree{} (180\textdegree{} = straight; $<$180\textdegree{}
+varus, $>$180\textdegree{} valgus). General-population SD is wider (${\sim}\pm5$\textdegree{}).
+[12][13] \\
+\midrule
+
+% --- 10. JLCA --------------------------------------------------------------
+\textbf{Joint-line convergence angle (JLCA)} &
+Coronal-plane angle between the distal femoral joint line and the proximal tibial joint
+line. &
+Reflects intra-articular (cartilage/soft-tissue) contribution to coronal deformity;
+distinguishes bony from intra-articular malalignment in osteotomy planning. &
+(1) \textbf{Femoral joint line:} from transverse scanning, the two distal-most condylar
+centres (smaller-condyle centroid on the most distal two-component slice; the other from
+the most distal single-component slice), projected to the coronal plane. (2) \textbf{Tibial
+joint line:} intercondylar eminence = centroid of the most proximal tibial slice; restrict
+to the outer thirds of each plateau (lateral/medial of the eminence by $>\tfrac{2}{3}$ of
+the eminence-to-edge distance), take the most proximal point in each region (the plateau
+apices), projected to the coronal plane. (3) JLCA = angle between the two lines, folded to
+$\leq$90\textdegree{}. &
+$\approx$ \textbf{0--2\textdegree{}} (joint lines near-parallel); healthy cohort
+1.2\textdegree{}$\pm$2.7\textdegree{}. Lateral opening conventionally positive; magnitude
+rises with OA severity and laxity. [13][14] \\
+\midrule
+
+% --- 11. MAD ---------------------------------------------------------------
+\textbf{Mechanical-axis deviation (MAD)} &
+Perpendicular distance (mm) from the knee centre to the mechanical (Mikulicz) axis, in
+the coronal plane. &
+Quantifies the magnitude of coronal malalignment in millimetres; used alongside HKA to
+plan and verify deformity correction. &
+(1) Femoral head centre (sphere fit). (2) Ankle centre = centroid of the distal tibial
+articulating surface (plafond slice). (3) Mikulicz line = head centre $\rightarrow$ ankle
+centre. (4) Knee centre = tibia centre of mass in the knee region. (5) Project all three
+to the coronal plane; MAD = perpendicular distance from the knee centre to the Mikulicz
+line. \textbf{Sign:} negative for medial deviation, positive for lateral. &
+Mikulicz line normally passes ${\sim}\textbf{8 mm$\pm$7 mm medial}$ to the knee centre;
+normal commonly stated as \textbf{1--15 mm medial} ($>$15 mm medial = varus/abnormal).
+Alternative refs cite 4$\pm$2 mm medial. Physiological normal is a small medial offset,
+not zero. [15] \\
+\end{longtable}
+\end{footnotesize}
+
+\clearpage
+\section*{Illustrations}
+
+Schematic diagrams of each parameter --- the reference lines, landmarks, and the
+measured angle / distance. They are didactic, \emph{not} anatomically exact, and
+not for clinical use. Colour key:
+\textcolor{refblue}{\textbf{blue}} = proximal / first reference,
+\textcolor{refred}{\textbf{red}} = distal / second reference,
+grey dashed = construction,
+\textcolor{refgreen}{\textbf{emerald}} = measured angle,
+\textcolor{refpurple}{\textbf{purple}} = measured distance. The JLCA and
+knee-rotation angles are drawn deliberately exaggerated (their true values are
+near-parallel).
+
+% One tabular per row (each figure self-labels via its own title) so the grid
+% can break across pages — a single tabular cannot.
+\newcommand{\illrow}[1]{\begin{center}\setlength{\tabcolsep}{10pt}\begin{tabular}{ccc}#1\end{tabular}\end{center}\vspace{6pt}}
+
+\illrow{\incl{femoral_torsion} & \incl{tibial_torsion} & \incl{knee_rotation}}
+\illrow{\incl{ccd_angle} & \incl{bone_length} & \incl{acetabular_version}}
+\illrow{\incl{ce_angle} & \incl{femoral_offset} & \incl{hka_angle}}
+\illrow{\incl{jlca} & \incl{mad} &}
+
+\section*{References}
+\begin{enumerate}[leftmargin=2em,itemsep=2pt]
+  \item Schmaranzer F, Lerch TD, Siebenrock KA, et al. Differences in Femoral Torsion
+        Among Various Measurement Methods Increase in Hips With Excessive Femoral
+        Torsion. \emph{Clin Orthop Relat Res.} 2019;477(5):1073--1083.
+  \item Murphy SB, Simon SR, Kijewski PK, et al. Femoral anteversion. \emph{J Bone Joint
+        Surg Am.} 1987;69(8):1169--1176.
+  \item Jend HH, et al. CT determination of tibial torsion (trans-malleolar axis method).
+        1981. (See also Strecker W, Keppler P, Gebhard F, Kinzl L. Length and torsion of
+        the lower limb. \emph{J Bone Joint Surg Br.} 1997;79-B(6):1019--1023.)
+  \item Schneider B, Laubenberger J, et al. Measurement of femoral antetorsion and tibial
+        torsion by MR imaging. \emph{Br J Radiol.} 1997;70:575--579.
+  \item Than P, Szuper K, Somoskeöy S, et al. Geometrical values of the normal and
+        arthritic hip and knee detected with the EOS imaging system. \emph{Int Orthop.}
+        2012;36(6):1291--1297.
+  \item Lu Y, Ren X, Liu B, et al. Tibiofemoral rotation alignment in normal knee joints
+        among Chinese adults: a CT analysis. \emph{BMC Musculoskelet Disord.} 2020;21:323.
+  \item Boese CK, Jostmeier J, Oppermann J, et al. The neck-shaft angle: CT reference
+        values of 800 adult hips. \emph{Skeletal Radiol.} 2016;45(4):455--463. (See also
+        the radiographic systematic review, \emph{Skeletal Radiol.} 2016;45(1):19--28,
+        pooled 128.8\textdegree{}.)
+  \item Aitken SA. Normative Values for Femoral Length, Tibial Length, and the
+        Femorotibial Ratio in Adults Using Standing Full-Length Radiography.
+        \emph{Osteology.} 2021;1(2):86--95.
+  \item Tönnis D, Heinecke A. Acetabular and femoral anteversion: relationship with
+        osteoarthritis of the hip. \emph{J Bone Joint Surg Am.} 1999;81(12):1747--1770.
+        (Foundational CT method: Reikerås O, Bjerkreim I, Kolbenstvedt A. \emph{Acta Orthop
+        Scand.} 1983;54(1):18--23.)
+  \item Werner CMC, Ramseier LE, Ruckstuhl T, et al. Normal values of Wiberg's lateral
+        center-edge angle and Lequesne's acetabular index --- a coxometric update.
+        \emph{Skeletal Radiol.} 2012;41(11):1273--1282. (Original: Wiberg G. \emph{Acta Chir
+        Scand.} 1939.)
+  \item Noble PC, Alexander JW, Lindahl LJ, et al. The anatomic basis of femoral component
+        design. \emph{Clin Orthop Relat Res.} 1988;(235):148--165.
+  \item Lan et al. Normative distribution of the arithmetic hip--knee--ankle angle in
+        individuals with normal mechanical alignment. \emph{The Knee}, 2024 (aHKA
+        1.14\textdegree{}$\pm$1.85\textdegree{} varus; normal band 1\textdegree{}
+        valgus--3.2\textdegree{} varus).
+  \item Kura R, et al. Normative values of radiographic parameters in coronal-plane
+        lower-limb alignment in a general Japanese population (Iwaki cohort). 2025 (HKA
+        1.8\textdegree{}$\pm$5.1\textdegree{} varus; JLCA 1.2\textdegree{}$\pm$2.7\textdegree{}).
+  \item Managing intra-articular deformity in high tibial osteotomy: a narrative review.
+        \emph{J Exp Orthop.} 2020;7:64 (defines JLCA, normal ${\sim}0\text{--}2$\textdegree{},
+        lateral-opening-positive).
+  \item Paley D. \emph{Principles of Deformity Correction.} Springer, 2002 (MAD
+        ${\sim}8$ mm$\pm$7 mm medial; normal 1--15 mm medial; medial = varus, lateral =
+        valgus). See also Sabharwal S, et al. Radiological assessment of lower-limb
+        alignment. \emph{EFORT Open Rev.} 2021;6(6):487--494.
+\end{enumerate}
+
+\end{document}

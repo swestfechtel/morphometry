@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 432" width="360" height="432">
+  <rect class="bg" x="0" y="0" width="360" height="432"/>
+  <style>
+    .bg{fill:#ffffff}
+    .bone{fill:#ECE3D0;stroke:#A9946A;stroke-width:2;stroke-linejoin:round}
+    .bone2{fill:#F5EFE1;stroke:#C3B48E;stroke-width:1.6;stroke-linejoin:round}
+    .A{stroke:#2563EB;stroke-width:3;fill:none;stroke-linecap:round}
+    .B{stroke:#DC2626;stroke-width:3;fill:none;stroke-linecap:round}
+    .C{stroke:#94A3B8;stroke-width:1.6;stroke-dasharray:6 4;fill:none}
+    .arc{stroke:#0E9F6E;stroke-width:2.6;fill:none}
+    .dist{stroke:#7C3AED;stroke-width:2.6;fill:none}
+    .ptl{fill:#334155;stroke:#fff;stroke-width:1.5}
+    .t{font:700 15px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;fill:#0F172A}
+    .s{font:400 11px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;fill:#64748B}
+    .lA{font:600 12px system-ui,sans-serif;fill:#2563EB}
+    .lB{font:600 12px system-ui,sans-serif;fill:#DC2626}
+    .lC{font:600 12px system-ui,sans-serif;fill:#7C3AED}
+    .v{font:800 15px system-ui,sans-serif;fill:#0E9F6E}
+    .l{font:500 12px system-ui,sans-serif;fill:#334155}
+  </style>
+
+  <defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="7.5" refY="5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#7C3AED"/></marker>
+    <marker id="ahs" markerWidth="10" markerHeight="10" refX="2.5" refY="5" orient="auto">
+      <path d="M10 0 L0 5 L10 10 z" fill="#7C3AED"/></marker>
+  </defs>
+
+  <text class="t" x="16" y="28">Femoral offset</text>
+  <text class="s" x="16" y="46">Coronal plane — head centre to shaft axis</text>
+  <polygon class="bone" points="156.0,196.0 200.0,188.0 222.0,416.0 178.0,416.0"/>
+  <path class="bone" d="M192 176 Q232 168 222 210 Q202 206 192 196 Z"/>
+  <polygon class="bone" points="96.0,174.1 160.0,206.1 176.0,173.9 112.0,141.9"/>
+  <circle class="bone" cx="104.0" cy="158.0" r="30.0"/>
+  <line class="A" x1="171.6" y1="128.2" x2="198.0" y2="416.0"/>
+  <line class="dist" x1="104.0" y1="158.0" x2="173.8" y2="151.6" marker-start="url(#ahs)" marker-end="url(#ah)"/>
+  <circle class="ptl" cx="104.0" cy="158.0" r="4.5"/>
+  <circle class="ptl" cx="173.8" cy="151.6" r="4"/>
+  <text class="l" x="36.0" y="150.0" text-anchor="start">head centre</text>
+  <text class="lA" x="210.0" y="300.0" text-anchor="end">shaft axis</text>
+  <text class="lC" x="138.9" y="136.0" text-anchor="middle">≈43 mm</text>
+  <text class="s" x="16" y="418">Perpendicular distance from head centre to shaft axis.</text>
+</svg>

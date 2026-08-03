@@ -47,6 +47,8 @@ def test_run_torsion_success(runtime, fake_docker_run, monkeypatch):
         assert ex.torsion_values["tibial_torsion_right"] == 6.0
         assert ex.landmarks == {"femur": {}, "tibia": {}}
         assert ex.mask_paths and ex.encoded_paths["image"]
+        # the combined label mask for the Cornerstone labelmap is persisted
+        assert ex.mask_paths.get("combined") and store.abspath(ex.mask_paths["combined"]).exists()
         assert repository.get_job(s, job_id).status == "finished"
 
 

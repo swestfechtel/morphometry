@@ -25,17 +25,9 @@ whole-leg CT, plus a FastAPI service and batch-processing scripts.
 - **`scripts/`** — self-contained batch-processing scripts (hard-coded data
   paths; adapt before running elsewhere).
 - **`frontend/`** — the Next.js 15 / React 19 web UI for the API (DICOM upload,
-  job dispatch, and interactive landmark editing of results):
-
-  ```bash
-  cd frontend
-  npm install
-  npm run dev        # dev server on http://localhost:3000
-  ```
-
-  The API base URL defaults to `http://localhost:8000`; override it with the
-  `NEXT_PUBLIC_MODEL_API` env var (see `frontend/.env.example`). For local UI
-  development set the API's `MORPH_API_CORS_ALLOW_ORIGINS=http://localhost:3000`.
+  job dispatch, and interactive landmark editing of results). The torsion viewer
+  uses **Cornerstone3D** to render the NIfTI volumes directly (see "Running the
+  stack" below).
 
 Measurements operate on masks placed in **LPI** orientation; load with
 `Segmentation(...).read_image(path)` then call `transform_coordinate_system()`.
@@ -53,3 +45,71 @@ MORPH_UPDATE_GOLDEN=1 pytest      # (re)capture golden baselines
 
 Tests skip cleanly when sample data is absent. Data paths can be overridden via
 `MORPH_AUGSBURG_PA000001`, `MORPH_NAKO_SAMPLE_DIR`, `MORPH_CT_SAMPLE`.
+
+## Running the stack
+
+The full system is four cooperating processes: **Redis** (broker + durable job
+state), the **RQ worker** (loads volumes, runs the docker model images — needs
+the docker socket + the morphometry venv), the **FastAPI app**, and the
+**Next.js UI**. The worker is the only process that touches docker; the API does
+not.
+
+All Python commands run from the repo root with the venv activated. Copy the
+example env files first:
+
+```bash
+cp api/.env.example .env                       # MORPH_API_* settings
+cp frontend/.env.example frontend/.env.local   # NEXT_PUBLIC_MODEL_API (optional)
+```
+
+### 1. Redis (via Docker)
+
+There is no local `redis-server` binary; run the broker in a container. The
+default `MORPH_API_REDIS_URL` is `redis://localhost:6379/0`, so publish 6379:
+
+```bash
+# first time: create and start the container
+docker run -d --name morphometry-redis -p 6379:6379 redis:7
+
+# afterwards: just start the existing container
+docker start morphometry-redis
+
+# verify it answers
+docker exec morphometry-redis redis-cli ping     # -> PONG
+
+# stop it when done (state persists in the container)
+docker stop morphometry-redis
+```
+
+### 2. RQ worker
+
+```bash
+python -m api.tasks.worker      # one worker on the 'gpu' queue (serializes GPU jobs)
+```
+
+### 3. FastAPI app
+
+```bash
+# auth off (MORPH_API_API_KEYS unset) + allow the UI origin for the volume fetches
+MORPH_API_CORS_ALLOW_ORIGINS=http://localhost:3000 \
+  uvicorn api.main:app --host 0.0.0.0 --port 8000
+```
+
+`GET /health` is open; other endpoints require an `X-API-Key` header only when
+`MORPH_API_API_KEYS` is set. The torsion volume endpoints
+(`GET /examinations/{id}/volume/{image,mask}`) also accept the key as an
+`?api_key=` query param so the Cornerstone NIfTI loader can fetch them.
+
+### 4. Next.js UI
+
+```bash
+cd frontend
+npm install
+npm run dev:webpack    # dev server on http://localhost:3000 (NOT `npm run dev`)
+```
+
+Use `npm run dev:webpack`, **not** `npm run dev`: the Cornerstone torsion viewer
+needs web workers / WASM wired up by the `webpack()` hook in `next.config.ts`,
+which `next dev --turbopack` skips. `npm run build` always uses webpack, so
+production builds are fine. Point the UI at a non-default API with
+`NEXT_PUBLIC_MODEL_API` (inlined at build time — rebuild after changing it).

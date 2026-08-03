@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 520" width="300" height="520">
+  <rect class="bg" x="0" y="0" width="300" height="520"/>
+  <style>
+    .bg{fill:#ffffff}
+    .bone{fill:#ECE3D0;stroke:#A9946A;stroke-width:2;stroke-linejoin:round}
+    .bone2{fill:#F5EFE1;stroke:#C3B48E;stroke-width:1.6;stroke-linejoin:round}
+    .A{stroke:#2563EB;stroke-width:3;fill:none;stroke-linecap:round}
+    .B{stroke:#DC2626;stroke-width:3;fill:none;stroke-linecap:round}
+    .C{stroke:#94A3B8;stroke-width:1.6;stroke-dasharray:6 4;fill:none}
+    .arc{stroke:#0E9F6E;stroke-width:2.6;fill:none}
+    .dist{stroke:#7C3AED;stroke-width:2.6;fill:none}
+    .ptl{fill:#334155;stroke:#fff;stroke-width:1.5}
+    .t{font:700 15px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;fill:#0F172A}
+    .s{font:400 11px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;fill:#64748B}
+    .lA{font:600 12px system-ui,sans-serif;fill:#2563EB}
+    .lB{font:600 12px system-ui,sans-serif;fill:#DC2626}
+    .lC{font:600 12px system-ui,sans-serif;fill:#7C3AED}
+    .v{font:800 15px system-ui,sans-serif;fill:#0E9F6E}
+    .l{font:500 12px system-ui,sans-serif;fill:#334155}
+  </style>
+
+  <defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="7.5" refY="5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#7C3AED"/></marker>
+    <marker id="ahs" markerWidth="10" markerHeight="10" refX="2.5" refY="5" orient="auto">
+      <path d="M10 0 L0 5 L10 10 z" fill="#7C3AED"/></marker>
+  </defs>
+
+  <text class="t" x="16" y="28">Bone length (femur)</text>
+  <text class="s" x="16" y="46">3D centroid-to-centroid distance</text>
+  <circle class="bone" cx="112.0" cy="108.0" r="28.0"/>
+  <path class="bone" d="M150 96 Q182 96 176 130 Q160 138 146 126 Z"/>
+  <polygon class="bone" points="126.0,132.0 168.0,140.0 150.0,452.0 120.0,452.0"/>
+  <ellipse class="bone" cx="126.0" cy="470.0" rx="26.0" ry="24.0"/>
+  <ellipse class="bone" cx="168.0" cy="470.0" rx="26.0" ry="24.0"/>
+  <line class="C" x1="140.0" y1="118.0" x2="147.0" y2="468.0"/>
+  <circle class="ptl" cx="140.0" cy="118.0" r="4.5"/>
+  <circle class="ptl" cx="147.0" cy="468.0" r="4.5"/>
+  <text class="l" x="150.0" y="112.0" text-anchor="start">proximal centroid</text>
+  <text class="l" x="155.0" y="486.0" text-anchor="start">distal centroid</text>
+  <line class="C" x1="140.0" y1="118.0" x2="236.0" y2="118.0"/>
+  <line class="C" x1="147.0" y1="468.0" x2="236.0" y2="468.0"/>
+  <line class="dist" x1="236.0" y1="118.0" x2="236.0" y2="468.0" marker-start="url(#ahs)" marker-end="url(#ah)"/>
+  <text class="lC" x="244.0" y="293.0" text-anchor="start">≈500 mm</text>
+  <text class="s" x="16" y="506">Euclidean length between end-slice centroids.</text>
+</svg>

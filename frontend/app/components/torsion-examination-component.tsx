@@ -1,15 +1,23 @@
 'use client';
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import server_config from "@/app/server_config";
-import { ImageWithLandmarks } from "@/app/components/torsion-image-component";
-import { computeFemoralTorsion, computeTibialTorsion } from "@/app/utils";
-import { TorsionExamination, TorsionFemurLandmarks, TorsionLandmarks, TorsionMethodSides } from "@/app/types";
+import { TorsionExamination, TorsionLandmarks } from "@/app/types";
+
+// Cornerstone is client-only (DOM + web workers); load it with ssr disabled so
+// nothing runs during server rendering.
+const CornerstoneTorsionViewer = dynamic(
+    () => import("@/app/components/cornerstone/cornerstone-torsion-viewer").then((m) => m.CornerstoneTorsionViewer),
+    { ssr: false, loading: () => <div className="text-white">Loading viewer…</div> },
+);
 
 export function TorsionExaminationComponent({ examination }: { examination: TorsionExamination }) {
     const [landmarks, setLandmarks] = useState<TorsionLandmarks>(examination.landmarks);
     const [changes, setChanges] = useState<TorsionLandmarks | null>(null);
-    const [showSegmentation, toggleShowSegmentation] = useState(true);
+    // Segmentation overlay is not yet implemented on the axial stack viewer; the
+    // toggle is hidden below. Kept as constant state so the prop plumbing stays intact.
+    const [showSegmentation] = useState(true);
 
     const update = async () => {
         if (!changes) return;
@@ -22,66 +30,41 @@ export function TorsionExaminationComponent({ examination }: { examination: Tors
         setChanges(null);
     };
 
-    const getFemurMethodLandmarks = (method: string): TorsionMethodSides | null => {
-        const femur = landmarks?.femur;
-        if (!femur) return null;
-        return femur[method as keyof TorsionFemurLandmarks] ?? null;
-    };
-
-    const renderFemurTorsion = (method: string) => {
-        const femurMethod = getFemurMethodLandmarks(method);
-        if (!femurMethod?.left || !femurMethod?.right) return null;
-        return (
-            <>
-                <p className="text-white">Femur Torsion Left ({method}): {computeFemoralTorsion(femurMethod['left']['hip_start'],
-                    femurMethod['left']['hip_end'],
-                    femurMethod['left']['knee_start'],
-                    femurMethod['left']['knee_end'], 'left')}</p>
-                <p className="text-white">Femur Torsion Right ({method}): {computeFemoralTorsion(femurMethod['right']['hip_start'],
-                    femurMethod['right']['hip_end'],
-                    femurMethod['right']['knee_start'],
-                    femurMethod['right']['knee_end'], 'right')}</p>
-            </>
-        );
-    };
+    // Examination metadata shown to the left of the viewer (replaces the page header).
+    const details: { label: string; value: string }[] = [
+        { label: 'Patient name', value: examination.patient_name },
+        { label: 'Study date', value: examination.study_date },
+        { label: 'Study time', value: examination.study_time },
+        { label: 'Study description', value: examination.study_description },
+        { label: 'Accession number', value: examination.accession_number },
+        { label: 'Status', value: examination.status },
+    ];
 
     return (
-        <div>
-            <div className="grid grid-rows-1 grid-cols-2 mx-auto px-4 shadow items-start">
-                <div className="mx-4 my-4 col-span-1 row-span-1">
-                    <ImageWithLandmarks examination={examination} showSegmentation={showSegmentation} saveChangesCallback={setChanges} setLandmarksCallback={setLandmarks} />
-                </div>
-                <div className="mx-4 my-4 col-span-1 grid grid-cols-1 gap-2">
-                    <button
-                        onClick={() => toggleShowSegmentation(!showSegmentation)}
-                        className="px-2 py-2 bg-blue-500 text-white rounded w-auto h-auto self-start justify-self-start"
-                    >
-                        Toggle Segmentation
-                    </button>
-                    {
-                        changes &&
-                        <button
-                            onClick={() => update()}
-                            className="px-2 py-2 bg-blue-500 text-white rounded w-auto h-auto self-start justify-self-start"
-                        >
-                            Save changes
-                        </button>
-                    }
-                    {landmarks &&
-                    <div className="px-2 py-2 bg-blue-500 text-white rounded w-auto h-auto self-start justify-self-start">
-                        {renderFemurTorsion('Lee')}
-                        {renderFemurTorsion('Murphy')}
-                        <p className="text-white">Tibia Torsion Left (Ellipse/Ulm): {computeTibialTorsion(landmarks['tibia']['left']['knee_start'],
-                            landmarks['tibia']['left']['knee_end'],
-                            landmarks['tibia']['left']['ankle_start'],
-                            landmarks['tibia']['left']['ankle_end'], 'left')}</p>
-                        <p className="text-white">Tibia Torsion Right (Ellipse/Ulm): {computeTibialTorsion(landmarks['tibia']['right']['knee_start'],
-                            landmarks['tibia']['right']['knee_end'],
-                            landmarks['tibia']['right']['ankle_start'],
-                            landmarks['tibia']['right']['ankle_end'], 'right')}</p>
-                    </div>
-                    }
-                </div>
+        <div className="flex gap-4 px-4 py-4 items-start">
+            <aside className="w-64 shrink-0">
+                <h2 className="text-lg font-semibold text-gray-800 dark:text-white mb-3">Examination Details</h2>
+                <dl className="flex flex-col gap-2">
+                    {details.map(({ label, value }) => (
+                        <div key={label} className="flex flex-col">
+                            <dt className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">{label}</dt>
+                            <dd className="text-sm text-gray-800 dark:text-gray-100 break-words">{value || '—'}</dd>
+                        </div>
+                    ))}
+                </dl>
+            </aside>
+            <div className="flex-1 min-w-0">
+                {/* Torsion values and the Save button live in the viewer's top-right overlay; the
+                    proximal/distal angle of each reference line is drawn on its own slice. */}
+                <CornerstoneTorsionViewer
+                    examination={examination}
+                    showSegmentation={showSegmentation}
+                    landmarks={landmarks}
+                    hasChanges={changes != null}
+                    onSave={update}
+                    saveChangesCallback={setChanges}
+                    setLandmarksCallback={setLandmarks}
+                />
             </div>
         </div>
     );
