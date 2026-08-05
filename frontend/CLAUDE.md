@@ -37,7 +37,8 @@ testing the viewer. `npm run build` always uses webpack, so production is fine.
 
 Uses Next.js App Router file-based routing under `app/`:
 
-- `/` — Landing page
+- `/` — Landing page (static; hero + how-it-works + features, CTAs to upload/examinations)
+- `/about` — Static about page (what it measures, the pipeline, tech stack, clinical-use disclaimer); linked from the navbar
 - `/examinations` — Server component that fetches and lists all examinations
 - `/examinations/[...slug]` — Catch-all route handling both filtered lists (e.g., `/examinations/mr-torsion`) and individual examination detail views (by accession number)
 - `/upload` — Client-side file upload form
@@ -154,10 +155,19 @@ world↔voxel conversion and frame-preserving edit round-trip happen only at the
 Cornerstone boundary. On any edit both endpoints are written back (the un-dragged one
 maps to the same voxel), keeping the pair on its slice.
 
-**Not yet implemented:** the segmentation labelmap overlay (stack labelmaps need
-per-slice *derived* images populated from the mask; the toggle is hidden in
-`torsion-examination-component.tsx` until then). The volume-labelmap version is in
-the stashed MPR variant.
+**Segmentation labelmap overlay:** the hip/knee/ankle mask is painted on the axial
+slices, toggled by the "Show segmentation" checkbox in
+`torsion-examination-component.tsx`. A StackViewport labelmap can't consume the mask
+NIfTI directly — it needs a per-slice **derived** Uint8 labelmap image tied to each
+source frame (else Cornerstone raises "No derived image found"). So
+`use-cornerstone-viewport.ts::setupSegmentation` creates one blank derived image per
+frame (`imageLoader.createAndCacheDerivedLabelmapImages(imageIds)`) and fills each
+from the aligned mask (`combined.nii.gz`, hip=1/knee=2/ankle=3) loaded through the
+**same per-slice loader** as the image, so mask frame *k* overlays image frame *k*
+with matching in-plane layout. It then registers a stack segmentation
+(`data: { imageIds }`) via `addLabelmapRepresentationToViewport`, sets per-label
+colours, and toggles visibility with `config.visibility`. (The stashed MPR variant
+used a *volume* labelmap instead, which only renders on volume viewports.)
 
 The API serves the NIfTI volumes (see the root `CLAUDE.md` —
 `GET /examinations/{id}/volume/...`, served as GPU-renderable float32).

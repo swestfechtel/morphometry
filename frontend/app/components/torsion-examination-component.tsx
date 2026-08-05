@@ -15,9 +15,8 @@ const CornerstoneTorsionViewer = dynamic(
 export function TorsionExaminationComponent({ examination }: { examination: TorsionExamination }) {
     const [landmarks, setLandmarks] = useState<TorsionLandmarks>(examination.landmarks);
     const [changes, setChanges] = useState<TorsionLandmarks | null>(null);
-    // Segmentation overlay is not yet implemented on the axial stack viewer; the
-    // toggle is hidden below. Kept as constant state so the prop plumbing stays intact.
-    const [showSegmentation] = useState(true);
+    // Whether the mask labelmap overlay (hip/knee/ankle) is painted on the slices.
+    const [showSegmentation, setShowSegmentation] = useState(true);
 
     const update = async () => {
         if (!changes) return;
@@ -52,6 +51,17 @@ export function TorsionExaminationComponent({ examination }: { examination: Tors
                         </div>
                     ))}
                 </dl>
+
+                {/* Segmentation overlay toggle (hip/knee/ankle mask painted on the slices). */}
+                <label className="mt-4 flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                        type="checkbox"
+                        checked={showSegmentation}
+                        onChange={(e) => setShowSegmentation(e.target.checked)}
+                        className="h-4 w-4 accent-blue-600"
+                    />
+                    <span className="text-sm text-gray-800 dark:text-gray-100">Show segmentation</span>
+                </label>
             </aside>
             <div className="flex-1 min-w-0">
                 {/* Torsion values and the Save button live in the viewer's top-right overlay; the

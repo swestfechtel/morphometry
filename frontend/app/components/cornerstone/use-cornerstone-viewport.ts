@@ -23,6 +23,8 @@ import {
   metaData,
   cache,
   eventTarget,
+  imageLoader,
+  getRenderingEngine,
   type Types,
 } from '@cornerstonejs/core';
 import {
@@ -33,13 +35,14 @@ import {
   ZoomTool,
   WindowLevelTool,
   annotation as csAnnotation,
+  segmentation as csSegmentation,
   Enums as csToolsEnums,
 } from '@cornerstonejs/tools';
 import { createNiftiImageIdsAndCacheMetadata } from '@cornerstonejs/nifti-volume-loader';
 
 import { TorsionLandmarks } from '@/app/types';
 import { ensureCornerstoneInit } from './cs-init';
-import { imageVolumeUrl } from './cs-volume-url';
+import { imageVolumeUrl, maskVolumeUrl } from './cs-volume-url';
 import { ReferenceLineTool } from './reference-line-tool';
 import {
   listLandmarks,
@@ -53,6 +56,7 @@ import {
 } from './landmark-mapping';
 
 const { ViewportType } = Enums;
+const LABELMAP = csToolsEnums.SegmentationRepresentations.Labelmap;
 
 const AXIAL_VIEWPORT = 'CS-AX';
 
@@ -64,6 +68,14 @@ const LINE_COLORS = {
   malleolus: 'rgb(240, 200, 90)', // transmalleolar axis — amber
 } as const;
 
+// Overlay colours (RGBA) for the mask labels: hip=1, knee=2, ankle=3 (see
+// api/domain/masks.combine_region_masks). Distinct, saturated, semi-transparent.
+const SEGMENT_COLORS: Record<number, Types.Color> = {
+  1: [255, 220, 60, 255],  // hip — amber
+  2: [180, 80, 220, 255],  // knee — violet
+  3: [60, 200, 220, 255],  // ankle — cyan
+};
+
 /** The on-slice angle caption for a reference line, e.g. 'Proximal: 12.3°' (or undefined). */
 function angleLabelFor(tree: TorsionLandmarks, spec: ReferenceLineSpec): string | undefined {
   const a = referenceLineAngle(tree, spec);
@@ -72,11 +84,98 @@ function angleLabelFor(tree: TorsionLandmarks, spec: ReferenceLineSpec): string 
   return `${role}: ${a.toFixed(1)}°`;
 }
 
-// NOTE: the segmentation labelmap overlay is not implemented on this stack viewer.
-// Stack labelmaps need per-slice *derived* images populated from the mask (see the
-// "No derived image found" path in @cornerstonejs/tools); the volume-labelmap
-// version lives in the stashed MPR variant. `showSegmentation` is accepted but
-// currently inert — the parent hides its toggle. Re-add here as a follow-up.
+// Segmentation labelmap overlay for the axial stack.
+//
+// A StackViewport labelmap can't consume the mask NIfTI directly — it needs a
+// per-slice *derived* labelmap image (Uint8) tied to each source frame's geometry
+// (otherwise Cornerstone raises "No derived image found" and paints nothing). So
+// `setupSegmentation` creates one blank labelmap image per source frame with
+// `createAndCacheDerivedLabelmapImages`, then fills each from the aligned mask
+// (combined.nii.gz: hip=1, knee=2, ankle=3), loaded through the SAME per-slice
+// loader as the image so the pixel layout matches frame-for-frame. `showSegmentation`
+// toggles the representation's visibility.
+
+/**
+ * Build and attach the mask labelmap overlay to the axial stack viewport.
+ *
+ * The segmentation id is deterministic (`torsion-seg-{accession}`) and computed by
+ * the caller so teardown can always remove it, even if this async build is still
+ * in flight — see the teardown in {@link useCornerstoneViewport}.
+ *
+ * @param segmentationId   Deterministic id to register the labelmap under.
+ * @param accession        Examination accession (drives the mask volume URL).
+ * @param imageIds         The image stack's per-slice imageIds; derived labelmap images are tied to these.
+ * @param viewport         The axial StackViewport to render the labelmap into.
+ * @param getVisible       Reads the live "show overlay" state; applied at attach time (not captured early).
+ * @param onImagesCreated  Called with the derived labelmap image ids as soon as they are cached, so the
+ *                         caller can purge them on teardown even if this build is later cancelled.
+ * @param isCancelled      Returns true once the viewer has been torn down, to abort mid-load.
+ * @return True if the labelmap was attached; false if the mask was unavailable or the build was cancelled.
+ */
+async function setupSegmentation(
+  segmentationId: string,
+  accession: string,
+  imageIds: string[],
+  viewport: Types.IStackViewport,
+  getVisible: () => boolean,
+  onImagesCreated: (labelmapImageIds: string[]) => void,
+  isCancelled: () => boolean,
+): Promise<boolean> {
+  try {
+    // Mask slices, ordered/loaded identically to the image stack (same NIfTI loader),
+    // so mask frame k overlays image frame k with matching in-plane layout.
+    const maskImageIds = await createNiftiImageIdsAndCacheMetadata({ url: maskVolumeUrl(accession) });
+    if (isCancelled()) return false;
+
+    // One blank Uint8 labelmap image per source frame, tied to that frame's geometry.
+    // These are cached under fresh `derived:<uuid>` ids the moment they're created, so
+    // hand them back immediately — teardown must purge them even if we bail out below.
+    const labelmapImages = imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
+    onImagesCreated(labelmapImages.map((im) => im.imageId));
+    const n = Math.min(imageIds.length, maskImageIds.length);
+    if (imageIds.length !== maskImageIds.length) {
+      // Expected to be equal (combined.nii.gz is built aligned to display.nii.gz). A
+      // mismatch means some slices go un-overlaid (blank labelmap) rather than mispainted.
+      console.warn(`Mask/image slice count mismatch (image=${imageIds.length}, mask=${maskImageIds.length}); overlaying ${n}.`);
+    }
+    await Promise.all(
+      Array.from({ length: n }, async (_unused, k) => {
+        const maskImage = await imageLoader.loadAndCacheImage(maskImageIds[k]);
+        const src = maskImage.getPixelData();
+        const dst = labelmapImages[k].getPixelData();
+        // Copy label values (round in case the mask is served as float 1.0/2.0/3.0).
+        for (let idx = 0; idx < dst.length; idx++) {
+          const v = src[idx];
+          dst[idx] = v > 0 ? Math.round(v) : 0;
+        }
+      }),
+    );
+    // From here to the return there is NO await, so teardown (a synchronous React
+    // cleanup) cannot interleave: either it already ran (caught here) and we add
+    // nothing, or it runs after we return and removes us by the deterministic id.
+    if (isCancelled()) return false;
+
+    csSegmentation.addSegmentations([
+      { segmentationId, representation: { type: LABELMAP, data: { imageIds: labelmapImages.map((im) => im.imageId) } } },
+    ]);
+    csSegmentation.addLabelmapRepresentationToViewport(viewport.id, [{ segmentationId, type: LABELMAP }]);
+    for (const [index, color] of Object.entries(SEGMENT_COLORS)) {
+      try { csSegmentation.config.color.setSegmentIndexColor(viewport.id, segmentationId, Number(index), color); }
+      catch { /* colour LUT not ready — best-effort */ }
+    }
+    // Read the toggle at apply-time (not captured at call-time): the user may have
+    // flipped it while the mask was loading. Any concurrent toggle-effect fired a
+    // no-op while unattached, so this is the authoritative final state.
+    csSegmentation.config.visibility.setSegmentationRepresentationVisibility(
+      viewport.id, { segmentationId, type: LABELMAP }, getVisible(),
+    );
+    viewport.render();
+    return true;
+  } catch (err) {
+    console.warn('Segmentation labelmap not available', err);
+    return false;
+  }
+}
 
 /**
  * A robust display window from actual intensities: the 1st–99th percentile of a
@@ -168,6 +267,16 @@ export function useCornerstoneViewport(args: UseViewportArgs) {
   // annotationUID -> the reference line's spec, to route endpoint edits back into the
   // tree (startPaths/endPaths) and recompute its angle label. Both endpoints share the slice.
   const annotationPaths = useRef<Map<string, ReferenceLineSpec>>(new Map());
+
+  // Deterministic labelmap segmentation id, so teardown/toggle can address it without
+  // waiting for the async attach to finish. The latest toggle value is mirrored into a
+  // ref for the async setup (which applies it once the overlay is ready).
+  const segmentationId = `torsion-seg-${args.accession}`;
+  const showSegRef = useRef(args.showSegmentation);
+  showSegRef.current = args.showSegmentation;
+  // Derived labelmap image ids (fresh `derived:<uuid>` each mount) to purge on teardown,
+  // so they don't accumulate in the global cornerstone image cache across remounts.
+  const labelmapImageIdsRef = useRef<string[]>([]);
 
   // --- setup / teardown (runs once per accession) --------------------------
   useEffect(() => {
@@ -304,6 +413,17 @@ export function useCornerstoneViewport(args: UseViewportArgs) {
       element.addEventListener('mouseup', onMouseUp);
       axialVp.render();
 
+      // Attach the mask labelmap overlay (async: streams + fills the mask). Landmarks
+      // and interaction are already live above, so the overlay simply appears when ready.
+      // Fire-and-forget: teardown removes the labelmap (and its derived images) regardless
+      // of whether this promise has resolved.
+      void setupSegmentation(
+        segmentationId, args.accession, [...imageIds], axialVp,
+        () => showSegRef.current,                                 // #2: read visibility at apply-time
+        (ids) => { labelmapImageIdsRef.current = ids; },          // #4: record for cache purge
+        () => destroyed,
+      );
+
       // The layout sizes the viewport to the screen (see cornerstone-torsion-viewer),
       // but Cornerstone's canvas doesn't follow element size changes on its own. Keep
       // the render resolution in sync (and preserve the camera) whenever the element
@@ -377,11 +497,38 @@ export function useCornerstoneViewport(args: UseViewportArgs) {
       element?.removeEventListener('mouseup', onMouseUp);
       annotationPaths.current.forEach((_p, uid) => csAnnotation.state.removeAnnotation(uid));
       annotationPaths.current.clear();
+      // Always attempt removal by the deterministic id — the async setupSegmentation
+      // may have attached it after this cleanup started (or be about to), and
+      // removeSegmentation is a safe no-op when the id was never added.
+      try { csSegmentation.removeSegmentation(segmentationId); } catch { /* not added */ }
+      // Purge the per-slice derived labelmap images: removeSegmentation does NOT touch
+      // the image cache, and these carry fresh `derived:<uuid>` ids every mount, so
+      // without this they accumulate (doubled under React StrictMode's mount/remount).
+      for (const id of labelmapImageIdsRef.current) {
+        if (cache.getImageLoadObject(id)) {
+          try { cache.removeImageLoadObject(id); } catch { /* already gone */ }
+        }
+      }
+      labelmapImageIdsRef.current = [];
       ToolGroupManager.destroyToolGroup(toolGroupId);
       engine?.destroy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [args.accession]);
+
+  // --- segmentation visibility toggle --------------------------------------
+  // Show/hide the labelmap without rebuilding it. Guarded because the overlay is
+  // attached asynchronously — until then there is no representation to toggle, so
+  // this no-ops (caught) and setupSegmentation applies the current value (via
+  // showSegRef) once it finishes.
+  useEffect(() => {
+    try {
+      csSegmentation.config.visibility.setSegmentationRepresentationVisibility(
+        AXIAL_VIEWPORT, { segmentationId, type: LABELMAP }, args.showSegmentation,
+      );
+      getRenderingEngine(engineId)?.getViewport(AXIAL_VIEWPORT)?.render();
+    } catch { /* representation not ready yet */ }
+  }, [args.showSegmentation, engineId, segmentationId]);
 
   return { refs };
 }
