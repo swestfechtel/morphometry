@@ -79,13 +79,41 @@ The single-series `POST /upload/` and Orthanc paths are unchanged (they still
 ingest one series directly). `enumerate_torsion_series` / `materialize_torsion_
 selection` live in `ingest/dicom.py`.
 
+## Authentication & users
+
+Two credential kinds, accepted interchangeably on protected endpoints (`require_auth`):
+
+- **User login** (humans): `POST /auth/login {username, password}` → a signed,
+  expiring token (itsdangerous), sent back as `Authorization: Bearer <token>`
+  (or `?token=` on media URLs). `GET /auth/me` returns the current user. Passwords
+  are argon2-hashed; a token also embeds the user's `token_version`, so changing a
+  password (or deactivating the account) invalidates outstanding tokens. Token
+  signing uses `MORPH_API_SECRET_KEY` (auto-generated + persisted to
+  `<storage_dir>/.secret_key` if unset). Code lives in `api/auth/`.
+- **API keys** (machine clients, e.g. the Orthanc plugin): the existing
+  `X-API-Key` header / `?api_key=` query param.
+
+Enforcement is on when `MORPH_API_AUTH_REQUIRED=true` **or** any API key is set;
+otherwise the API is open (dev). `/auth/login` and `/health` are always open.
+
+**Manage users from the CLI** (same DB as the API, via `MORPH_API_*` / `.env`):
+
+```bash
+python -m api.users create alice          # prompts for a password
+python -m api.users passwd alice          # change password (invalidates tokens)
+python -m api.users list
+python -m api.users deactivate alice      # block login, keep the account
+python -m api.users delete alice
+```
+
 ## Run
 
 The API, worker, and Redis are separate processes sharing Redis + the SQLite DB +
 the storage dir. Run from the repo root with the venv activated:
 
 ```bash
-cp api/.env.example .env         # storage dir, redis/db URLs, image tags, API_KEYS, CORS
+cp api/.env.example api/.env     # storage dir, redis/db URLs, image tags, auth, CORS
+                                 # (a repo-root ./.env is also read; api/.env wins)
 
 # Redis (no local redis-server binary — run it in Docker, publish 6379)
 docker run -d --name morphometry-redis -p 6379:6379 redis:7   # first time

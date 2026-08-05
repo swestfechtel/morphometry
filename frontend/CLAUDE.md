@@ -162,6 +162,27 @@ the stashed MPR variant.
 The API serves the NIfTI volumes (see the root `CLAUDE.md` —
 `GET /examinations/{id}/volume/...`, served as GPU-renderable float32).
 
+### Authentication
+
+Username/password login against the API (`POST /auth/login`), managed by
+`app/auth.ts` + `app/server-auth.ts`:
+
+- The signed token is stored in a **cookie** (`morph_token`, non-httpOnly), not
+  localStorage, so **server components** (the examinations list/detail pages, which
+  fetch during SSR) can read it via `serverAuthHeaders()` (`app/server-auth.ts`,
+  using `next/headers` `cookies()`) and forward it as a Bearer header. Those pages
+  `redirect('/login')` on a 401.
+- Client code uses `apiFetch(path, init)` from `app/auth.ts`, which attaches the
+  Bearer token (+ optional `X-API-Key`) and, on a 401, clears the session and
+  redirects to `/login`. **Route all client API calls through `apiFetch`.** Media
+  URLs (volume/preview) get the token as a `?token=` query param (`authQuery`,
+  re-exported through `cs-volume-url.ts`), since `<img>` / the Cornerstone loader
+  can't always set a header.
+- `/login` (`app/login/page.tsx`) posts credentials, calls `setSession`, and
+  redirects to `?next=` or `/examinations`. The navbar `AuthNav` shows the current
+  user + sign-out. When the API has auth disabled (dev), no 401s fire, so the app
+  works without signing in.
+
 ### API Configuration
 
 `app/server_config.ts` exports a `model_api` base URL, read from the

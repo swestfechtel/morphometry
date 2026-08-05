@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from sqlmodel import Session, select
 
-from api.db.models import Examination, Job
+from api.db.models import Examination, Job, User
 from api.schemas.enums import JobState
 
 
@@ -66,6 +66,30 @@ def update_job(session: Session, job: Job) -> Job:
 
 def list_jobs_by_status(session: Session, status: str) -> list[Job]:
     return list(session.exec(select(Job).where(Job.status == status)).all())
+
+
+# --- users -------------------------------------------------------------------
+def get_user(session: Session, username: str) -> User | None:
+    return session.get(User, username)
+
+
+def list_users(session: Session) -> list[User]:
+    return list(session.exec(select(User).order_by(User.username)).all())
+
+
+def upsert_user(session: Session, user: User) -> User:
+    user.updated_at = datetime.now(timezone.utc)
+    session.merge(user)
+    session.flush()
+    return user
+
+
+def delete_user(session: Session, username: str) -> bool:
+    user = session.get(User, username)
+    if user is None:
+        return False
+    session.delete(user)
+    return True
 
 
 def active_jobs_by_examination(session: Session) -> dict[str, str]:

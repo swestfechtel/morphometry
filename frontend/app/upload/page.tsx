@@ -1,8 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import server_config from '@/app/server_config';
-import { authHeaders } from '@/app/components/cornerstone/cs-volume-url';
+import { apiFetch } from '@/app/auth';
 import { SeriesPicker } from '@/app/components/series-picker';
 import { PendingExamination } from '@/app/types';
 
@@ -24,11 +23,7 @@ export default function UploadPage() {
     async function enumerateTorsionSeries(files: FileList) {
         const formData = new FormData();
         for (const file of files) formData.append('files', file);
-        const response = await fetch(server_config.model_api + '/upload/torsion/series', {
-            method: 'POST',
-            headers: { ...authHeaders() },
-            body: formData,
-        });
+        const response = await apiFetch('/upload/torsion/series', { method: 'POST', body: formData });
         if (response.status === 201) {
             setPending((await response.json()) as PendingExamination);
         } else if (response.status === 400) {

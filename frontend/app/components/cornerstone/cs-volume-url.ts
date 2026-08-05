@@ -1,28 +1,24 @@
 'use client';
 
-// Builds the API volume URLs and the single auth-token source used by the
-// Cornerstone NIfTI loader. The loader fetches URLs itself, so auth is attached
-// two ways (whichever the deployment uses): the `X-API-Key` header via the
-// loader's `beforeSend` hook (see cs-init), and an `?api_key=` query param as a
-// fallback. Today auth is disabled in dev, so both are effectively no-ops.
+// Builds the API media URLs used by the Cornerstone NIfTI loader and <img> tags.
+// These fetch the URL themselves, so auth is attached two ways (see app/auth.ts):
+// the `Authorization`/`X-API-Key` header via the loader's `beforeSend` hook (see
+// cs-init) — re-exported here as `authHeaders` — and a `?token=`/`?api_key=` query
+// string as a fallback for requests that can't set a header (<img>).
 //
 // The URL paths MUST end in `.nii.gz`: the loader decides whether to gunzip the
 // response solely from `new URL(url).pathname.endsWith('.gz')` (Content-Type is
 // ignored). Without the suffix it parses raw gzip bytes as a NIfTI header and
-// fails with "Array buffer allocation failed". The `?api_key=` query param is not
-// part of `pathname`, so appending it after the suffix is safe.
+// fails with "Array buffer allocation failed". The query string is not part of
+// `pathname`, so appending it after the suffix is safe.
 import server_config from '@/app/server_config';
+import { authHeaders, authQuery } from '@/app/auth';
 
-// Optional client-visible API key. Set NEXT_PUBLIC_API_KEY only if the API has
-// auth enabled (MORPH_API_API_KEYS). Left undefined in dev.
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY;
-
-export function authHeaders(): Record<string, string> {
-  return API_KEY ? { 'X-API-Key': API_KEY } : {};
-}
+export { authHeaders };
 
 function withKey(url: string): string {
-  return API_KEY ? `${url}?api_key=${encodeURIComponent(API_KEY)}` : url;
+  const query = authQuery();
+  return query ? `${url}?${query}` : url;
 }
 
 export function imageVolumeUrl(accession: string): string {

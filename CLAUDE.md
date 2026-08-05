@@ -13,7 +13,7 @@ The repo has four loosely-coupled parts; the three Python parts share a single v
   - Dependency direction (enforced by `tests/test_import_graph.py`): `measurements/* → region get_* → geometry/utils/constants/image_io/bresenham`.
   - MRI vs CT: torsion / CCD / neck-center / bone-length have separate `_ct` functions (modality differs in landmark acquisition); the acetabulum / CEA / subchondral / offset family take a `ct=` flag. Shared `_core` helpers isolate the modality differences.
   - Torsion `calculate_*` return only the angle; landmarks come from `get_femoral_torsion_landmarks` / `get_tibial_torsion_landmarks`. Measurement functions never change their return arity based on `plot` — pass a matplotlib `Axes` / PyVista `Plotter` to `plot=` to draw overlays.
-- `api/` — a FastAPI service (`api/main.py`) that ingests DICOM uploads or Orthanc callbacks, stores examination metadata in SQLite + images as `.nii.gz` files (`api/db`, `api/storage`), and dispatches model jobs to a **Redis/RQ worker** (`api/tasks`) that shells out to the docker images (see below). Layered: `routers` → `ingest`/`serializers`/`deps` → `db`/`storage`/`tasks` → `settings`/`runtime`. Config is env-driven via `api/settings.py` (`MORPH_API_*` / `.env`). `api/examination.py` is legacy, kept only for `scripts/migrate_pickles.py`. Torsion uploads are **two-phase**: `POST /upload/torsion/series` enumerates the DICOM series in a whole examination folder (grouping by SeriesInstanceUID, discarding junk, rendering previews) into a `pending_selection` examination; the user picks a series (whole-leg → auto-split, or three hip/knee/ankle series) via `POST /upload/torsion/select`, which materializes it and auto-starts the full pipeline. See `api/README.md`.
+- `api/` — a FastAPI service (`api/main.py`) that ingests DICOM uploads or Orthanc callbacks, stores examination metadata in SQLite + images as `.nii.gz` files (`api/db`, `api/storage`), and dispatches model jobs to a **Redis/RQ worker** (`api/tasks`) that shells out to the docker images (see below). Layered: `routers` → `ingest`/`serializers`/`deps` → `db`/`storage`/`tasks` → `settings`/`runtime`. Config is env-driven via `api/settings.py` (`MORPH_API_*` / `.env`). `api/examination.py` is legacy, kept only for `scripts/migrate_pickles.py`. Torsion uploads are **two-phase**: `POST /upload/torsion/series` enumerates the DICOM series in a whole examination folder (grouping by SeriesInstanceUID, discarding junk, rendering previews) into a `pending_selection` examination; the user picks a series (whole-leg → auto-split, or three hip/knee/ankle series) via `POST /upload/torsion/select`, which materializes it and auto-starts the full pipeline. **Auth** (`api/auth/`): username/password login (`POST /auth/login` → signed Bearer token, argon2 hashes) coexisting with `X-API-Key` for machine clients; users are managed with `python -m api.users`. See `api/README.md`.
 - `scripts/` — one-off batch processing scripts (`process_augsburg_*.py`, `process_nako*.py`, `combine_series.py`, etc.). Each script is self-contained and typically prepends `sys.path.append('/home/simon/Work/morphometry')` and hard-codes absolute data paths (e.g. `/home/simon/Data/...`); update paths when running elsewhere.
 - `frontend/` — the **Next.js 15 / React 19 / TypeScript** web UI for the API (Tailwind 4 + Flowbite, npm). It is the only client of the API and uses its exact contract: the `{examinations: [...]}` list envelope, base64 image/segmentation layers, and the `/examinations`, `/upload`, `/model/{segmentation,torsion}/{id}`, `/jobs/{id}` endpoints. App Router code lives under `frontend/app/`; the API base URL is `frontend/app/server_config.ts` (env `NEXT_PUBLIC_MODEL_API`, default `http://localhost:8000`). Node toolchain is independent of the Python venv. See `frontend/CLAUDE.md` for UI architecture.
 
@@ -45,8 +45,9 @@ cd morphometry && docker build -t swestfechtel/torsion:latest .
 ## Running the API
 
 The API and the model worker are separate processes sharing Redis, the SQLite DB,
-and the storage dir. Copy `api/.env.example` to `.env` and adjust (`MORPH_API_*`:
-storage dir, redis/db URLs, docker image tags, `API_KEYS`, `CORS_ALLOW_ORIGINS`).
+and the storage dir. Copy `api/.env.example` to `api/.env` (or a repo-root `.env` —
+both are loaded, `api/.env` wins) and adjust (`MORPH_API_*`: storage dir, redis/db
+URLs, docker image tags, `API_KEYS`, `AUTH_REQUIRED`, `CORS_ALLOW_ORIGINS`).
 
 ```bash
 # from repo root, with venv activated
@@ -80,8 +81,10 @@ Point it at the API with `NEXT_PUBLIC_MODEL_API` (default `http://localhost:8000
 copy `frontend/.env.example` to `frontend/.env.local` to override — `NEXT_PUBLIC_*`
 is inlined at build time, so rebuild after changing). For local dev, allow the UI
 origin in the API's CORS: `MORPH_API_CORS_ALLOW_ORIGINS=http://localhost:3000`.
-The UI currently sends **no** `X-API-Key`, so run the API with `MORPH_API_API_KEYS`
-unset (auth disabled) when developing against it.
+For an open dev server leave `MORPH_API_API_KEYS` unset and `MORPH_API_AUTH_REQUIRED`
+false (the UI then works without signing in). To require login, set
+`MORPH_API_AUTH_REQUIRED=true`, create a user with `python -m api.users create <name>`,
+and sign in at the UI's `/login`.
 
 ## Tests
 

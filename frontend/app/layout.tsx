@@ -5,6 +5,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Link from "next/link";
 import { useState } from "react";
+import { AuthNav } from "@/app/components/auth-nav";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -87,6 +88,9 @@ export default function RootLayout({children,}: Readonly<{ children: React.React
                     </ul>
                     <div className="flex items-center">
                         <p className="text-white text-lg font-bold">Disclaimer: This tool is not intended for clinical use!</p>
+                    </div>
+                    <div className="flex items-center mr-4">
+                        <AuthNav />
                     </div>
                     <div className="flex items-center">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"

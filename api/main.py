@@ -15,10 +15,10 @@ from fastapi.responses import JSONResponse
 from api import runtime
 from api.db import repository
 from api.db.engine import session_scope
-from api.deps import require_api_key
+from api.deps import require_auth
 from api.errors import DomainError
 from api.logging_config import configure_logging
-from api.routers import examinations, health, jobs, uploads, volumes
+from api.routers import auth, examinations, health, jobs, uploads, volumes
 from api.schemas.enums import JobState
 from api.schemas.errors import ErrorResponse
 
@@ -72,10 +72,11 @@ def create_app() -> FastAPI:
                             content=ErrorResponse(detail=str(exc), code="validation_error").model_dump())
 
     app.include_router(health.router)
+    app.include_router(auth.router)  # /auth/login must be reachable pre-authentication
     for router in (examinations.router, uploads.router, jobs.router):
-        app.include_router(router, dependencies=[Depends(require_api_key)])
+        app.include_router(router, dependencies=[Depends(require_auth)])
     # Volume streaming uses its own header-or-query-param auth (require_volume_access),
-    # so it is not wrapped by the header-only require_api_key dependency.
+    # so it is not wrapped by the require_auth dependency.
     app.include_router(volumes.router)
 
     return app

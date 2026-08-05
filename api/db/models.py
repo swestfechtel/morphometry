@@ -47,6 +47,19 @@ class Examination(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
+class User(SQLModel, table=True):
+    __tablename__ = "users"
+
+    username: str = Field(primary_key=True)
+    password_hash: str
+    is_active: bool = True
+    # Bumped on password change to invalidate previously-issued tokens (they embed it).
+    token_version: int = 0
+
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
 class Job(SQLModel, table=True):
     __tablename__ = "jobs"
 

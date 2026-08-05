@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from "react";
-import server_config from "@/app/server_config";
+import { apiFetch } from "@/app/auth";
 import { JobData } from "@/app/types";
 
-function usePolling(apiEndpoint: string, interval: number, onData: (data: JobData) => void) {
+function usePolling(path: string, interval: number, onData: (data: JobData) => void) {
     const onDataRef = useRef(onData);
     onDataRef.current = onData;
 
@@ -11,7 +11,7 @@ function usePolling(apiEndpoint: string, interval: number, onData: (data: JobDat
 
         const fetchData = async () => {
             try {
-                const response = await fetch(apiEndpoint);
+                const response = await apiFetch(path);
                 if (!isMounted) return;
                 if (response.ok) {
                     const data = await response.json() as JobData;
@@ -37,7 +37,7 @@ function usePolling(apiEndpoint: string, interval: number, onData: (data: JobDat
             isMounted = false;
             clearInterval(intervalId);
         };
-    }, [apiEndpoint, interval]);
+    }, [path, interval]);
 }
 
 export function PollingComponent(
@@ -50,7 +50,7 @@ export function PollingComponent(
     const onErrorRef = useRef(onError);
     onErrorRef.current = onError;
 
-    usePolling(server_config.model_api + '/jobs/' + job_id, 5000, setData);
+    usePolling('/jobs/' + job_id, 5000, setData);
 
     useEffect(() => {
         if (data?.status === 'finished') {

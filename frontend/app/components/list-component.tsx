@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { PollingComponent } from "@/app/components/polling-component";
-import server_config from "@/app/server_config";
+import { apiFetch } from "@/app/auth";
 import { BaseExamination } from "@/app/types";
 
 function wait(seconds: number) {
@@ -85,19 +85,19 @@ function ListElementComponent({ examination }: { examination: BaseExamination })
     const router = useRouter();
 
     const segment = async () => {
-        const tmp = await fetch(server_config.model_api + '/model/segmentation/' + examination.accession_number, { method: 'POST' });
+        const tmp = await apiFetch('/model/segmentation/' + examination.accession_number, { method: 'POST' });
         const json = await tmp.json();
         setJobId(json.job_id);
     };
 
     const process = async () => {
-        const tmp = await fetch(server_config.model_api + '/model/torsion/' + examination.accession_number, { method: 'POST' });
+        const tmp = await apiFetch('/model/torsion/' + examination.accession_number, { method: 'POST' });
         const json = await tmp.json();
         setJobId(json.job_id);
     };
 
     const deleteExamination = async () => {
-        const tmp = await fetch(server_config.model_api + '/examinations/' + examination.accession_number, { method: 'DELETE' });
+        const tmp = await apiFetch('/examinations/' + examination.accession_number, { method: 'DELETE' });
         if (tmp.status === 205) {
             router.refresh();
         }

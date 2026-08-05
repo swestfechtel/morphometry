@@ -8,9 +8,9 @@
 // to the viewer once the pipeline finishes.
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import server_config from '@/app/server_config';
+import { apiFetch } from '@/app/auth';
 import { PollingComponent } from '@/app/components/polling-component';
-import { authHeaders, seriesPreviewUrl } from '@/app/components/cornerstone/cs-volume-url';
+import { seriesPreviewUrl } from '@/app/components/cornerstone/cs-volume-url';
 import { SeriesInfo } from '@/app/types';
 
 type Mode = 'whole_leg' | 'regions';
@@ -151,9 +151,9 @@ export function SeriesPicker(
         ? { examination_id: examinationId, mode, series_uid: selectedWhole }
         : { examination_id: examinationId, mode, hip: regions.hip, knee: regions.knee, ankle: regions.ankle };
     try {
-      const resp = await fetch(server_config.model_api + '/upload/torsion/select', {
+      const resp = await apiFetch('/upload/torsion/select', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
       if (resp.status === 202) {

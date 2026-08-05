@@ -1,16 +1,19 @@
 import server_config from "@/app/server_config";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { ListComponent } from "@/app/components/list-component";
 import FilterComponent from "@/app/components/filter-component";
 import { TorsionExaminationComponent } from '@/app/components/torsion-examination-component';
 import { SeriesPicker } from "@/app/components/series-picker";
+import { serverAuthHeaders } from "@/app/server-auth";
 import { BaseExamination } from "@/app/types";
 
 export default async function page({params,}: {params: Promise<{slug: string}>}){
     const { slug } = await params;
 
     if (slug[0] === 'mr-torsion') {
-        const result = await fetch(server_config.model_api + '/examinations/');
+        const result = await fetch(server_config.model_api + '/examinations/', { headers: await serverAuthHeaders() });
+        if (result.status === 401) redirect('/login?next=/examinations/' + slug[0]);
         const result_json = await result.json();
         const examinations = result_json.examinations;
 
@@ -32,7 +35,8 @@ export default async function page({params,}: {params: Promise<{slug: string}>})
     }
     else {
 
-        const result = await fetch(server_config.model_api + '/examinations/' + slug[0], {method: 'GET'});
+        const result = await fetch(server_config.model_api + '/examinations/' + slug[0], { method: 'GET', headers: await serverAuthHeaders() });
+        if (result.status === 401) redirect('/login?next=/examinations/' + slug[0]);
         const examination = await result.json();
 
         return (

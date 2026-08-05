@@ -41,9 +41,10 @@ The API base URL is read from `NEXT_PUBLIC_MODEL_API` (default
 `NEXT_PUBLIC_*` values are inlined at build time, so rebuild after changing it.
 
 When running against a local API, set the API's CORS to allow this origin:
-`MORPH_API_CORS_ALLOW_ORIGINS=http://localhost:3000`. Auth is disabled when
-`MORPH_API_API_KEYS` is unset (the dev default); if you enable it, the torsion
-viewer reads the key from `NEXT_PUBLIC_API_KEY` and passes it as `?api_key=` to
-the volume endpoints.
+`MORPH_API_CORS_ALLOW_ORIGINS=http://localhost:3000`. Users sign in at `/login`
+(username/password); create accounts with `python -m api.users`. Auth is only
+enforced when the API sets `MORPH_API_AUTH_REQUIRED=true` or an API key — otherwise
+the UI works without signing in. A machine `NEXT_PUBLIC_API_KEY` can still be set
+and is sent alongside the user token.
 
 See `CLAUDE.md` in this directory for architecture and component conventions.

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import dynamic from "next/dynamic";
-import server_config from "@/app/server_config";
+import { apiFetch } from "@/app/auth";
 import { TorsionExamination, TorsionLandmarks } from "@/app/types";
 
 // Cornerstone is client-only (DOM + web workers); load it with ssr disabled so
@@ -22,7 +22,7 @@ export function TorsionExaminationComponent({ examination }: { examination: Tors
     const update = async () => {
         if (!changes) return;
         const to_update = { 'landmarks': changes };
-        await fetch(server_config.model_api + '/examinations/' + examination.accession_number, {
+        await apiFetch('/examinations/' + examination.accession_number, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(to_update),

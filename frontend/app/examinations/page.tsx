@@ -1,11 +1,14 @@
 'use server';
 
+import { redirect } from "next/navigation";
 import {ListComponent} from "@/app/components/list-component";
 import FilterComponent from "@/app/components/filter-component";
 import server_config from "@/app/server_config";
+import { serverAuthHeaders } from "@/app/server-auth";
 
 export default async function page() {
-    const result = await fetch(server_config.model_api + '/examinations/');
+    const result = await fetch(server_config.model_api + '/examinations/', { headers: await serverAuthHeaders() });
+    if (result.status === 401) redirect('/login?next=/examinations');
     const result_json = await result.json();
     const examinations = result_json.examinations;
 

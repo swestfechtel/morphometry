@@ -18,7 +18,14 @@ _API_DIR = Path(__file__).resolve().parent
 class Settings(BaseSettings):
     """Typed application settings, populated from the environment / .env."""
 
-    model_config = SettingsConfigDict(env_prefix="MORPH_API_", env_file=".env", extra="ignore")
+    # Load .env from the repo root AND from api/ (next to .env.example), by absolute
+    # path so it works regardless of the working directory uvicorn is launched from.
+    # Later files win; real environment variables still override both.
+    model_config = SettingsConfigDict(
+        env_prefix="MORPH_API_",
+        env_file=(_API_DIR.parent / ".env", _API_DIR / ".env"),
+        extra="ignore",
+    )
 
     # --- storage / persistence -------------------------------------------------
     #: Root directory for the SQLite DB and per-examination image files.
@@ -50,9 +57,18 @@ class Settings(BaseSettings):
     encode_pool_size: int | None = None
 
     # --- auth / CORS -----------------------------------------------------------
-    #: Accepted ``X-API-Key`` values. Empty list disables auth (dev only).
+    #: Accepted ``X-API-Key`` values (machine clients, e.g. the Orthanc plugin).
     #: NoDecode lets env vars be comma-separated strings (handled by the validator below).
     api_keys: Annotated[list[str], NoDecode] = []
+    #: Enforce authentication (a user token OR an API key) on protected endpoints.
+    #: Independent of ``api_keys`` so user login can be required without any API key.
+    auth_required: bool = False
+    #: Secret used to sign session tokens. If unset, a random one is generated and
+    #: persisted to ``storage_dir/.secret_key`` (see runtime.get_secret_key) so tokens
+    #: survive restarts in dev; set ``MORPH_API_SECRET_KEY`` explicitly in production.
+    secret_key: str | None = None
+    #: Lifetime of an issued login token, in seconds (default 7 days).
+    session_ttl_seconds: int = 7 * 24 * 3600
     #: Allowed CORS origins. Use explicit origins in production, not ['*'].
     cors_allow_origins: Annotated[list[str], NoDecode] = ["*"]
 
@@ -81,7 +97,8 @@ class Settings(BaseSettings):
 
     @property
     def auth_enabled(self) -> bool:
-        return len(self.api_keys) > 0
+        """Whether protected endpoints require authentication (token or API key)."""
+        return self.auth_required or len(self.api_keys) > 0
 
     def examination_dir(self, examination_id: str) -> Path:
         """Per-examination storage directory (``storage_dir/{id}``)."""
