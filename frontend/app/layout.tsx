@@ -122,9 +122,12 @@ export default function RootLayout({children,}: Readonly<{ children: React.React
 
                 {/* Footer */}
                 <footer className="bg-gray-900 shadow">
-                    <div className="container mx-auto px-4 py-6 text-center">
-                        <p className="mb-4">
-                          © {new Date().getFullYear()} My Landing Page. All rights reserved.
+                    <div className="container mx-auto px-4 py-6 text-center text-gray-300">
+                        <p>
+                          Morphometry — lower-limb torsion analysis. Research tool, not for clinical use.
+                        </p>
+                        <p className="mt-1 text-sm text-gray-400">
+                          © {new Date().getFullYear()} morphometry
                         </p>
                     </div>
                 </footer>
