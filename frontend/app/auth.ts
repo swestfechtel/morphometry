@@ -12,6 +12,18 @@ const USER_COOKIE = 'morph_user';
 // Optional machine API key (kept working alongside user login). Inlined at build.
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY;
 
+// Fired on the window whenever the session changes (login/logout). The root layout
+// mounts once and never unmounts across client-side navigation, so components that
+// display auth state (e.g. AuthNav) can't rely on a re-render to re-read the cookie —
+// they subscribe to this event instead and update immediately.
+export const AUTH_CHANGED_EVENT = 'morph-auth-changed';
+
+function notifyAuthChanged(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
+  }
+}
+
 function readCookie(name: string): string | undefined {
   if (typeof document === 'undefined') return undefined;
   const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]+)`));
@@ -32,11 +44,13 @@ export function setSession(token: string, username: string, maxAgeSeconds: numbe
   const attrs = `path=/; max-age=${maxAgeSeconds}; samesite=lax${secure}`;
   document.cookie = `${TOKEN_COOKIE}=${encodeURIComponent(token)}; ${attrs}`;
   document.cookie = `${USER_COOKIE}=${encodeURIComponent(username)}; ${attrs}`;
+  notifyAuthChanged();
 }
 
 export function clearSession(): void {
   document.cookie = `${TOKEN_COOKIE}=; path=/; max-age=0`;
   document.cookie = `${USER_COOKIE}=; path=/; max-age=0`;
+  notifyAuthChanged();
 }
 
 /** Auth headers for JSON API calls: Bearer token and/or X-API-Key when present. */
