@@ -3,11 +3,9 @@ import pyvista as pv
 import numpy as np
 from typing import Optional, Tuple
 from scipy.spatial import KDTree
-from scipy.ndimage import center_of_mass
-from sklearn.cluster import KMeans, DBSCAN
+from scipy.ndimage import label
+from sklearn.cluster import KMeans
 from morphometry.image_io import Image
-from morphometry.utils import num_connected_components
-from matplotlib import pyplot as plt
 
 
 class Tibia:
@@ -362,7 +360,8 @@ class Femur:
     def __init__(self, image: Image, cartilage_label: int):
         self.image = image
         self.cartilage_label = cartilage_label
-        self.left_part, right_part = None, None
+        self.dividing_line = None
+        self.left_part, self.right_part = None, None
         self.left_cwbz, self.right_cwbz = None, None
         self.left_anterior_zone, self.right_anterior_zone = None, None
         self.left_posterior_zone, self.right_posterior_zone = None, None
@@ -372,73 +371,29 @@ class Femur:
         cartilage = np.where(self.image.array == self.cartilage_label, 1, 0)
         self.point_cloud = np.argwhere(cartilage).astype(float)
 
-        c = np.max(self.point_cloud[:, 1])  # max posterior extent
-        c = int(c)
-        n = num_connected_components(cartilage[:, c, :], min_size=40)
-        while n != 2:
-            c -= 1
-            n = num_connected_components(cartilage[:, c, :], min_size=40)
+        # Split the cartilage into its two condyles along the intercondylar notch. The
+        # dividing axis (``x = slope * y + intercept``, x = left-right, y = anterior-
+        # posterior, in voxel-index space) is fitted to the notch-gap centres across all
+        # coronal slices where the cartilage separates into two condyles. This is robust
+        # to the trochlea being continuous anteriorly, unlike the previous approach of
+        # subtracting two independently-estimated notch points.
+        slope, intercept = _femoral_condyle_dividing_line(cartilage)
+        self.dividing_line = (slope, intercept)
 
-        while n != 1:
-            c -= 1
-            n = num_connected_components(cartilage[:, c, :], min_size=40)
-
-        # fig, ax = plt.subplots(ncols=2, figsize=(20, 10))
-        # ax[0].imshow(cartilage[:, c, :].T)
-
-        pts = np.argwhere(cartilage[:, c, :])
-        mean_s = int(np.mean(pts[:, 0]))
-        tmp = pts[pts[:, 0] == mean_s]
-        min_t = min(tmp[:, 0])
-        notch_p = np.array([mean_s, c, min_t])
-
-        c = np.min(self.point_cloud[:, 1])  # max anterior extent
-        c = int(c)
-        n = num_connected_components(cartilage[:, c, :], min_size=40)
-        while n != 2:
-            c += 1
-            n = num_connected_components(cartilage[:, c, :], min_size=40)
-
-        while n != 1:
-            c += 1
-            n = num_connected_components(cartilage[:, c, :], min_size=40)
-
-        """
-        ax[0].imshow(cartilage[:, c - 1, :].T)
-        ax[1].imshow(cartilage[:, c, :].T)
-        fig.show()
-        plt.close(fig)
-        """
-
-        pts = np.argwhere(cartilage[:, c, :])
-        mean_s = int(np.mean(pts[:, 0]))
-        tmp = pts[pts[:, 0] == mean_s]
-        min_t = min(tmp[:, 0])
-
-        # notch_a = center_of_mass(cartilage[:, c, :])
-        # notch_a = np.array([notch_a[0], c, notch_a[1]])
-        notch_a = np.array([mean_s + 10, c, min_t])
-
-        dividing_vector = notch_a - notch_p
-        print(notch_a, notch_p, dividing_vector)
-
-        self.left_part = list()
-        self.right_part = list()
-
-        for point in self.point_cloud:
-            tmp = notch_a[:2] - point[:2]
-            tmp = np.cross(tmp, dividing_vector[:2])
-            if tmp > 0:
-                self.left_part.append(point)
-            else:
-                self.right_part.append(point)
-
-        self.left_part = np.array(self.left_part)
-        self.right_part = np.array(self.right_part)
+        # A high left-right index is the image-left side, so voxels above the dividing
+        # axis form the left part and the rest the right part.
+        line_lr = slope * self.point_cloud[:, 1] + intercept
+        self.left_part = self.point_cloud[self.point_cloud[:, 0] > line_lr]
+        self.right_part = self.point_cloud[self.point_cloud[:, 0] <= line_lr]
 
     def extract_central_weightbearing_zone(self, tibia: Tibia, side: str = 'left'):
         """
         Extract the central weight-bearing zone of the cartilage.
+
+        The zone is the femoral cartilage inside the anterior-posterior / left-right window
+        of the tibial central plateau, further restricted to the superior-inferior cluster
+        in contact with the tibia (see :func:`_restrict_to_contact_cluster`) so a flexed
+        knee's anterior trochlea is not mistaken for weight-bearing cartilage.
         :param tibia: A Tibia object.
         :param side: The side of the tibia (patient side) to extract the central weight-bearing zone from. Can be either 'left' or 'right'.
         """
@@ -462,6 +417,12 @@ class Femur:
         central_weightbearing_zone = central_weightbearing_zone[central_weightbearing_zone[:, 0] <= max_right]
         central_weightbearing_zone = central_weightbearing_zone[central_weightbearing_zone[:, 1] >= max_anterior]
         central_weightbearing_zone = central_weightbearing_zone[central_weightbearing_zone[:, 1] <= max_posterior]
+
+        # The A-P/L-R window alone captures the anterior trochlea when the knee is flexed
+        # (it folds into the same A-P range as the weight-bearing surface). Keep only the
+        # superior-inferior cluster in contact with the tibia to exclude that fold.
+        central_weightbearing_zone = _restrict_to_contact_cluster(
+            central_weightbearing_zone, central_tibia[:, 2].min())
 
         if side == 'left':
             self.left_cwbz = central_weightbearing_zone
@@ -810,6 +771,114 @@ class Femur:
         if show or (show is None and created):
             plotter.show()
         return plotter
+
+
+def _femoral_condyle_dividing_line(cartilage: np.ndarray, min_size: int = 40) -> Tuple[float, float]:
+    """
+    Fit the anterior-posterior axis that separates the two femoral condyles.
+
+    The femoral cartilage is a horseshoe: the two condyles are separated posteriorly by
+    the intercondylar notch but join anteriorly at the trochlea. For every coronal slice
+    (fixed anterior-posterior index) that splits into exactly two connected components
+    (the two condyles), the left-right centre of the gap between them is recorded. A
+    least-squares line is fitted through these notch centres, giving the dividing axis in
+    voxel-index space as ``x = slope * y + intercept`` where ``x`` is the left-right axis
+    (axis 0) and ``y`` is the anterior-posterior axis (axis 1).
+
+    This is robust because it aggregates evidence over many slices and relies only on the
+    posterior region where the condyles are genuinely separate; it does not depend on a
+    (non-existent) anterior notch. Spurious notch centres (e.g. from a stray anterior
+    two-component slice) are rejected with a median-absolute-deviation band before fitting.
+
+    :param cartilage: A binary 3-D mask of the femoral cartilage in LPI index convention
+        (axis 0 = left-right, axis 1 = anterior-posterior, axis 2 = superior-inferior).
+    :param min_size: Minimum voxel count for a connected component in a slice to count as
+        a condyle (filters small speckle).
+    :return: ``(slope, intercept)`` of the dividing axis ``x = slope * y + intercept``.
+        Falls back to a vertical (``slope = 0``) mid-sagittal axis when no slice separates
+        into two condyles.
+    """
+    centers_y, centers_x = [], []
+    for c in range(cartilage.shape[1]):
+        labeled, n = label(cartilage[:, c, :])
+        if n < 2:
+            continue
+        sizes = np.bincount(labeled.ravel())
+        kept = [lab for lab in range(1, n + 1) if sizes[lab] >= min_size]
+        if len(kept) != 2:
+            continue
+        components = [np.argwhere(labeled == lab) for lab in kept]
+        components.sort(key=lambda comp: comp[:, 0].mean())
+        gap_center = (components[0][:, 0].max() + components[1][:, 0].min()) / 2.0
+        centers_y.append(float(c))
+        centers_x.append(float(gap_center))
+
+    if len(centers_x) == 0:
+        # No coronal slice separates into two condyles; fall back to the mid-sagittal
+        # plane through the cartilage's left-right median.
+        return 0.0, float(np.median(np.argwhere(cartilage)[:, 0]))
+
+    centers_y = np.asarray(centers_y)
+    centers_x = np.asarray(centers_x)
+
+    # Reject outlier notch centres before fitting so a stray slice cannot tilt the axis.
+    median = np.median(centers_x)
+    mad = np.median(np.abs(centers_x - median))
+    if mad > 0:
+        inliers = np.abs(centers_x - median) <= 5.0 * mad
+        if inliers.sum() >= 2:
+            centers_y, centers_x = centers_y[inliers], centers_x[inliers]
+
+    if len(centers_x) < 2:
+        return 0.0, float(centers_x[0])
+
+    slope, intercept = np.polyfit(centers_y, centers_x, 1)
+    return float(slope), float(intercept)
+
+
+def _restrict_to_contact_cluster(points: np.ndarray, reference_si: float) -> np.ndarray:
+    """
+    Keep only the superior-inferior cluster of points nearest a reference S-I level.
+
+    The femoral central weight-bearing zone is selected by an anterior-posterior (and
+    left-right) window derived from the tibial plateau. At high knee flexion the curved
+    femoral cartilage folds back on itself, so that window intersects the cartilage at two
+    separate superior-inferior levels: the true weight-bearing surface (in contact with
+    the tibia) and the anterior trochlea, which has rotated into the same A-P range. This
+    helper removes the fold by clustering the candidate points along the S-I axis (axis 2)
+    — splitting wherever there is a large S-I gap — and keeping only the cluster closest to
+    the tibial contact level. At low flexion the candidates form a single cluster and are
+    returned unchanged.
+
+    :param points: An ``Nx3`` array of candidate weight-bearing voxels (LPI index space).
+    :param reference_si: The tibial contact S-I level (axis 2) the true zone sits against,
+        e.g. the most-superior tibial central-zone voxel.
+    :return: The subset of ``points`` belonging to the S-I cluster nearest ``reference_si``.
+    """
+    if len(points) == 0:
+        return points
+    si_sorted = np.sort(points[:, 2])
+    span = si_sorted[-1] - si_sorted[0]
+    if span == 0:
+        return points
+
+    # A gap is a cluster boundary when it is large relative to the overall S-I span; the
+    # 10% (min 2 voxel) threshold cleanly separates a folded trochlea from the contact
+    # surface while never splitting a single, contiguous weight-bearing cluster.
+    tolerance = max(2.0, 0.1 * span)
+    labels = np.zeros(len(si_sorted), dtype=int)
+    for boundary in np.where(np.diff(si_sorted) > tolerance)[0]:
+        labels[boundary + 1:] += 1
+
+    best_label, best_distance = 0, np.inf
+    for label_id in np.unique(labels):
+        distance = np.min(np.abs(si_sorted[labels == label_id] - reference_si))
+        if distance < best_distance:
+            best_distance, best_label = distance, label_id
+
+    kept = si_sorted[labels == best_label]
+    return points[(points[:, 2] >= kept.min()) & (points[:, 2] <= kept.max())]
+
 
 def build_cartilage_meshes(superior_points: np.ndarray, inferior_points: np.ndarray) -> Tuple[pv.PolyData, pv.PolyData]:
     """
