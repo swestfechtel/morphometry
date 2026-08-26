@@ -29,7 +29,7 @@ testing the viewer. `npm run build` always uses webpack, so production is fine.
 
 - **Next.js 15** (App Router) with **React 19** and **TypeScript 5**
 - **Tailwind CSS v4** with **Flowbite** component library
-- Backend API at `http://localhost:8000` (configured in `app/server_config.ts`, overridable via the `NEXT_PUBLIC_MODEL_API` env var)
+- Backend API base URL resolved in `app/server_config.ts` (same-hostname in the browser, loopback for SSR; overridable via `NEXT_PUBLIC_MODEL_API`)
 
 ## Architecture
 
@@ -195,9 +195,24 @@ Username/password login against the API (`POST /auth/login`), managed by
 
 ### API Configuration
 
-`app/server_config.ts` exports a `model_api` base URL, read from the
-`NEXT_PUBLIC_MODEL_API` env var (default `http://localhost:8000`). `NEXT_PUBLIC_*`
-values are inlined at build time, so rebuild after changing it; copy
-`.env.example` to `.env.local` to override. Components import `server_config`
+`app/server_config.ts` exposes a `model_api` base URL as a **getter**, resolved
+per access because it must differ between SSR and the browser:
+
+- **SSR** (server components fetching during render): `http://localhost:<port>` —
+  the API on loopback of the same machine, always reachable.
+- **Browser** (client fetches, login, Cornerstone volume/preview URLs): same
+  `protocol`+`hostname` as the current page, on the API port. This is what makes
+  the UI work when opened via **both** `http://localhost:3000` and
+  `http://<lan-ip>:3000`: a page on the LAN IP calls `http://<lan-ip>:8000`, never
+  loopback. A hardcoded `localhost` API URL would make the LAN-IP page fetch a
+  more-private address, which **Chrome's Private Network Access policy blocks**
+  (`…request client is not a secure context and the resource is in more-private
+  address space loopback`) — no API-side CORS header can override that.
+
+Resolution order: `NEXT_PUBLIC_MODEL_API` (explicit override, set only when the API
+is on a different host than the UI) → browser same-hostname derivation
+(`NEXT_PUBLIC_MODEL_API_PORT`, default 8000) → `http://localhost:<port>`.
+`NEXT_PUBLIC_*` values are inlined at build time, so rebuild after changing them;
+copy `.env.example` to `.env.local` to override. Components import `server_config`
 directly (`@/app/server_config`) for API calls. Path alias `@/*` maps to project
 root.
