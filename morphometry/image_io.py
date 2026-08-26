@@ -202,6 +202,31 @@ class Image(object):
         return nib_image, tmp
 
     @staticmethod
+    def dicom_files_to_nibabel(files) -> Tuple[nib.Nifti1Image, tempfile.TemporaryDirectory]:
+        """Convert an explicit, ordered list of DICOM slice files to a nibabel NIfTI.
+
+        Like :meth:`dicom_to_nibabel`, but takes the exact files — already sorted into
+        slice order — rather than a directory. This lets a caller convert a single
+        *contiguous* slab of a multi-slab acquisition on its own, so SimpleITK derives
+        the true within-slab z-spacing. Handing SimpleITK a whole gapped series
+        (e.g. a torsion scan with separate hip/knee/ankle stations) instead forces all
+        slices onto one uniform grid whose spacing is the gap-averaged extent / (n-1),
+        which stretches each slab and corrupts every superior-inferior distance.
+
+        :param files: DICOM file paths in slice order (one contiguous slab).
+        :return: A nibabel NIfTI image and the ``TemporaryDirectory`` backing it (keep
+            it alive until the image data has been copied out; the caller cleans it up).
+        """
+        reader = sitk.ImageSeriesReader()
+        reader.SetFileNames([str(f) for f in files])
+        image = reader.Execute()
+
+        tmp = tempfile.TemporaryDirectory()
+        sitk.WriteImage(image, os.path.join(tmp.name, 'temp.nii.gz'))
+        nib_image = nib.load(os.path.join(tmp.name, 'temp.nii.gz'))
+        return nib_image, tmp
+
+    @staticmethod
     def read_dicom_metadata(directory: str) -> pydicom.FileDataset:
         """
         Read metadata from a DICOM series.

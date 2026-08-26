@@ -79,6 +79,27 @@ The single-series `POST /upload/` and Orthanc paths are unchanged (they still
 ingest one series directly). `enumerate_torsion_series` / `materialize_torsion_
 selection` live in `ingest/dicom.py`.
 
+### Multi-slab acquisitions (z-spacing correctness)
+
+A whole-leg torsion series is often **three separate stations** — hip, knee, ankle —
+stored in one series with large gaps between them (the shafts are not imaged). Handed
+the whole gapped series, SimpleITK forces a single uniform grid and sets the z-spacing
+to the gap-averaged `extent / (n-1)`, roughly **doubling** the true within-slab spacing
+(e.g. 4.4 mm read as ~9 mm). That silently corrupts every superior-inferior distance
+(femoral/tibial torsion, bone length, offsets) — Murphy femoral torsion fails outright
+because its lesser-trochanter plausibility distance then exceeds the anatomical bound.
+
+So `_ingest_whole_leg_dir` first calls `_detect_slabs`, which orders the slices by
+`ImagePositionPatient` (projected on the slice normal) and cuts at the large inter-station
+gaps. If it finds exactly three slabs, each is converted **on its own**
+(`Image.dicom_files_to_nibabel`) so SimpleITK derives that slab's real spacing; the slabs
+are concatenated, corrected for an upside-down acquisition once (`_is_upside_down`), and
+split at the known slab boundaries into hip/knee/ankle. A genuinely contiguous stack (or a
+series with duplicate slice positions, e.g. dual-echo) falls back to the previous
+whole-volume conversion + changepoint split (`_split_volume`). Exams ingested before this
+fix carry the doubled spacing and must be **re-ingested from the original DICOM** to correct
+it (the stored volumes already lost the per-slab geometry).
+
 ## Authentication & users
 
 Two credential kinds, accepted interchangeably on protected endpoints (`require_auth`):

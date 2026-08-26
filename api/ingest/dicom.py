@@ -111,20 +111,29 @@ def _orient_superoinferior(transformed: Image) -> Image:
     :param transformed: the LPI-reoriented whole-leg volume.
     :return: the same image, or a z-reversed copy if it was upside-down.
     """
-    footprint = _slice_footprint(transformed.array)
-    n = len(footprint)
-    q = max(1, n // 4)
-    superior_area = float(footprint[:q].mean())   # low z  -> expected hip (large)
-    inferior_area = float(footprint[-q:].mean())  # high z -> expected ankle (small)
-    if superior_area >= inferior_area:
+    if not _is_upside_down(transformed.array):
         return transformed
     logger.warning(
-        "Whole-leg volume looks upside-down (superior footprint %.0f < inferior %.0f); "
+        "Whole-leg volume looks upside-down (superior footprint < inferior); "
         "reversing z so hip is at low z. Check the source DICOM orientation metadata.",
-        superior_area, inferior_area,
     )
     flipped = np.ascontiguousarray(transformed.array[:, :, ::-1])
     return Image.from_nibabel(nib.Nifti1Image(flipped, affine=transformed.affine))
+
+
+def _is_upside_down(arr: np.ndarray) -> bool:
+    """Whether an LPI volume's z runs inferior->superior instead of superior->inferior.
+
+    The proximal (hip/pelvis) cross-section dwarfs the ankle, so if the low-z quarter
+    has a smaller foreground footprint than the high-z quarter, the data is flipped
+    relative to what the affine claims. Used both to correct a whole-leg volume
+    (:func:`_orient_superoinferior`) and, in the gap-split path, to fix a globally
+    inverted multi-slab acquisition with one reversal (which simultaneously corrects
+    the slab order and each slab's internal z-direction).
+    """
+    footprint = _slice_footprint(arr)
+    q = max(1, len(footprint) // 4)
+    return float(footprint[:q].mean()) < float(footprint[-q:].mean())
 
 
 def _split_volume(transformed: Image) -> dict[str, Image]:
@@ -140,6 +149,129 @@ def _split_volume(transformed: Image) -> dict[str, Image]:
         "knee": Image.from_nibabel(nib.Nifti1Image(arr[:, :, knee_hip:ankle_knee], affine=affine)),
         "ankle": Image.from_nibabel(nib.Nifti1Image(arr[:, :, ankle_knee:], affine=affine)),
     }
+
+
+def _slice_position(ds) -> float | None:
+    """Scalar position of a DICOM slice along its own slice-normal, in mm.
+
+    Projects ``ImagePositionPatient`` onto the slice normal (``ImageOrientationPatient``
+    row x col), giving a 1-D coordinate that orders the slices regardless of obliquity.
+    Returns ``None`` if the geometry tags are missing/unparseable.
+    """
+    try:
+        iop = np.array(ds.ImageOrientationPatient, dtype=float)
+        ipp = np.array(ds.ImagePositionPatient, dtype=float)
+    except Exception:  # noqa: BLE001 - missing/odd geometry tags
+        return None
+    normal = np.cross(iop[:3], iop[3:])
+    return float(np.dot(ipp, normal))
+
+
+def _detect_slabs(dicom_dir: Path, gap_factor: float = 4.0, min_gap_mm: float = 20.0,
+                  min_slab_slices: int = 3) -> list[list[Path]] | None:
+    """Group a multi-slab torsion series into its contiguous slabs by position gaps.
+
+    A torsion acquisition is often three separate stations (hip, knee, ankle) stored
+    in a single series, with large gaps between them where the shafts are not imaged.
+    Handed the whole series, SimpleITK collapses those gaps onto one uniform grid and
+    doubles the effective slice spacing (see :meth:`Image.dicom_files_to_nibabel`).
+    This reads every image DICOM under ``dicom_dir``, orders the slices by position,
+    and cuts wherever the position step jumps far above the typical (median) step —
+    the inter-station gaps — returning the per-slab file lists (each in slice order).
+
+    :param dicom_dir: Directory of the staged DICOM series.
+    :param gap_factor: A step larger than ``gap_factor x`` the median step is a gap.
+    :param min_gap_mm: ...and it must also exceed this absolute margin over the median,
+        so tiny spacing jitter never counts as a gap.
+    :param min_slab_slices: Reject the split if any slab is thinner than this (a stray
+        outlier slice, not a real station).
+    :return: The slabs' file lists in position order, or ``None`` when there is no clean
+        multi-slab structure (a single contiguous stack, too few / unreadable slices),
+        so the caller falls back to the whole-volume changepoint split.
+    """
+    entries: list[tuple[float, Path]] = []
+    for path in dicom_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            ds = pydicom.dcmread(str(path), stop_before_pixels=True)
+        except Exception:  # noqa: BLE001 - non-DICOM / unreadable files are skipped
+            continue
+        pos = _slice_position(ds)
+        if pos is not None:
+            entries.append((pos, path))
+
+    if len(entries) < 3 * min_slab_slices:
+        return None
+    entries.sort(key=lambda e: e[0])
+    positions = np.array([e[0] for e in entries])
+    deltas = np.diff(positions)
+    # Duplicate slice positions (e.g. a dual-echo / multi-contrast series with two
+    # images per location) make per-slab spacing ambiguous and would feed SimpleITK a
+    # zero z-step. Don't attempt a gap split then — defer to the whole-series conversion.
+    if np.any(deltas <= 1e-3):
+        logger.warning("Series for gap detection has duplicate slice positions; "
+                       "using the whole-series conversion instead of a gap split.")
+        return None
+    step = float(np.median(deltas))
+    gap_threshold = max(gap_factor * step, step + min_gap_mm)
+
+    cuts = [i + 1 for i, d in enumerate(deltas) if d > gap_threshold]
+    if not cuts:
+        return None  # contiguous stack -> caller uses the changepoint split
+
+    slabs: list[list[Path]] = []
+    start = 0
+    for end in cuts + [len(entries)]:
+        slabs.append([e[1] for e in entries[start:end]])
+        start = end
+    if any(len(s) < min_slab_slices for s in slabs):
+        return None  # a spurious gap carved off a sliver -> not a clean multi-slab split
+    return slabs
+
+
+def _ingest_slabs(slabs: list[list[Path]], accession: str, study: dict) -> str:
+    """Convert each detected slab on its own (true spacing) and persist as hip/knee/ankle.
+
+    Each slab is converted separately so SimpleITK derives that slab's real within-slab
+    z-spacing, then reoriented to LPI **individually** (superior->inferior internally),
+    exactly like each region in :func:`_ingest_multi_dirs`. The slabs come back in
+    acquisition-position order, which is either hip->ankle or ankle->hip; the *list* is
+    reversed (leaving each slab's internal orientation untouched) so the hip end — whose
+    cross-section dwarfs the ankle's — is first, then assigned hip/knee/ankle. The middle
+    slab is always the knee, so only the two ends need distinguishing.
+
+    NB: reversing the concatenated *array* here would be wrong — it would also flip each
+    slab internally (upside-down stacks). Per-slab internal orientation is left to
+    ``transform_coordinate_system``, matching :func:`_ingest_multi_dirs`; a series whose
+    affine misreports its orientation is a shared limitation of both multi-region paths.
+    """
+    images: list[Image] = []
+    tmps = []
+    try:
+        for files in slabs:
+            nib_image, tmp = Image.dicom_files_to_nibabel(files)
+            tmps.append(tmp)
+            img = Image.from_nibabel(nib_image)
+            img.transform_coordinate_system()
+            images.append(_materialize(img))  # read before tmps are removed
+
+        # Order superior->inferior by reordering the LIST (not the voxels): the hip end's
+        # cross-section is far larger than the ankle end's. Only the ends need comparing.
+        if _slice_footprint(images[0].array).mean() < _slice_footprint(images[-1].array).mean():
+            images = images[::-1]
+        regions = {"hip": images[0], "knee": images[1], "ankle": images[2]}
+
+        shapes = [regions[r].array.shape[:2] for r in ("hip", "knee", "ankle")]
+        if len(set(shapes)) != 1:
+            raise IngestError(f"In-plane shapes differ between slabs: {shapes}")
+        combined = np.concatenate([regions[r].array for r in ("hip", "knee", "ankle")], axis=2)
+        transformed = Image.from_nibabel(nib.Nifti1Image(combined, affine=regions["hip"].affine))
+    finally:
+        for tmp in tmps:
+            tmp.cleanup()
+
+    return _persist_torsion(accession, study, transformed.copy(), transformed, regions)
 
 
 def _check_duplicate(accession: str) -> None:
@@ -209,7 +341,23 @@ def _ingest_whole_leg_dir(dicom_dir: Path, accession: str, metadata) -> str:
     The duplicate check and accession derivation are the caller's responsibility, so
     this can be reused both for a fresh upload (:func:`ingest_torsion_from_dir`) and to
     materialize an already-staged, user-selected series (:func:`materialize_torsion_selection`).
+
+    Multi-station acquisitions (separate hip/knee/ankle slabs in one series, with large
+    gaps between them) are detected from the slice positions and each slab is converted
+    on its own so its true z-spacing is preserved (see :func:`_detect_slabs`). A genuinely
+    contiguous stack falls back to converting the whole series and splitting it with
+    changepoint detection.
     """
+    study = _study_fields(metadata)
+    slabs = _detect_slabs(dicom_dir)
+    if slabs is not None:
+        if len(slabs) == 3:
+            logger.info("Detected 3-slab torsion acquisition %s for %s; splitting by position gaps.",
+                        [len(s) for s in slabs], accession)
+            return _ingest_slabs(slabs, accession, study)
+        logger.warning("Position-gap detection found %d slabs (expected 3) for %s; "
+                       "falling back to changepoint split of the whole volume.", len(slabs), accession)
+
     nib_image, tmp = Image.dicom_to_nibabel(str(dicom_dir))
     try:
         original = _materialize(Image.from_nibabel(nib_image))  # read before tmp is removed
@@ -220,7 +368,7 @@ def _ingest_whole_leg_dir(dicom_dir: Path, accession: str, metadata) -> str:
         tmp.cleanup()
 
     regions = _split_volume(transformed)
-    return _persist_torsion(accession, _study_fields(metadata), original, transformed, regions)
+    return _persist_torsion(accession, study, original, transformed, regions)
 
 
 def ingest_torsion_from_dir(dicom_dir: Path) -> str:
