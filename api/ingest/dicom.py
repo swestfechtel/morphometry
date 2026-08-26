@@ -34,6 +34,32 @@ def _random_accession() -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
 
 
+def _patient_name(metadata) -> str | None:
+    """Read the DICOM PatientName (0010,0010) as a human-readable string.
+
+    DICOM stores names caret-delimited (``Family^Given^Middle^Prefix^Suffix``);
+    pydicom parses this into a ``PersonName``. Format it as ``Given Family`` when
+    those components are present, otherwise fall back to the raw value with the
+    carets turned into spaces. Returns ``None`` when the tag is missing or empty
+    so the serializer/schema default ("Anonymised") still applies.
+
+    :param metadata: the DICOM dataset (first slice header) to read from.
+    :return: the formatted patient name, or ``None`` if unavailable.
+    """
+    try:
+        value = metadata[(0x0010, 0x0010)].value
+    except Exception:  # noqa: BLE001 - missing tag is non-fatal
+        return None
+    if value is None:
+        return None
+    given = (getattr(value, "given_name", "") or "").strip()
+    family = (getattr(value, "family_name", "") or "").strip()
+    formatted = " ".join(part for part in (given, family) if part)
+    if not formatted:
+        formatted = str(value).replace("^", " ").strip()
+    return formatted or None
+
+
 def _study_fields(metadata) -> dict:
     """Extract the small subset of DICOM tags the app displays/stores."""
     def _fmt(tag, in_fmt, out_fmt):
@@ -52,7 +78,7 @@ def _study_fields(metadata) -> dict:
         "study_date": _fmt((0x0008, 0x0020), "%Y%m%d", "%Y-%m-%d"),
         "study_time": _fmt((0x0008, 0x0030), "%H%M%S", "%H:%M"),
         "study_description": _val((0x0008, 0x1030)),
-        "patient_name": "Anonymised",
+        "patient_name": _patient_name(metadata),
         "dicom_metadata": {
             "study_date": _fmt((0x0008, 0x0020), "%Y%m%d", "%Y-%m-%d"),
             "study_description": _val((0x0008, 0x1030)),
