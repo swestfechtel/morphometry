@@ -29,6 +29,7 @@ testing the viewer. `npm run build` always uses webpack, so production is fine.
 
 - **Next.js 15** (App Router) with **React 19** and **TypeScript 5**
 - **Tailwind CSS v4** with **Flowbite** component library
+- **next-intl v4** for English/German i18n (cookie-based locale; see "Internationalization")
 - Backend API base URL resolved in `app/server_config.ts` (same-hostname in the browser, loopback for SSR; overridable via `NEXT_PUBLIC_MODEL_API`)
 
 ## Architecture
@@ -171,6 +172,45 @@ used a *volume* labelmap instead, which only renders on volume viewports.)
 
 The API serves the NIfTI volumes (see the root `CLAUDE.md` —
 `GET /examinations/{id}/volume/...`, served as GPU-renderable float32).
+
+### Internationalization (i18n)
+
+English/German, via **next-intl v4** with a **cookie-based locale** (no URL locale
+routing — the language is chosen in the navbar, not the path). Wiring:
+
+- `i18n/config.ts` — the locale list (`en`, `de`), `defaultLocale`, display names,
+  and `asLocale()` (narrow an arbitrary string to a supported locale).
+- `i18n/locale.ts` — `'use server'` actions `getUserLocale()` / `setUserLocale()`
+  backed by the `NEXT_LOCALE` cookie.
+- `i18n/request.ts` — `getRequestConfig` (registered in `next.config.ts` via
+  `createNextIntlPlugin`) resolves the locale from the cookie and loads
+  `messages/{locale}.json`.
+- `messages/en.json` + `messages/de.json` — the catalogs, **one shared key tree**
+  (keep them at exact key parity; a test/script can diff the flattened key sets).
+  Namespaces mirror areas: `nav`, `footer`, `auth`, `landing`, `about`,
+  `examinations`, `list`, `examination.labels`, `viewer`, `landmarks`,
+  `seriesPicker`, `regions`, `upload`, `polling`.
+- `app/layout.tsx` is a **server** component: it reads the locale (`getLocale()`),
+  sets `<html lang>`, and wraps the tree in `NextIntlClientProvider` (no props — it
+  inherits locale+messages from the request config). All interactive chrome moved
+  into the client `app/components/app-chrome.tsx` (navbar, dark-mode state, and the
+  `LanguageSwitcher`). The switcher writes the cookie via the server action then
+  `router.refresh()` so **both** server components (re-rendered) and client
+  components (via the provider) update.
+
+Usage: **client components** and **sync server components** use `useTranslations(ns)`;
+**async server components** (the examinations pages that fetch) use
+`await getTranslations(ns)` — a hook can't run in an async component. Because the
+locale is a cookie, all routes render dynamically (landing/about are no longer
+statically prerendered).
+
+The **Cornerstone canvas labels** (anatomical landmark names + Proximal/Distal angle
+captions) are drawn by pure non-React modules (`landmark-mapping.ts`,
+`use-cornerstone-viewport.ts`), so the hook resolves the strings with
+`useTranslations('landmarks')` and passes them in (`buildReferenceLines(landmarks,
+labels)`, `angleLabelFor(tree, spec, formatAngle)`); the viewer is remounted on locale
+change via `key={locale}` (in `torsion-examination-component.tsx`) so the labels,
+baked into annotations at setup time, rebuild in the new language.
 
 ### Authentication
 

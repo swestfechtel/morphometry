@@ -1,15 +1,15 @@
 import server_config from "@/app/server_config";
-import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { ListComponent } from "@/app/components/list-component";
 import FilterComponent from "@/app/components/filter-component";
 import { TorsionExaminationComponent } from '@/app/components/torsion-examination-component';
 import { SeriesPicker } from "@/app/components/series-picker";
 import { serverAuthHeaders } from "@/app/server-auth";
-import { BaseExamination } from "@/app/types";
 
 export default async function page({params,}: {params: Promise<{slug: string}>}){
     const { slug } = await params;
+    const t = await getTranslations();
 
     if (slug[0] === 'mr-torsion') {
         const result = await fetch(server_config.model_api + '/examinations/', { headers: await serverAuthHeaders() });
@@ -21,13 +21,13 @@ export default async function page({params,}: {params: Promise<{slug: string}>})
             <div className="min-h-screen bg-white dark:bg-gray-800">
                 {/* Header */}
                 <header className="bg-white dark:bg-gray-700 shadow mb-2 my-auto px-4 py-4">
-                    <h1 className="text-4xl font-bold text-gray-800 dark:text-white">Examinations</h1>
+                    <h1 className="text-4xl font-bold text-gray-800 dark:text-white">{t("examinations.title")}</h1>
                 </header>
                 {/* Main Content */}
                 <div className="mx-auto px-4 shadow">
                     <FilterComponent state={slug[0]}/>
                     <section id="content" className="py-12">
-                        <ListComponent examinations={examinations} description="Torsionsbemaßung (MRT)"/>
+                        <ListComponent examinations={examinations} description={t("examinations.filterTorsionMr")}/>
                     </section>
                 </div>
             </div>
@@ -45,27 +45,27 @@ export default async function page({params,}: {params: Promise<{slug: string}>})
                     header is only shown for other examination types. */}
                 { examination.type !== 'torsion' &&
                 <div className="bg-white dark:bg-gray-700 shadow sticky top-4 z-40 w-full mx-auto px-4 py-6">
-                    <h1 className="text-4xl font-bold text-gray-800 dark:text-white">Examination Details</h1>
+                    <h1 className="text-4xl font-bold text-gray-800 dark:text-white">{t("examinations.detailsTitle")}</h1>
                     <p className="text-lg text-gray-700 dark:text-gray-200 mt-2 px-2 py-1">
                     <span
                         className="inline-flex items-center rounded-md bg-gray-50 px-2 py-1 text-m font-medium text-gray-600 ring-1 ring-gray-500/10 ring-inset mx-1">
-                        Patient name: {examination.patient_name}
+                        {t("examination.labels.patientName")}: {examination.patient_name}
                     </span>
                         <span
                             className="inline-flex items-center rounded-md bg-gray-50 px-2 py-1 text-m font-medium text-gray-600 ring-1 ring-gray-500/10 ring-inset mx-1">
-                        Study date: {examination.study_date}
+                        {t("examination.labels.studyDate")}: {examination.study_date}
                     </span>
                         <span
                             className="inline-flex items-center rounded-md bg-gray-50 px-2 py-1 text-m font-medium text-gray-600 ring-1 ring-gray-500/10 ring-inset mx-1">
-                        Study time: {examination.study_time}
+                        {t("examination.labels.studyTime")}: {examination.study_time}
                     </span>
                         <span
                             className="inline-flex items-center rounded-md bg-gray-50 px-2 py-1 text-m font-medium text-gray-600 ring-1 ring-gray-500/10 ring-inset mx-1">
-                        Study description: {examination.study_description}
+                        {t("examination.labels.studyDescription")}: {examination.study_description}
                     </span>
                         <span
                             className="inline-flex items-center rounded-md bg-gray-50 px-2 py-1 text-m font-medium text-gray-600 ring-1 ring-gray-500/10 ring-inset mx-1">
-                        Accession number: {examination.accession_number}
+                        {t("examination.labels.accessionNumber")}: {examination.accession_number}
                     </span>
                     </p>
                 </div>

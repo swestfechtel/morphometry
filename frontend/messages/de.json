@@ -1,0 +1,240 @@
+{
+  "nav": {
+    "home": "Startseite",
+    "examinations": "Untersuchungen anzeigen",
+    "upload": "Neue Untersuchung hochladen",
+    "about": "Über",
+    "disclaimer": "Hinweis: Dieses Werkzeug ist nicht für den klinischen Einsatz bestimmt!"
+  },
+  "footer": {
+    "tagline": "Morphometrie — Torsionsanalyse der unteren Extremität. Forschungswerkzeug, nicht für den klinischen Einsatz.",
+    "copyright": "© {year} morphometry"
+  },
+  "language": {
+    "label": "Sprache"
+  },
+  "auth": {
+    "signIn": "Anmelden",
+    "signingIn": "Anmeldung läuft…",
+    "signOut": "Abmelden",
+    "signedIn": "Angemeldet",
+    "username": "Benutzername",
+    "password": "Passwort",
+    "invalidCredentials": "Ungültiger Benutzername oder ungültiges Passwort.",
+    "loginFailed": "Anmeldung fehlgeschlagen (HTTP {status}).",
+    "networkError": "Netzwerkfehler — ist die API erreichbar?"
+  },
+  "landing": {
+    "eyebrow": "Morphometrie der unteren Extremität",
+    "title": "Automatisierte Femur- und Tibiatorsion",
+    "subtitle": "Laden Sie eine MRT-Untersuchung der unteren Extremität hoch und erhalten Sie Segmentierung, Torsionswinkel und editierbare Mess-Landmarken — automatisch berechnet und im Browser überprüfbar.",
+    "uploadCta": "Untersuchung hochladen",
+    "viewCta": "Untersuchungen anzeigen",
+    "disclaimer": "Forschungswerkzeug — nicht für den klinischen Einsatz bestimmt.",
+    "howItWorks": {
+      "title": "So funktioniert es",
+      "intro": "Vom rohen DICOM-Export zu überprüften Torsionswinkeln in wenigen Schritten.",
+      "steps": {
+        "upload": {
+          "title": "Hochladen",
+          "body": "Wählen Sie den gesamten Untersuchungsordner. Die DICOM-Serien werden aufgelistet und in einer Vorschau angezeigt — kein manuelles Sortieren."
+        },
+        "select": {
+          "title": "Serie auswählen",
+          "body": "Wählen Sie die Ganzbein-Serie (automatisch in Hüfte, Knie und Sprunggelenk aufgeteilt) oder weisen Sie drei separate Regionsserien zu."
+        },
+        "compute": {
+          "title": "Berechnen",
+          "body": "Eine GPU-Pipeline segmentiert die Knochen und berechnet die Femur- und Tibiatorsion — in einer Warteschlange und im Hintergrund ausgeführt."
+        },
+        "review": {
+          "title": "Überprüfen",
+          "body": "Betrachten Sie das Volumen, verschieben Sie die Mess-Landmarken und beobachten Sie, wie sich die Winkel live aktualisieren, bevor Sie speichern."
+        }
+      }
+    },
+    "whatYouGet": {
+      "title": "Was Sie erhalten",
+      "features": {
+        "femoral": {
+          "title": "Femurtorsion",
+          "body": "Sowohl die Lee- als auch die Murphy-Landmarkenmethode, pro Seite, sodass Sie die Definitionen an derselben Aufnahme vergleichen können."
+        },
+        "tibial": {
+          "title": "Tibiatorsion",
+          "body": "Proximale und distale Referenzachsen, gemessen auf ihren nativen Schichten, mit dem vorzeichenbehafteten Winkel pro Linie."
+        },
+        "interactive": {
+          "title": "Interaktive Überprüfung",
+          "body": "Referenzlinien-Landmarken sind verschiebbar — auch über Schichten hinweg — und jede Änderung wird in der Untersuchung gespeichert."
+        }
+      }
+    },
+    "cta": {
+      "title": "Bereit zu beginnen?",
+      "body": "Laden Sie eine Untersuchung hoch, um die Pipeline auszuführen, oder erfahren Sie mehr über die Messungen und ihre Berechnung.",
+      "uploadCta": "Untersuchung hochladen",
+      "learnMore": "Mehr erfahren"
+    }
+  },
+  "about": {
+    "title": "Über",
+    "intro": "Eine Weboberfläche zum Berechnen und Überprüfen von Torsionsmessungen der unteren Extremität aus MRT, basierend auf der quelloffenen Analysebibliothek <b>morphometry</b>.",
+    "measures": {
+      "title": "Was gemessen wird",
+      "intro": "Das Werkzeug leitet die Rotationsausrichtung der unteren Extremität aus einer Segmentierung von Femur, Tibia und Fibula ab:",
+      "femoral": "<b>Femurtorsion</b> — der Winkel zwischen der Femurhalsachse und der dorsalen Kondylenachse, berechnet mit den Landmarkendefinitionen nach <m>Lee</m> und <m>Murphy</m> für jede Seite.",
+      "tibial": "<b>Tibiatorsion</b> — der Winkel zwischen der proximalen Tibiaachse und der transmalleolären Achse am Sprunggelenk, pro Seite.",
+      "note": "Jede Messung ist durch ein Paar Referenzlinien auf ihren nativen Aufnahmeschichten definiert. Da beide Knochen in diesen Aufnahmen stark anisotrop sind (fein in der Ebene, grob senkrecht dazu), zeigt der Viewer native axiale Schichten statt eines reformatierten Volumens, und die Landmarken werden auf der Schicht platziert, auf der sie gemessen wurden."
+    },
+    "pipeline": {
+      "title": "Die Pipeline",
+      "intro": "Ein Upload wird durch eine Reihe von Hintergrundschritten in überprüfbare Messungen umgewandelt:",
+      "steps": {
+        "ingestion": {
+          "title": "Einlesen",
+          "body": "Der hochgeladene Untersuchungsordner wird nach DICOM-Serien durchsucht, die gruppiert, von Nicht-Bilddateien bereinigt und in einer Vorschau angezeigt werden, damit die richtige Serie gewählt werden kann."
+        },
+        "segmentation": {
+          "title": "Segmentierung",
+          "body": "Ein Deep-Learning-Modell (nnU-Net) segmentiert die Regionen Hüfte, Knie und Sprunggelenk auf einer GPU in Knochenlabels. Aufträge werden über einen einzelnen Worker serialisiert, damit die GPU nie überlastet wird."
+        },
+        "torsion": {
+          "title": "Torsionsberechnung",
+          "body": "Die morphometry-Bibliothek leitet die anatomischen Landmarken und Referenzachsen aus den Segmentierungsmasken ab und berechnet die Femur- und Tibiatorsionswinkel."
+        },
+        "review": {
+          "title": "Überprüfung & Korrektur",
+          "body": "Die Ergebnisse werden im interaktiven Viewer dargestellt. Landmarken können verschoben werden — innerhalb einer Schicht oder über Schichten hinweg — und die Winkel werden live neu berechnet; Korrekturen werden in der Untersuchung gespeichert."
+        }
+      }
+    },
+    "technology": {
+      "title": "Technologie",
+      "analysis": {
+        "title": "Analyse & API",
+        "body": "Eine Python-Morphometrie-Bibliothek berechnet die Messungen aus Segmentierungsmasken. Ein FastAPI-Dienst übernimmt das DICOM-Einlesen, speichert Untersuchungen und verteilt Segmentierungs- und Torsionsaufträge an einen Redis-gestützten Worker, der containerisierte Modelle ausführt."
+      },
+      "web": {
+        "title": "Weboberfläche",
+        "body": "Diese Oberfläche ist eine Next.js-/React-Anwendung. Der Untersuchungs-Viewer stellt die NIfTI-Volumen direkt im Browser mit Cornerstone3D dar und zeichnet die verschiebbaren Mess-Landmarken darüber."
+      }
+    },
+    "disclaimer": {
+      "title": "Hinweis",
+      "body": "Dies ist ein Forschungs- und Entwicklungswerkzeug. Es ist <b>kein Medizinprodukt</b> und <b>nicht für den klinischen Einsatz</b>, für Diagnosen oder Behandlungsentscheidungen bestimmt. Automatisierte Messungen können falsch sein und müssen stets von einer qualifizierten befundenden Person überprüft werden."
+    },
+    "uploadCta": "Untersuchung hochladen",
+    "viewCta": "Untersuchungen anzeigen"
+  },
+  "examinations": {
+    "title": "Untersuchungen",
+    "detailsTitle": "Untersuchungsdetails",
+    "filterTorsionMr": "MRT-Torsion",
+    "filterClear": "Filter zurücksetzen"
+  },
+  "list": {
+    "intro": "Nachfolgend finden Sie eine Liste aller <u>{description}</u> Untersuchungen, die zuvor an das System gesendet wurden.",
+    "headers": {
+      "accessionNumber": "Zugangsnummer",
+      "patientName": "Patientenname",
+      "description": "Beschreibung",
+      "examinationDate": "Untersuchungsdatum",
+      "examinationTime": "Untersuchungszeit",
+      "status": "Status",
+      "actions": "Aktionen"
+    },
+    "filters": {
+      "accessionNumber": "Nach Zugangsnummer filtern",
+      "patientName": "Nach Patientenname filtern",
+      "description": "Nach Beschreibung filtern",
+      "date": "Nach Datum filtern",
+      "time": "Nach Zeit filtern",
+      "status": "Nach Status filtern"
+    },
+    "actions": {
+      "view": "Untersuchung anzeigen",
+      "selectSeries": "Serie auswählen",
+      "startProcessing": "Verarbeitung starten",
+      "delete": "Löschen"
+    }
+  },
+  "examination": {
+    "labels": {
+      "patientName": "Patientenname",
+      "studyDate": "Studiendatum",
+      "studyTime": "Studienzeit",
+      "studyDescription": "Studienbeschreibung",
+      "accessionNumber": "Zugangsnummer",
+      "status": "Status"
+    }
+  },
+  "viewer": {
+    "loading": "Viewer wird geladen…",
+    "detailsTitle": "Untersuchungsdetails",
+    "showSegmentation": "Segmentierung anzeigen",
+    "torsion": "Torsion",
+    "femurLee": "Femur (Lee)",
+    "femurMurphy": "Femur (Murphy)",
+    "tibia": "Tibia",
+    "leftPrefix": "L:",
+    "rightPrefix": "R:",
+    "axial": "Axial",
+    "saveChanges": "Änderungen speichern",
+    "help": "Scrollen: Schicht · Linksziehen: Kontrast/Helligkeit · Rechtsziehen: Zoom · Mittelziehen: Verschieben"
+  },
+  "landmarks": {
+    "femoralHeadCentre": "Femurkopfzentrum",
+    "femoralNeckCentre": "Femurhalszentrum",
+    "posteriorCondyleMedial": "Dorsaler Kondylus (medial)",
+    "posteriorCondyleLateral": "Dorsaler Kondylus (lateral)",
+    "posteriorTibialCondyleMed": "Dorsaler Tibiakondylus (med.)",
+    "posteriorTibialCondyleLat": "Dorsaler Tibiakondylus (lat.)",
+    "medialMalleolus": "Malleolus medialis",
+    "lateralMalleolus": "Malleolus lateralis",
+    "angleProximal": "Proximal: {value}°",
+    "angleDistal": "Distal: {value}°"
+  },
+  "seriesPicker": {
+    "title": "Zu verarbeitende Serie auswählen",
+    "modeWholeLeg": "Einzelne Ganzbein-Serie",
+    "modeRegions": "Getrennt Hüfte / Knie / Sprunggelenk",
+    "helpWholeLeg": "Wählen Sie die eine Serie, die das ganze Bein enthält — sie wird automatisch in Hüfte, Knie und Sprunggelenk aufgeteilt.",
+    "helpRegions": "Weisen Sie jeweils eine Serie der Hüfte, dem Knie und dem Sprunggelenk zu.",
+    "noPreview": "keine Vorschau",
+    "noDescription": "(keine Beschreibung)",
+    "images": "{count, plural, one {# Bild} other {# Bilder}}",
+    "scrollHint": "Scrollen, um durch die Schichten zu blättern",
+    "previewAlt": "Vorschau {index}",
+    "starting": "Wird gestartet…",
+    "process": "Ausgewählte Serie verarbeiten",
+    "queued": "Für die Verarbeitung eingereiht — sie läuft im Hintergrund, sodass Sie jetzt weitere Untersuchungen hochladen können.",
+    "viewResult": "Ergebnis anzeigen",
+    "uploadAnother": "Weitere Untersuchung hochladen",
+    "viewAll": "Alle Untersuchungen anzeigen",
+    "errorStart": "Verarbeitung konnte nicht gestartet werden (HTTP {status}).",
+    "errorNetwork": "Netzwerkfehler beim Starten der Verarbeitung."
+  },
+  "regions": {
+    "hip": "Hüfte",
+    "knee": "Knie",
+    "ankle": "Sprunggelenk"
+  },
+  "upload": {
+    "title": "Untersuchung hochladen",
+    "instructions": "Wählen Sie den gesamten, aus dem PACS exportierten Torsions-Untersuchungsordner. Der Server listet die enthaltenen DICOM-Serien auf, damit Sie die richtige auswählen können.",
+    "uploading": "Wird hochgeladen…",
+    "submit": "Hochladen & Serien auflisten",
+    "errorExists": "Diese Untersuchung existiert bereits auf dem Server.",
+    "errorUpload": "Fehler beim Hochladen der Untersuchung: {detail}",
+    "errorSelectDir": "Bitte wählen Sie zuerst einen Untersuchungsordner aus.",
+    "errorNetwork": "Es ist ein Netzwerkfehler aufgetreten."
+  },
+  "polling": {
+    "processing": "Wird verarbeitet…",
+    "finished": "Verarbeitung abgeschlossen!",
+    "failed": "Verarbeitung fehlgeschlagen.",
+    "failedWithReason": "Verarbeitung fehlgeschlagen: {reason}",
+    "backToExaminations": "Zurück zu den Untersuchungen"
+  }
+}

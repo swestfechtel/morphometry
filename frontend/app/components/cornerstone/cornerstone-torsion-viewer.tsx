@@ -4,6 +4,7 @@
 // overlay and draggable landmark probes. Client-only; import this via next/dynamic
 // with { ssr: false } so no Cornerstone code runs during server rendering.
 // (A stashed 3-plane MPR variant lives under `stashed/`.)
+import { useTranslations } from 'next-intl';
 import { TorsionExamination, TorsionFemurLandmarks, TorsionLandmarks, TorsionMethodSides } from '@/app/types';
 import { computeFemoralTorsion, computeTibialTorsion } from '@/app/utils';
 import { useCornerstoneViewport } from './use-cornerstone-viewport';
@@ -22,12 +23,13 @@ interface Props {
 
 /** One "L: x°  R: y°" row of torsion values, only rendered for sides that exist. */
 function TorsionRow({ label, left, right }: { label: string; left: string | null; right: string | null }) {
+  const t = useTranslations('viewer');
   return (
     <div className="flex justify-between gap-3 tabular-nums">
       <span className="text-white/70">{label}</span>
       <span>
-        {left != null && <span className="ml-2">L:&nbsp;{left}°</span>}
-        {right != null && <span className="ml-2">R:&nbsp;{right}°</span>}
+        {left != null && <span className="ml-2">{t('leftPrefix')}&nbsp;{left}°</span>}
+        {right != null && <span className="ml-2">{t('rightPrefix')}&nbsp;{right}°</span>}
       </span>
     </div>
   );
@@ -35,6 +37,7 @@ function TorsionRow({ label, left, right }: { label: string; left: string | null
 
 /** Top-right overlay with the femoral (per method) and tibial torsion, from live landmarks. */
 function TorsionReadout({ landmarks }: { landmarks: TorsionLandmarks }) {
+  const t = useTranslations('viewer');
   const femurTorsion = (method: string, side: 'left' | 'right'): string | null => {
     const m = landmarks?.femur?.[method as keyof TorsionFemurLandmarks] as TorsionMethodSides | undefined;
     const s = m?.[side];
@@ -49,10 +52,10 @@ function TorsionReadout({ landmarks }: { landmarks: TorsionLandmarks }) {
 
   return (
     <div className="rounded bg-black/60 px-3 py-2 text-xs text-white select-none shadow">
-      <div className="mb-1 font-semibold text-white/90">Torsion</div>
-      <TorsionRow label="Femur (Lee)" left={femurTorsion('Lee', 'left')} right={femurTorsion('Lee', 'right')} />
-      <TorsionRow label="Femur (Murphy)" left={femurTorsion('Murphy', 'left')} right={femurTorsion('Murphy', 'right')} />
-      <TorsionRow label="Tibia" left={tibiaTorsion('left')} right={tibiaTorsion('right')} />
+      <div className="mb-1 font-semibold text-white/90">{t('torsion')}</div>
+      <TorsionRow label={t('femurLee')} left={femurTorsion('Lee', 'left')} right={femurTorsion('Lee', 'right')} />
+      <TorsionRow label={t('femurMurphy')} left={femurTorsion('Murphy', 'left')} right={femurTorsion('Murphy', 'right')} />
+      <TorsionRow label={t('tibia')} left={tibiaTorsion('left')} right={tibiaTorsion('right')} />
     </div>
   );
 }
@@ -60,6 +63,7 @@ function TorsionReadout({ landmarks }: { landmarks: TorsionLandmarks }) {
 export function CornerstoneTorsionViewer({
   examination, showSegmentation, landmarks, hasChanges, onSave, saveChangesCallback, setLandmarksCallback,
 }: Props) {
+  const t = useTranslations('viewer');
   const offsets: Offsets = {
     kneeOffset: examination.knee_offset,
     ankleOffset: examination.ankle_offset,
@@ -69,7 +73,11 @@ export function CornerstoneTorsionViewer({
 
   const { refs } = useCornerstoneViewport({
     accession: examination.accession_number,
-    landmarks: examination.landmarks,
+    // Seed from the LIVE landmark tree (identical to examination.landmarks at first
+    // mount). This matters when the viewer remounts mid-edit — e.g. on a language
+    // switch (key={locale}) — so unsaved on-canvas edits are preserved rather than
+    // reverting to the saved landmarks while the readout still shows the edits.
+    landmarks: landmarks,
     offsets,
     showSegmentation,
     onLandmarksChange: setLandmarksCallback,
@@ -88,7 +96,7 @@ export function CornerstoneTorsionViewer({
       >
         <div ref={refs[0]} className="w-full h-full" style={{ minHeight: 0 }} onContextMenu={(e) => e.preventDefault()} />
         <span className="absolute top-1 left-2 text-xs text-white/70 pointer-events-none select-none">
-          Axial
+          {t('axial')}
         </span>
         {/* Top-right overlay: torsion readout with the Save button directly below it. The
             container ignores pointer events so it never blocks dragging; the button re-enables them. */}
@@ -99,13 +107,13 @@ export function CornerstoneTorsionViewer({
               onClick={onSave}
               className="pointer-events-auto px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs shadow"
             >
-              Save changes
+              {t('saveChanges')}
             </button>
           )}
         </div>
       </div>
       <div className="text-center text-xs text-white/40 select-none px-2">
-        scroll: slice · left-drag: contrast/brightness · right-drag: zoom · middle-drag: pan
+        {t('help')}
       </div>
     </div>
   );

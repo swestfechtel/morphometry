@@ -1,12 +1,12 @@
-'use server';
-
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import {ListComponent} from "@/app/components/list-component";
 import FilterComponent from "@/app/components/filter-component";
 import server_config from "@/app/server_config";
 import { serverAuthHeaders } from "@/app/server-auth";
 
 export default async function page() {
+    const t = await getTranslations("examinations");
     const result = await fetch(server_config.model_api + '/examinations/', { headers: await serverAuthHeaders() });
     if (result.status === 401) redirect('/login?next=/examinations');
     const result_json = await result.json();
@@ -16,7 +16,7 @@ export default async function page() {
         <div className="min-h-screen bg-white dark:bg-gray-800">
             {/* Header */}
             <header className="bg-white dark:bg-gray-700 shadow mb-2 my-auto px-4 py-4">
-                <h1 className="text-4xl font-bold text-gray-800 dark:text-white">Examinations</h1>
+                <h1 className="text-4xl font-bold text-gray-800 dark:text-white">{t("title")}</h1>
             </header>
             {/* Main Content */}
             <div className="mx-auto px-4 shadow">

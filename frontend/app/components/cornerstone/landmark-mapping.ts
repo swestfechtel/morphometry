@@ -126,6 +126,22 @@ export function referenceLineAngle(tree: TorsionLandmarks, spec: ReferenceLineSp
 }
 
 /**
+ * Localized anatomical labels drawn on the reference lines. Resolved from the message
+ * catalog by the viewport hook (which has the translator) and passed in here, so this
+ * pure module stays free of any React/i18n dependency.
+ */
+export interface LandmarkLabels {
+  femoralHeadCentre: string;
+  femoralNeckCentre: string;
+  posteriorCondyleMedial: string;
+  posteriorCondyleLateral: string;
+  posteriorTibialCondyleMed: string;
+  posteriorTibialCondyleLat: string;
+  medialMalleolus: string;
+  lateralMalleolus: string;
+}
+
+/**
  * Enumerate the reference lines present in a landmark tree, with anatomical labels.
  *
  * Femur (both sides): the femoral neck axis (hip_start→hip_end), one per method (Lee &
@@ -142,7 +158,7 @@ export function referenceLineAngle(tree: TorsionLandmarks, spec: ReferenceLineSp
  * :param landmarks: the stored torsion landmark tree.
  * :return: one {@link ReferenceLineSpec} per axis actually present in the tree.
  */
-export function buildReferenceLines(landmarks: TorsionLandmarks): ReferenceLineSpec[] {
+export function buildReferenceLines(landmarks: TorsionLandmarks, labels: LandmarkLabels): ReferenceLineSpec[] {
   const specs: ReferenceLineSpec[] = [];
   // Which knee endpoint is medial vs lateral flips with the image side.
   const kneeLabels = (side: string, medial: string, lateral: string) =>
@@ -158,7 +174,7 @@ export function buildReferenceLines(landmarks: TorsionLandmarks): ReferenceLineS
       specs.push({
         startPaths: [['femur', method, side, 'hip_start']],
         endPaths: [['femur', method, side, 'hip_end']],
-        startLabel: 'Femoral head centre', endLabel: 'Femoral neck centre',
+        startLabel: labels.femoralHeadCentre, endLabel: labels.femoralNeckCentre,
         colorKey: 'neck', side: side as 'left' | 'right', angleKind: 'femoralProximal',
       });
     }
@@ -171,7 +187,7 @@ export function buildReferenceLines(landmarks: TorsionLandmarks): ReferenceLineS
       return !!ks && (ks[0] !== 0 || ks[1] !== 0 || ks[2] !== 0);
     };
     const kneeOrder = [...methodsPresent.filter(kneeOk), ...methodsPresent.filter((m) => !kneeOk(m))];
-    const cond = kneeLabels(side, 'Posterior condyle (medial)', 'Posterior condyle (lateral)');
+    const cond = kneeLabels(side, labels.posteriorCondyleMedial, labels.posteriorCondyleLateral);
     specs.push({
       startPaths: kneeOrder.map((m) => ['femur', m, side, 'knee_start']),
       endPaths: kneeOrder.map((m) => ['femur', m, side, 'knee_end']),
@@ -183,7 +199,7 @@ export function buildReferenceLines(landmarks: TorsionLandmarks): ReferenceLineS
   for (const side of ['left', 'right']) {
     if (!tibia[side]) continue;
     const base = ['tibia', side];
-    const cond = kneeLabels(side, 'Posterior tibial condyle (med.)', 'Posterior tibial condyle (lat.)');
+    const cond = kneeLabels(side, labels.posteriorTibialCondyleMed, labels.posteriorTibialCondyleLat);
     specs.push({
       startPaths: [[...base, 'knee_start']], endPaths: [[...base, 'knee_end']],
       startLabel: cond.start, endLabel: cond.end,
@@ -191,7 +207,7 @@ export function buildReferenceLines(landmarks: TorsionLandmarks): ReferenceLineS
     });
     specs.push({
       startPaths: [[...base, 'ankle_start']], endPaths: [[...base, 'ankle_end']],
-      startLabel: 'Medial malleolus', endLabel: 'Lateral malleolus',
+      startLabel: labels.medialMalleolus, endLabel: labels.lateralMalleolus,
       colorKey: 'malleolus', side: side as 'left' | 'right', angleKind: 'tibialDistal',
     });
   }

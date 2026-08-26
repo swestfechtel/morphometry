@@ -1,11 +1,13 @@
 'use client';
 
 import { useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { apiFetch } from '@/app/auth';
 import { SeriesPicker } from '@/app/components/series-picker';
 import { PendingExamination } from '@/app/types';
 
 export default function UploadPage() {
+    const t = useTranslations('upload');
     const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
     const [message, setMessage] = useState('');
     const [busy, setBusy] = useState(false);
@@ -27,10 +29,10 @@ export default function UploadPage() {
         if (response.status === 201) {
             setPending((await response.json()) as PendingExamination);
         } else if (response.status === 400) {
-            setMessage('This examination already exists on the server.');
+            setMessage(t('errorExists'));
         } else {
             const data = await response.json().catch(() => ({}));
-            setMessage('Error uploading examination: ' + (data.detail ?? response.statusText));
+            setMessage(t('errorUpload', { detail: data.detail ?? response.statusText }));
         }
     }
 
@@ -38,7 +40,7 @@ export default function UploadPage() {
         e.preventDefault();
         setMessage('');
         if (!selectedFiles) {
-            setMessage('Please select an examination directory first.');
+            setMessage(t('errorSelectDir'));
             return;
         }
         setBusy(true);
@@ -46,7 +48,7 @@ export default function UploadPage() {
             await enumerateTorsionSeries(selectedFiles);
         } catch (error) {
             console.error('Error uploading:', error);
-            setMessage('Network error occurred.');
+            setMessage(t('errorNetwork'));
         } finally {
             setBusy(false);
         }
@@ -74,11 +76,10 @@ export default function UploadPage() {
                 className="bg-white dark:bg-gray-800 p-8 rounded shadow-md w-full max-w-md"
             >
                 <h2 className="text-2xl font-bold mb-2 text-gray-800 dark:text-gray-100">
-                    Upload Examination
+                    {t('title')}
                 </h2>
                 <p className="mb-4 text-sm text-gray-600 dark:text-gray-300">
-                    Select the whole torsion examination folder exported from the PACS. The
-                    server lists the DICOM series it contains so you can pick the correct one.
+                    {t('instructions')}
                 </p>
                 <div className="mb-4">
                     <input
@@ -95,7 +96,7 @@ export default function UploadPage() {
                     disabled={busy}
                     className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                    {busy ? 'Uploading…' : 'Upload & list series'}
+                    {busy ? t('uploading') : t('submit')}
                 </button>
                 {message && (
                     <p className="mt-4 text-center text-gray-800 dark:text-gray-100">

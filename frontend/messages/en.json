@@ -1,0 +1,240 @@
+{
+  "nav": {
+    "home": "Home",
+    "examinations": "View Examinations",
+    "upload": "Upload New Examination",
+    "about": "About",
+    "disclaimer": "Disclaimer: This tool is not intended for clinical use!"
+  },
+  "footer": {
+    "tagline": "Morphometry — lower-limb torsion analysis. Research tool, not for clinical use.",
+    "copyright": "© {year} morphometry"
+  },
+  "language": {
+    "label": "Language"
+  },
+  "auth": {
+    "signIn": "Sign in",
+    "signingIn": "Signing in…",
+    "signOut": "Sign out",
+    "signedIn": "Signed in",
+    "username": "Username",
+    "password": "Password",
+    "invalidCredentials": "Invalid username or password.",
+    "loginFailed": "Login failed (HTTP {status}).",
+    "networkError": "Network error — is the API reachable?"
+  },
+  "landing": {
+    "eyebrow": "Lower-limb morphometry",
+    "title": "Automated femoral & tibial torsion",
+    "subtitle": "Upload a lower-limb MRI examination and get segmentation, torsion angles, and editable measurement landmarks — computed automatically and reviewable in the browser.",
+    "uploadCta": "Upload an examination",
+    "viewCta": "View examinations",
+    "disclaimer": "Research tool — not intended for clinical use.",
+    "howItWorks": {
+      "title": "How it works",
+      "intro": "From a raw DICOM export to reviewed torsion angles in a few steps.",
+      "steps": {
+        "upload": {
+          "title": "Upload",
+          "body": "Select the whole examination folder. The DICOM series are enumerated and previewed — no manual sorting."
+        },
+        "select": {
+          "title": "Select series",
+          "body": "Pick the whole-leg series (auto-split into hip, knee and ankle) or assign three separate region series."
+        },
+        "compute": {
+          "title": "Compute",
+          "body": "A GPU pipeline segments the bones and computes femoral and tibial torsion — queued and run in the background."
+        },
+        "review": {
+          "title": "Review",
+          "body": "Inspect the volume, drag the measurement landmarks, and watch the angles update live before saving."
+        }
+      }
+    },
+    "whatYouGet": {
+      "title": "What you get",
+      "features": {
+        "femoral": {
+          "title": "Femoral torsion",
+          "body": "Both the Lee and Murphy landmark methods, per side, so you can compare definitions on the same scan."
+        },
+        "tibial": {
+          "title": "Tibial torsion",
+          "body": "Proximal and distal reference axes measured on their native slices, with the signed angle shown per line."
+        },
+        "interactive": {
+          "title": "Interactive review",
+          "body": "Reference-line landmarks are draggable — including across slices — and every edit is saved back to the examination."
+        }
+      }
+    },
+    "cta": {
+      "title": "Ready to start?",
+      "body": "Upload an examination to run the pipeline, or read more about the measurements and how they are computed.",
+      "uploadCta": "Upload an examination",
+      "learnMore": "Learn more"
+    }
+  },
+  "about": {
+    "title": "About",
+    "intro": "A web front end for computing and reviewing lower-limb torsion measurements from MRI, built on the open-source <b>morphometry</b> analysis library.",
+    "measures": {
+      "title": "What it measures",
+      "intro": "The tool derives rotational alignment of the lower limb from a segmentation of the femur, tibia and fibula:",
+      "femoral": "<b>Femoral torsion</b> — the angle between the femoral neck axis and the posterior condylar axis, computed with both the <m>Lee</m> and <m>Murphy</m> landmark definitions for each side.",
+      "tibial": "<b>Tibial torsion</b> — the angle between the proximal tibial axis and the trans-malleolar axis at the ankle, per side.",
+      "note": "Each measurement is defined by a pair of reference lines on their native acquisition slices. Because both bones are highly anisotropic in these scans (fine in-plane, coarse through-plane), the viewer renders native axial slices rather than a resliced volume, and the landmarks are placed on the slice they were measured on."
+    },
+    "pipeline": {
+      "title": "The pipeline",
+      "intro": "An upload is turned into reviewable measurements by a sequence of background steps:",
+      "steps": {
+        "ingestion": {
+          "title": "Ingestion",
+          "body": "The uploaded examination folder is scanned for DICOM series, which are grouped, cleaned of non-image files, and previewed so the correct series can be chosen."
+        },
+        "segmentation": {
+          "title": "Segmentation",
+          "body": "A deep-learning model (nnU-Net) segments the hip, knee and ankle regions into bone labels on a GPU. Jobs are serialised through a single worker so the GPU is never oversubscribed."
+        },
+        "torsion": {
+          "title": "Torsion computation",
+          "body": "The morphometry library derives the anatomical landmarks and reference axes from the segmentation masks and computes the femoral and tibial torsion angles."
+        },
+        "review": {
+          "title": "Review & correction",
+          "body": "Results are presented in the interactive viewer. Landmarks can be dragged — within a slice or across slices — and the angles recompute live; corrections are saved back to the examination."
+        }
+      }
+    },
+    "technology": {
+      "title": "Technology",
+      "analysis": {
+        "title": "Analysis & API",
+        "body": "A Python morphometry library computes the measurements from segmentation masks. A FastAPI service handles DICOM ingestion, stores examinations, and dispatches segmentation and torsion jobs to a Redis-backed worker running containerised models."
+      },
+      "web": {
+        "title": "Web interface",
+        "body": "This front end is a Next.js / React application. The examination viewer renders the NIfTI volumes directly in the browser with Cornerstone3D and draws the draggable measurement landmarks on top."
+      }
+    },
+    "disclaimer": {
+      "title": "Disclaimer",
+      "body": "This is a research and development tool. It is <b>not a medical device</b> and is <b>not intended for clinical use</b>, diagnosis, or treatment decisions. Automated measurements can be wrong and must always be verified by a qualified reader."
+    },
+    "uploadCta": "Upload an examination",
+    "viewCta": "View examinations"
+  },
+  "examinations": {
+    "title": "Examinations",
+    "detailsTitle": "Examination Details",
+    "filterTorsionMr": "MR torsion",
+    "filterClear": "Clear Filter"
+  },
+  "list": {
+    "intro": "Below is a list of all <u>{description}</u> examinations previously sent to the system.",
+    "headers": {
+      "accessionNumber": "Accession Number",
+      "patientName": "Patient Name",
+      "description": "Description",
+      "examinationDate": "Examination Date",
+      "examinationTime": "Examination Time",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "filters": {
+      "accessionNumber": "Filter by Accession Number",
+      "patientName": "Filter by Patient Name",
+      "description": "Filter by Description",
+      "date": "Filter by Date",
+      "time": "Filter by Time",
+      "status": "Filter by Status"
+    },
+    "actions": {
+      "view": "View Examination",
+      "selectSeries": "Select series",
+      "startProcessing": "Start Processing",
+      "delete": "Delete"
+    }
+  },
+  "examination": {
+    "labels": {
+      "patientName": "Patient name",
+      "studyDate": "Study date",
+      "studyTime": "Study time",
+      "studyDescription": "Study description",
+      "accessionNumber": "Accession number",
+      "status": "Status"
+    }
+  },
+  "viewer": {
+    "loading": "Loading viewer…",
+    "detailsTitle": "Examination Details",
+    "showSegmentation": "Show segmentation",
+    "torsion": "Torsion",
+    "femurLee": "Femur (Lee)",
+    "femurMurphy": "Femur (Murphy)",
+    "tibia": "Tibia",
+    "leftPrefix": "L:",
+    "rightPrefix": "R:",
+    "axial": "Axial",
+    "saveChanges": "Save changes",
+    "help": "scroll: slice · left-drag: contrast/brightness · right-drag: zoom · middle-drag: pan"
+  },
+  "landmarks": {
+    "femoralHeadCentre": "Femoral head centre",
+    "femoralNeckCentre": "Femoral neck centre",
+    "posteriorCondyleMedial": "Posterior condyle (medial)",
+    "posteriorCondyleLateral": "Posterior condyle (lateral)",
+    "posteriorTibialCondyleMed": "Posterior tibial condyle (med.)",
+    "posteriorTibialCondyleLat": "Posterior tibial condyle (lat.)",
+    "medialMalleolus": "Medial malleolus",
+    "lateralMalleolus": "Lateral malleolus",
+    "angleProximal": "Proximal: {value}°",
+    "angleDistal": "Distal: {value}°"
+  },
+  "seriesPicker": {
+    "title": "Select the series to process",
+    "modeWholeLeg": "Single whole-leg series",
+    "modeRegions": "Separate hip / knee / ankle",
+    "helpWholeLeg": "Pick the one series that contains the whole leg — it is split into hip, knee and ankle automatically.",
+    "helpRegions": "Assign one series to each of hip, knee and ankle.",
+    "noPreview": "no preview",
+    "noDescription": "(no description)",
+    "images": "{count, plural, one {# image} other {# images}}",
+    "scrollHint": "scroll to page through slices",
+    "previewAlt": "preview {index}",
+    "starting": "Starting…",
+    "process": "Process selected series",
+    "queued": "Queued for processing — it runs in the background, so you can upload more examinations now.",
+    "viewResult": "View result",
+    "uploadAnother": "Upload another examination",
+    "viewAll": "View all examinations",
+    "errorStart": "Failed to start processing (HTTP {status}).",
+    "errorNetwork": "Network error while starting processing."
+  },
+  "regions": {
+    "hip": "Hip",
+    "knee": "Knee",
+    "ankle": "Ankle"
+  },
+  "upload": {
+    "title": "Upload Examination",
+    "instructions": "Select the whole torsion examination folder exported from the PACS. The server lists the DICOM series it contains so you can pick the correct one.",
+    "uploading": "Uploading…",
+    "submit": "Upload & list series",
+    "errorExists": "This examination already exists on the server.",
+    "errorUpload": "Error uploading examination: {detail}",
+    "errorSelectDir": "Please select an examination directory first.",
+    "errorNetwork": "Network error occurred."
+  },
+  "polling": {
+    "processing": "Processing…",
+    "finished": "Processing finished!",
+    "failed": "Processing failed.",
+    "failedWithReason": "Processing failed: {reason}",
+    "backToExaminations": "Back to examinations"
+  }
+}

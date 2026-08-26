@@ -17,6 +17,7 @@
 // (live torsion recompute) and a save callback. All Cornerstone state is torn down
 // on unmount.
 import { useEffect, useRef } from 'react';
+import { useTranslations } from 'next-intl';
 import {
   RenderingEngine,
   Enums,
@@ -53,6 +54,7 @@ import {
   zRangeForKey,
   Offsets,
   ReferenceLineSpec,
+  type LandmarkLabels,
 } from './landmark-mapping';
 
 const { ViewportType } = Enums;
@@ -76,12 +78,15 @@ const SEGMENT_COLORS: Record<number, Types.Color> = {
   3: [60, 200, 220, 255],  // ankle — cyan
 };
 
+/** Formats an on-slice angle caption from the (localized) role + value, e.g. 'Proximal: 12.3°'. */
+type FormatAngle = (role: 'proximal' | 'distal', value: string) => string;
+
 /** The on-slice angle caption for a reference line, e.g. 'Proximal: 12.3°' (or undefined). */
-function angleLabelFor(tree: TorsionLandmarks, spec: ReferenceLineSpec): string | undefined {
+function angleLabelFor(tree: TorsionLandmarks, spec: ReferenceLineSpec, formatAngle: FormatAngle): string | undefined {
   const a = referenceLineAngle(tree, spec);
   if (a == null) return undefined;
-  const role = spec.angleKind.endsWith('Proximal') ? 'Proximal' : 'Distal';
-  return `${role}: ${a.toFixed(1)}°`;
+  const role = spec.angleKind.endsWith('Proximal') ? 'proximal' : 'distal';
+  return formatAngle(role, a.toFixed(1));
 }
 
 // Segmentation labelmap overlay for the axial stack.
@@ -254,6 +259,26 @@ export function useCornerstoneViewport(args: UseViewportArgs) {
   // One axial viewport; the extra refs keep the component's div layout stable.
   const refs = [useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null)];
 
+  // Localized labels drawn on the canvas. Kept in a ref (updated each render) so the
+  // setup effect reads the current language without listing it as a dependency; the
+  // viewer is also remounted on locale change (key={locale}) so labels rebuild fresh.
+  const tLandmarks = useTranslations('landmarks');
+  const labelBundleRef = useRef<{ labels: LandmarkLabels; formatAngle: FormatAngle }>(null!);
+  labelBundleRef.current = {
+    labels: {
+      femoralHeadCentre: tLandmarks('femoralHeadCentre'),
+      femoralNeckCentre: tLandmarks('femoralNeckCentre'),
+      posteriorCondyleMedial: tLandmarks('posteriorCondyleMedial'),
+      posteriorCondyleLateral: tLandmarks('posteriorCondyleLateral'),
+      posteriorTibialCondyleMed: tLandmarks('posteriorTibialCondyleMed'),
+      posteriorTibialCondyleLat: tLandmarks('posteriorTibialCondyleLat'),
+      medialMalleolus: tLandmarks('medialMalleolus'),
+      lateralMalleolus: tLandmarks('lateralMalleolus'),
+    },
+    formatAngle: (role, value) =>
+      role === 'proximal' ? tLandmarks('angleProximal', { value }) : tLandmarks('angleDistal', { value }),
+  };
+
   // Stable per-mount ids (avoid Date.now/Math.random for SSR-safety; accession is unique enough).
   const engineId = `torsion-engine-${args.accession}`;
   const toolGroupId = `torsion-tg-${args.accession}`;
@@ -311,7 +336,7 @@ export function useCornerstoneViewport(args: UseViewportArgs) {
       for (const p of spec.startPaths) next = applyEditedVoxel(next, p, startVoxel, cbRef.current.offsets);
       for (const p of spec.endPaths) next = applyEditedVoxel(next, p, endVoxel, cbRef.current.offsets);
       // Refresh this line's on-slice angle caption live (the total torsion updates via React).
-      ann.data.angleLabel = angleLabelFor(next, spec);
+      ann.data.angleLabel = angleLabelFor(next, spec, labelBundleRef.current.formatAngle);
       cbRef.current.onChange(next);
     };
     const onMouseUp = () => cbRef.current.onDragEnd(landmarksRef.current);
@@ -363,7 +388,7 @@ export function useCornerstoneViewport(args: UseViewportArgs) {
       const voxelByPath = new Map(
         listLandmarks(args.landmarks, args.offsets).map((r) => [r.path.join('.'), r.voxel] as const),
       );
-      for (const spec of buildReferenceLines(args.landmarks)) {
+      for (const spec of buildReferenceLines(args.landmarks, labelBundleRef.current.labels)) {
         // All paths of an endpoint share the same voxel (identical across methods); read the first.
         const startVox = voxelByPath.get(spec.startPaths[0].join('.'));
         const endVox = voxelByPath.get(spec.endPaths[0].join('.'));
@@ -400,7 +425,7 @@ export function useCornerstoneViewport(args: UseViewportArgs) {
             color: LINE_COLORS[spec.colorKey],
             startLabel: spec.startLabel,
             endLabel: spec.endLabel,
-            angleLabel: angleLabelFor(args.landmarks, spec),
+            angleLabel: angleLabelFor(args.landmarks, spec, labelBundleRef.current.formatAngle),
           },
         };
         const uid = csAnnotation.state.addAnnotation(ann as never, frameOfReferenceUID as never);
@@ -480,7 +505,7 @@ export function useCornerstoneViewport(args: UseViewportArgs) {
         let tree = landmarksRef.current;
         for (const p of spec.startPaths) tree = applyEditedVoxel(tree, p, [Math.round(ij[0].i), Math.round(ij[0].j), next], cbRef.current.offsets);
         for (const p of spec.endPaths) tree = applyEditedVoxel(tree, p, [Math.round(ij[1].i), Math.round(ij[1].j), next], cbRef.current.offsets);
-        editAnn.data.angleLabel = angleLabelFor(tree, spec);
+        editAnn.data.angleLabel = angleLabelFor(tree, spec, labelBundleRef.current.formatAngle);
         cbRef.current.onChange(tree);
 
         // Show the new slice (also re-renders the relocated line there).

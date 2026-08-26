@@ -8,6 +8,7 @@
 // to the viewer once the pipeline finishes.
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import { apiFetch } from '@/app/auth';
 import { PollingComponent } from '@/app/components/polling-component';
 import { seriesPreviewUrl } from '@/app/components/cornerstone/cs-volume-url';
@@ -19,6 +20,7 @@ const REGIONS: Region[] = ['hip', 'knee', 'ankle'];
 
 /** A scrollable multi-slice preview of one series (wheel to page through slices). */
 function SeriesPreview({ examinationId, series }: { examinationId: string; series: SeriesInfo }) {
+  const t = useTranslations('seriesPicker');
   const count = series.preview_count;
   const ref = useRef<HTMLDivElement>(null);
   const [idx, setIdx] = useState(Math.floor(count / 2));
@@ -39,16 +41,16 @@ function SeriesPreview({ examinationId, series }: { examinationId: string; serie
   if (count === 0) {
     return (
       <div className="flex aspect-square w-full items-center justify-center bg-black text-xs text-white/50">
-        no preview
+        {t('noPreview')}
       </div>
     );
   }
   return (
-    <div ref={ref} className="relative aspect-square w-full bg-black" title="scroll to page through slices">
+    <div ref={ref} className="relative aspect-square w-full bg-black" title={t('scrollHint')}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={seriesPreviewUrl(examinationId, series.uid, idx)}
-        alt={`preview ${idx + 1}`}
+        alt={t('previewAlt', { index: idx + 1 })}
         className="h-full w-full object-contain select-none"
         draggable={false}
       />
@@ -72,6 +74,8 @@ interface CardProps {
 }
 
 function SeriesCard({ examinationId, series, mode, selected, assignedRegion, onSelectWhole, onAssignRegion }: CardProps) {
+  const t = useTranslations('seriesPicker');
+  const tr = useTranslations('regions');
   const highlight = mode === 'whole_leg' ? selected : assignedRegion != null;
   return (
     <div
@@ -85,10 +89,10 @@ function SeriesCard({ examinationId, series, mode, selected, assignedRegion, onS
       </div>
       <div className="p-2 text-sm text-gray-800 dark:text-gray-100">
         <p className="font-medium truncate" title={series.description ?? ''}>
-          {series.description || '(no description)'}
+          {series.description || t('noDescription')}
         </p>
         <p className="text-xs text-gray-500 dark:text-gray-400">
-          {[series.modality, `${series.instances} img`, series.rows && series.cols ? `${series.rows}×${series.cols}` : null]
+          {[series.modality, t('images', { count: series.instances }), series.rows && series.cols ? `${series.rows}×${series.cols}` : null]
             .filter(Boolean)
             .join(' · ')}
         </p>
@@ -105,7 +109,7 @@ function SeriesCard({ examinationId, series, mode, selected, assignedRegion, onS
                     : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600'
                 }`}
               >
-                {region}
+                {tr(region)}
               </button>
             ))}
           </div>
@@ -119,6 +123,8 @@ export function SeriesPicker(
   { examinationId, series, onUploadAnother }:
   { examinationId: string; series: SeriesInfo[]; onUploadAnother?: () => void },
 ) {
+  const t = useTranslations('seriesPicker');
+  const tr = useTranslations('regions');
   const router = useRouter();
   const [mode, setMode] = useState<Mode>('whole_leg');
   const [selectedWhole, setSelectedWhole] = useState<string | null>(null);
@@ -161,10 +167,10 @@ export function SeriesPicker(
         setJobId(data.job_id);
       } else {
         const data = await resp.json().catch(() => ({}));
-        setError(data.detail || `Failed to start processing (HTTP ${resp.status}).`);
+        setError(data.detail || t('errorStart', { status: resp.status }));
       }
     } catch {
-      setError('Network error while starting processing.');
+      setError(t('errorNetwork'));
     } finally {
       setSubmitting(false);
     }
@@ -180,7 +186,7 @@ export function SeriesPicker(
         <PollingComponent job_id={jobId} callback={() => setDone(true)} onError={() => setFailed(true)} />
         {!done && !failed && (
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            Queued for processing — it runs in the background, so you can upload more examinations now.
+            {t('queued')}
           </p>
         )}
         <div className="flex flex-wrap items-center justify-center gap-3">
@@ -189,7 +195,7 @@ export function SeriesPicker(
               href={`/examinations/${examinationId}`}
               className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-500"
             >
-              View result
+              {t('viewResult')}
             </a>
           )}
           <button
@@ -197,13 +203,13 @@ export function SeriesPicker(
             onClick={uploadAnother}
             className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-500"
           >
-            Upload another examination
+            {t('uploadAnother')}
           </button>
           <a
             href="/examinations"
             className="rounded border border-gray-300 dark:border-gray-600 px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700"
           >
-            View all examinations
+            {t('viewAll')}
           </a>
         </div>
       </div>
@@ -213,7 +219,7 @@ export function SeriesPicker(
   return (
     <div className="p-4">
       <div className="mb-4 flex flex-wrap items-center gap-4">
-        <h2 className="text-xl font-semibold text-gray-800 dark:text-white">Select the series to process</h2>
+        <h2 className="text-xl font-semibold text-gray-800 dark:text-white">{t('title')}</h2>
         <div className="inline-flex overflow-hidden rounded border border-gray-300 dark:border-gray-700">
           {(['whole_leg', 'regions'] as Mode[]).map((m) => (
             <button
@@ -226,16 +232,14 @@ export function SeriesPicker(
                   : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200'
               }`}
             >
-              {m === 'whole_leg' ? 'Single whole-leg series' : 'Separate hip / knee / ankle'}
+              {m === 'whole_leg' ? t('modeWholeLeg') : t('modeRegions')}
             </button>
           ))}
         </div>
       </div>
 
       <p className="mb-3 text-sm text-gray-600 dark:text-gray-300">
-        {mode === 'whole_leg'
-          ? 'Pick the one series that contains the whole leg — it is split into hip, knee and ankle automatically.'
-          : 'Assign one series to each of hip, knee and ankle.'}
+        {mode === 'whole_leg' ? t('helpWholeLeg') : t('helpRegions')}
       </p>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
@@ -265,11 +269,11 @@ export function SeriesPicker(
           disabled={!canSubmit || submitting}
           className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {submitting ? 'Starting…' : 'Process selected series'}
+          {submitting ? t('starting') : t('process')}
         </button>
         {mode === 'regions' && (
           <span className="text-sm text-gray-500 dark:text-gray-400">
-            {REGIONS.map((r) => `${r}: ${regions[r] ? '✓' : '—'}`).join('   ')}
+            {REGIONS.map((r) => `${tr(r)}: ${regions[r] ? '✓' : '—'}`).join('   ')}
           </span>
         )}
       </div>
