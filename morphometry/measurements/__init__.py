@@ -48,6 +48,8 @@ from morphometry.measurements.cartilage import (
     calculate_tibial_cartilage_thickness,
     calculate_femoral_cartilage_thickness,
     calculate_knee_cartilage_thickness,
+    plot_knee_segments,
+    plot_knee_thickness,
 )
 
 __all__ = [
@@ -80,4 +82,6 @@ __all__ = [
     "calculate_tibial_cartilage_thickness",
     "calculate_femoral_cartilage_thickness",
     "calculate_knee_cartilage_thickness",
+    "plot_knee_segments",
+    "plot_knee_thickness",
 ]

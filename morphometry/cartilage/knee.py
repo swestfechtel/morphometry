@@ -1,7 +1,7 @@
 import pandas as pd
 import pyvista as pv
 import numpy as np
-from typing import Tuple
+from typing import Optional, Tuple
 from scipy.spatial import KDTree
 from scipy.ndimage import center_of_mass
 from sklearn.cluster import KMeans, DBSCAN
@@ -278,6 +278,84 @@ class Tibia:
             thicknesses[subregion] = tmp
 
         return thicknesses
+
+    def _ensure_subregions(self):
+        """
+        Lazily compute the surface points, landmarks and subregion voxel clouds
+        needed for visualisation, if they have not been computed yet.
+
+        Idempotent: does nothing once the subregions are available.
+        """
+        if self.clt is not None:
+            return
+        if self.point_cloud is None:
+            self.get_surface_points()
+        if self.left_landmarks is None:
+            self.calculate_landmarks()
+        self.extract_subregions()
+
+    def plot_segments(self, plotter: pv.Plotter = None, show: bool = None) -> pv.Plotter:
+        """
+        Render the raw voxel volume of every tibial subregion as coloured cube
+        glyphs in a single 3D scene, one distinct colour per subregion.
+
+        Subregions (and the landmarks they depend on) are computed on demand.
+
+        :param plotter: An existing PyVista ``Plotter`` to draw into. When ``None`` a
+            new plotter is created (and shown, unless ``show`` overrides this).
+        :param show: Whether to call ``plotter.show()`` before returning. Defaults to
+            ``True`` only when this method created the plotter, ``False`` otherwise.
+        :return: The ``Plotter`` the segments were drawn into.
+        """
+        created = plotter is None
+        if plotter is None:
+            plotter = pv.Plotter()
+        self._ensure_subregions()
+
+        drawn = False
+        for attr, label, color in TIBIA_SUBREGIONS:
+            drawn |= _add_voxel_glyphs(plotter, self.image, getattr(self, attr), color, label)
+
+        if drawn:
+            plotter.add_legend(bcolor='white')
+        if show or (show is None and created):
+            plotter.show()
+        return plotter
+
+    def plot_thickness(self, thicknesses: dict, plotter: pv.Plotter = None, show: bool = None,
+                       cmap: str = 'viridis', clim: Tuple[float, float] = None,
+                       show_scalar_bar: bool = True) -> pv.Plotter:
+        """
+        Render the tibial articular (superior) surface coloured by measured cartilage
+        thickness, as a heatmap with a shared colour scale across all subregions.
+
+        :param thicknesses: The per-subregion thickness dict returned by
+            :meth:`calculate_thickness` (``{subregion: {(x, y): thickness_mm}}``).
+        :param plotter: An existing PyVista ``Plotter`` to draw into (new one if ``None``).
+        :param show: Whether to call ``plotter.show()`` (see :meth:`plot_segments`).
+        :param cmap: A matplotlib colormap name used for the thickness heatmap.
+        :param clim: ``(min, max)`` colour limits in mm. Derived from the data when ``None``.
+        :param show_scalar_bar: Whether to draw the thickness colour bar.
+        :return: The ``Plotter`` the heatmap was drawn into.
+        """
+        created = plotter is None
+        if plotter is None:
+            plotter = pv.Plotter()
+        self._ensure_subregions()
+
+        meshes = []
+        for attr, label, color in TIBIA_SUBREGIONS:
+            tmap = thicknesses.get(attr)
+            if not tmap:
+                continue
+            surf = _thickness_surface(self.image, getattr(self, attr), tmap)
+            if surf is not None:
+                meshes.append(surf)
+
+        _add_thickness_meshes(plotter, meshes, cmap, clim, show_scalar_bar)
+        if show or (show is None and created):
+            plotter.show()
+        return plotter
 
 
 class Femur:
@@ -638,6 +716,100 @@ class Femur:
 
         return thicknesses
 
+    def _ensure_subregions(self, tibia: Tibia = None):
+        """
+        Lazily compute the femoral subregion voxel clouds needed for visualisation.
+
+        The femoral subregions are defined relative to the tibial plateau, so a
+        ``Tibia`` is required the first time they are computed (its landmarks are
+        computed on demand if missing). Idempotent once the subregions exist.
+
+        :param tibia: A ``Tibia`` instance for the same knee. Required only if the
+            femoral subregions have not been extracted yet.
+        :raises ValueError: If the subregions are not yet available and no ``tibia``
+            is provided.
+        """
+        if self.alf is not None:
+            return
+        if tibia is None:
+            raise ValueError(
+                'Femoral subregions require a Tibia (they are defined relative to the '
+                'tibial plateau); pass tibia=... to the plotting method.'
+            )
+        if tibia.point_cloud is None:
+            tibia.get_surface_points()
+        if tibia.left_landmarks is None:
+            tibia.calculate_landmarks()
+        self.extract_central_weightbearing_zone(tibia, side='left')
+        self.extract_central_weightbearing_zone(tibia, side='right')
+        self.extract_anterior_posterior_zones(side='left')
+        self.extract_anterior_posterior_zones(side='right')
+        self.extract_subregions()
+
+    def plot_segments(self, tibia: Tibia = None, plotter: pv.Plotter = None,
+                      show: bool = None) -> pv.Plotter:
+        """
+        Render the raw voxel volume of every femoral subregion as coloured cube
+        glyphs in a single 3D scene, one distinct colour per subregion.
+
+        :param tibia: A ``Tibia`` for the same knee (needed to derive the subregions
+            unless they have already been extracted).
+        :param plotter: An existing PyVista ``Plotter`` to draw into (new one if ``None``).
+        :param show: Whether to call ``plotter.show()`` (see :meth:`Tibia.plot_segments`).
+        :return: The ``Plotter`` the segments were drawn into.
+        """
+        created = plotter is None
+        if plotter is None:
+            plotter = pv.Plotter()
+        self._ensure_subregions(tibia)
+
+        drawn = False
+        for attr, label, color, _ in FEMUR_SUBREGIONS:
+            drawn |= _add_voxel_glyphs(plotter, self.image, getattr(self, attr), color, label)
+
+        if drawn:
+            plotter.add_legend(bcolor='white')
+        if show or (show is None and created):
+            plotter.show()
+        return plotter
+
+    def plot_thickness(self, thicknesses: dict, tibia: Tibia = None, plotter: pv.Plotter = None,
+                       show: bool = None, cmap: str = 'viridis', clim: Tuple[float, float] = None,
+                       show_scalar_bar: bool = True) -> pv.Plotter:
+        """
+        Render the femoral articular (superior) surface coloured by measured cartilage
+        thickness, as a heatmap with a shared colour scale across all subregions.
+
+        :param thicknesses: The per-subregion thickness dict returned by
+            :meth:`calculate_thickness`.
+        :param tibia: A ``Tibia`` for the same knee (needed to derive the subregions
+            unless they have already been extracted).
+        :param plotter: An existing PyVista ``Plotter`` to draw into (new one if ``None``).
+        :param show: Whether to call ``plotter.show()`` (see :meth:`Tibia.plot_segments`).
+        :param cmap: A matplotlib colormap name used for the thickness heatmap.
+        :param clim: ``(min, max)`` colour limits in mm. Derived from the data when ``None``.
+        :param show_scalar_bar: Whether to draw the thickness colour bar.
+        :return: The ``Plotter`` the heatmap was drawn into.
+        """
+        created = plotter is None
+        if plotter is None:
+            plotter = pv.Plotter()
+        self._ensure_subregions(tibia)
+
+        meshes = []
+        for attr, label, color, thickness_key in FEMUR_SUBREGIONS:
+            tmap = thicknesses.get(thickness_key)
+            if not tmap:
+                continue
+            swap_yz = thickness_key in ('left_posterior_zone', 'right_posterior_zone')
+            surf = _thickness_surface(self.image, getattr(self, attr), tmap, swap_yz=swap_yz)
+            if surf is not None:
+                meshes.append(surf)
+
+        _add_thickness_meshes(plotter, meshes, cmap, clim, show_scalar_bar)
+        if show or (show is None and created):
+            plotter.show()
+        return plotter
 
 def build_cartilage_meshes(superior_points: np.ndarray, inferior_points: np.ndarray) -> Tuple[pv.PolyData, pv.PolyData]:
     """
@@ -725,3 +897,238 @@ def get_plate_corners(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.nd
     lower_left = np.array([left_image_boundary, lower_image_boundary])
 
     return upper_right, lower_right, upper_left, lower_left
+
+
+# --- Visualisation ---------------------------------------------------------
+#
+# Fixed, distinct colours per subregion for the "segment" view. Each entry is
+# ``(attribute_name, display_label, colour)`` for the tibia and
+# ``(attribute_name, display_label, colour, thickness_dict_key)`` for the femur
+# (the femoral thickness dict keys do not all match the voxel attribute names).
+
+TIBIA_SUBREGIONS = [
+    ('clt', 'cLT', 'crimson'),
+    ('ilt', 'iLT', 'royalblue'),
+    ('elt', 'eLT', 'seagreen'),
+    ('alt', 'aLT', 'darkorange'),
+    ('plt', 'pLT', 'mediumpurple'),
+    ('crt', 'cRT', 'gold'),
+    ('irt', 'iRT', 'deepskyblue'),
+    ('ert', 'eRT', 'limegreen'),
+    ('art', 'aRT', 'salmon'),
+    ('prt', 'pRT', 'orchid'),
+]
+
+FEMUR_SUBREGIONS = [
+    ('iclf', 'iclf', 'royalblue', 'iclf'),
+    ('cclf', 'cclf', 'crimson', 'cclf'),
+    ('eclf', 'eclf', 'seagreen', 'eclf'),
+    ('icrf', 'icrf', 'deepskyblue', 'icrf'),
+    ('ccrf', 'ccrf', 'gold', 'ccrf'),
+    ('ecrf', 'ecrf', 'limegreen', 'ecrf'),
+    ('alf', 'alf', 'darkorange', 'left_anterior_zone'),
+    ('arf', 'arf', 'salmon', 'right_anterior_zone'),
+    ('plf', 'plf', 'mediumpurple', 'left_posterior_zone'),
+    ('prf', 'prf', 'orchid', 'right_posterior_zone'),
+]
+
+
+def _indices_to_physical(image: Image, indices: np.ndarray) -> np.ndarray:
+    """
+    Convert an ``Nx3`` array of voxel indices to physical (world) coordinates.
+
+    Mirrors :meth:`Image.transform_index_to_physical_point` but is vectorised for
+    the nibabel backend; SimpleITK is transformed per point (its API requires an
+    integer index tuple).
+
+    :param image: The ``Image`` whose coordinate system defines the transform.
+    :param indices: An ``Nx3`` array of voxel indices.
+    :return: An ``Nx3`` array of physical points (empty ``(0, 3)`` array if no input).
+    """
+    indices = np.asarray(indices, dtype=float)
+    if len(indices) == 0:
+        return np.empty((0, 3))
+    if image.type == 'nibabel':
+        affine = image.image.affine
+        M = affine[:3, :3]
+        abc = affine[:3, 3]
+        return indices @ M.T + abc
+    return np.array([
+        image.transform_index_to_physical_point([int(round(v)) for v in idx])
+        for idx in indices
+    ])
+
+
+def _add_voxel_glyphs(plotter: pv.Plotter, image: Image, points: np.ndarray, color: str, label: str) -> bool:
+    """
+    Add the voxels of one subregion to a plotter as uniformly-sized cube glyphs.
+
+    Cubes are sized to the image voxel spacing so the rendered volume matches the
+    physical extent of the segmentation. No-op for an empty/absent point cloud.
+
+    :param plotter: The PyVista ``Plotter`` to draw into.
+    :param image: The ``Image`` providing the index->physical transform and spacing.
+    :param points: An ``Nx3`` array of voxel indices belonging to the subregion.
+    :param color: The cube colour.
+    :param label: The legend label for this subregion.
+    :return: ``True`` if glyphs were added, ``False`` for an empty/absent point cloud.
+    """
+    if points is None or len(points) == 0:
+        return False
+    phys = _indices_to_physical(image, np.asarray(points))
+    cloud = pv.PolyData(phys)
+    sx, sy, sz = (float(s) for s in image.spacing[:3])
+    cube = pv.Cube(x_length=sx, y_length=sy, z_length=sz)
+    glyphs = cloud.glyph(geom=cube, scale=False, orient=False)
+    plotter.add_mesh(glyphs, color=color, label=label)
+    return True
+
+
+def _thickness_surface(image: Image, points: np.ndarray, thickness_map: dict,
+                       swap_yz: bool = False) -> pv.PolyData:
+    """
+    Reconstruct a subregion's articular (superior) surface and attach thickness values.
+
+    The superior surface points are recovered from the subregion voxels with the same
+    grouping used during thickness computation, then each surface point is coloured by
+    the thickness measured at its ``(x, y)`` location. Points without a thickness entry
+    (or ``NaN``) are dropped.
+
+    :param image: The ``Image`` providing the index->physical transform.
+    :param points: An ``Nx3`` array of the subregion's voxel indices.
+    :param thickness_map: ``{(x, y): thickness_mm}`` for this subregion.
+    :param swap_yz: If ``True``, swap the y/z axes before extracting the superior
+        surface (matching the rotated extraction used for the femoral posterior zones,
+        whose articular surface faces posteriorly rather than superiorly).
+    :return: A triangulated ``PolyData`` surface carrying a point-scalar ``'thickness'``,
+        or ``None`` if fewer than three points could be coloured.
+    """
+    if points is None or len(points) == 0:
+        return None
+    pts = np.asarray(points, dtype=float)
+    if swap_yz:
+        pts = pts.copy()
+        pts[:, [1, 2]] = pts[:, [2, 1]]
+    superior, _ = get_superior_and_inferior_surface_points(pts)
+    if swap_yz:
+        superior = superior.copy()
+        superior[:, [1, 2]] = superior[:, [2, 1]]
+
+    # The (x, y) keys rely on integer-valued voxel indices: mesh_method stores keys as
+    # float32 (from PyVista mesh points) while this reconstruction is float64, so the
+    # lookup only matches because integer voxel coordinates are exact in both dtypes.
+    coords, scalars = [], []
+    for p in superior:
+        value = thickness_map.get((p[0], p[1]))
+        if value is None or np.isnan(value):
+            continue
+        coords.append(p)
+        scalars.append(value)
+
+    if len(coords) < 3:
+        return None
+
+    phys = _indices_to_physical(image, np.array(coords))
+    mesh = pv.PolyData(phys)
+    mesh['thickness'] = np.array(scalars, dtype=float)
+    return mesh.delaunay_2d()
+
+
+def _add_thickness_meshes(plotter: pv.Plotter, meshes: list, cmap: str,
+                          clim: Tuple[float, float], show_scalar_bar: bool):
+    """
+    Add thickness heatmap surfaces to a plotter with a shared colour scale.
+
+    A single scalar bar (in mm) is drawn for the whole set; all surfaces share the
+    same colour limits so their colours are directly comparable.
+
+    :param plotter: The PyVista ``Plotter`` to draw into.
+    :param meshes: A list of ``PolyData`` surfaces each carrying a ``'thickness'`` scalar.
+    :param cmap: A matplotlib colormap name.
+    :param clim: ``(min, max)`` colour limits; derived from the meshes when ``None``.
+    :param show_scalar_bar: Whether to draw the shared thickness colour bar.
+    """
+    if not meshes:
+        return
+    if clim is None:
+        all_values = np.concatenate([m['thickness'] for m in meshes])
+        clim = (float(np.nanmin(all_values)), float(np.nanmax(all_values)))
+
+    for i, mesh in enumerate(meshes):
+        plotter.add_mesh(
+            mesh, scalars='thickness', cmap=cmap, clim=clim,
+            show_scalar_bar=(show_scalar_bar and i == 0),
+            scalar_bar_args={'title': 'Thickness (mm)'},
+        )
+
+
+def plot_knee_segments(tibia: Tibia, femur: Femur, plotter: pv.Plotter = None,
+                       show: bool = None) -> pv.Plotter:
+    """
+    Render both the tibial and femoral cartilage subregions in a single 3D scene,
+    each subregion in its own distinct colour.
+
+    :param tibia: A ``Tibia`` for the knee.
+    :param femur: A ``Femur`` for the same knee.
+    :param plotter: An existing PyVista ``Plotter`` to draw into (new one if ``None``).
+    :param show: Whether to call ``plotter.show()`` before returning. Defaults to
+        ``True`` only when this function created the plotter.
+    :return: The ``Plotter`` both bones were drawn into.
+    """
+    created = plotter is None
+    if plotter is None:
+        plotter = pv.Plotter()
+    tibia.plot_segments(plotter=plotter, show=False)
+    femur.plot_segments(tibia=tibia, plotter=plotter, show=False)
+    if show or (show is None and created):
+        plotter.show()
+    return plotter
+
+
+def plot_knee_thickness(tibia: Tibia, femur: Femur, tibia_thicknesses: dict,
+                        femur_thicknesses: dict, plotter: pv.Plotter = None, show: bool = None,
+                        cmap: str = 'viridis', clim: Tuple[float, float] = None) -> pv.Plotter:
+    """
+    Render both the tibial and femoral articular surfaces as a thickness heatmap in a
+    single 3D scene, sharing one colour scale and a single colour bar.
+
+    :param tibia: A ``Tibia`` for the knee.
+    :param femur: A ``Femur`` for the same knee.
+    :param tibia_thicknesses: The tibial thickness dict (from ``Tibia.calculate_thickness``).
+    :param femur_thicknesses: The femoral thickness dict (from ``Femur.calculate_thickness``).
+    :param plotter: An existing PyVista ``Plotter`` to draw into (new one if ``None``).
+    :param show: Whether to call ``plotter.show()`` (see :func:`plot_knee_segments`).
+    :param cmap: A matplotlib colormap name used for the heatmap.
+    :param clim: ``(min, max)`` colour limits in mm, shared by both bones. Derived from
+        both thickness dicts when ``None`` so the colours are directly comparable.
+    :return: The ``Plotter`` both heatmaps were drawn into.
+    """
+    created = plotter is None
+    if plotter is None:
+        plotter = pv.Plotter()
+    if clim is None:
+        clim = _combined_thickness_clim(tibia_thicknesses, femur_thicknesses)
+    # Only the tibia draws the shared scalar bar; the femur reuses the same clim.
+    tibia.plot_thickness(tibia_thicknesses, plotter=plotter, show=False, cmap=cmap, clim=clim)
+    femur.plot_thickness(femur_thicknesses, tibia=tibia, plotter=plotter, show=False,
+                         cmap=cmap, clim=clim, show_scalar_bar=False)
+    if show or (show is None and created):
+        plotter.show()
+    return plotter
+
+
+def _combined_thickness_clim(*thickness_dicts: dict) -> Optional[Tuple[float, float]]:
+    """
+    Compute shared ``(min, max)`` thickness colour limits across one or more
+    per-subregion thickness dicts, ignoring ``NaN`` values.
+
+    :param thickness_dicts: Any number of ``{subregion: {(x, y): thickness}}`` dicts.
+    :return: The ``(min, max)`` thickness, or ``None`` if there are no finite values.
+    """
+    values = []
+    for thicknesses in thickness_dicts:
+        for tmap in thicknesses.values():
+            values.extend(v for v in tmap.values() if v is not None and not np.isnan(v))
+    if not values:
+        return None
+    return float(np.min(values)), float(np.max(values))

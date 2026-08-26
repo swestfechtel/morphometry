@@ -6,7 +6,14 @@ machinery, analogous to the ``get_*`` helpers). These thin functional wrappers
 provide the public measurement surface in ``measurements``; the classes are also
 re-exported for callers that need the intermediate landmarks.
 """
-from morphometry.cartilage.knee import Tibia, Femur
+import pyvista as pv
+
+from morphometry.cartilage.knee import (
+    Tibia,
+    Femur,
+    plot_knee_segments,
+    plot_knee_thickness,
+)
 
 __all__ = [
     "calculate_tibial_cartilage_thickness",
@@ -14,21 +21,31 @@ __all__ = [
     "calculate_knee_cartilage_thickness",
     "Tibia",
     "Femur",
+    "plot_knee_segments",
+    "plot_knee_thickness",
 ]
 
 
-def calculate_tibial_cartilage_thickness(image, cartilage_label: int, method: str = 'knn') -> dict:
+def calculate_tibial_cartilage_thickness(image, cartilage_label: int, method: str = 'knn',
+                                         plot: bool | pv.Plotter = False) -> dict:
     """
     Calculate tibial cartilage thickness per subregion.
     :param image: An Image of the knee cartilage segmentation.
     :param cartilage_label: The label of the tibial cartilage.
     :param method: Thickness method, 'knn' or 'mesh'.
+    :param plot: Pass a PyVista ``Plotter`` to draw the tibial thickness heatmap into it
+        (the articular surface coloured by thickness). ``False`` disables plotting.
     :return: A dict mapping each subregion to its per-point thickness map.
     """
-    return Tibia(image, cartilage_label).calculate_thickness(method)
+    tibia = Tibia(image, cartilage_label)
+    result = tibia.calculate_thickness(method)
+    if isinstance(plot, pv.Plotter):
+        tibia.plot_thickness(result, plotter=plot, show=False)
+    return result
 
 
-def calculate_femoral_cartilage_thickness(image, tibia: Tibia, cartilage_label: int, method: str = 'knn') -> dict:
+def calculate_femoral_cartilage_thickness(image, tibia: Tibia, cartilage_label: int, method: str = 'knn',
+                                          plot: bool | pv.Plotter = False) -> dict:
     """
     Calculate femoral cartilage thickness per subregion.
 
@@ -39,12 +56,19 @@ def calculate_femoral_cartilage_thickness(image, tibia: Tibia, cartilage_label: 
     :param tibia: A Tibia instance with computed landmarks.
     :param cartilage_label: The label of the femoral cartilage.
     :param method: Thickness method, 'knn' or 'mesh'.
+    :param plot: Pass a PyVista ``Plotter`` to draw the femoral thickness heatmap into it.
+        ``False`` disables plotting.
     :return: A dict mapping each subregion to its per-point thickness map.
     """
-    return Femur(image, cartilage_label).calculate_thickness(tibia, method)
+    femur = Femur(image, cartilage_label)
+    result = femur.calculate_thickness(tibia, method)
+    if isinstance(plot, pv.Plotter):
+        femur.plot_thickness(result, tibia=tibia, plotter=plot, show=False)
+    return result
 
 
-def calculate_knee_cartilage_thickness(image, femur_label: int, tibia_label: int, method: str = 'knn') -> dict:
+def calculate_knee_cartilage_thickness(image, femur_label: int, tibia_label: int, method: str = 'knn',
+                                       plot: bool | pv.Plotter = False) -> dict:
     """
     Calculate both tibial and femoral cartilage thickness in one call.
 
@@ -53,9 +77,14 @@ def calculate_knee_cartilage_thickness(image, femur_label: int, tibia_label: int
     :param femur_label: The label of the femoral cartilage.
     :param tibia_label: The label of the tibial cartilage.
     :param method: Thickness method, 'knn' or 'mesh'.
+    :param plot: Pass a PyVista ``Plotter`` to draw a combined tibia+femur thickness
+        heatmap (both articular surfaces, shared colour scale). ``False`` disables plotting.
     :return: ``{'tibia': <tibia subregions>, 'femur': <femur subregions>}``.
     """
     tibia = Tibia(image, tibia_label)
     tibia_results = tibia.calculate_thickness(method)
-    femur_results = Femur(image, femur_label).calculate_thickness(tibia, method)
+    femur = Femur(image, femur_label)
+    femur_results = femur.calculate_thickness(tibia, method)
+    if isinstance(plot, pv.Plotter):
+        plot_knee_thickness(tibia, femur, tibia_results, femur_results, plotter=plot, show=False)
     return {'tibia': tibia_results, 'femur': femur_results}
