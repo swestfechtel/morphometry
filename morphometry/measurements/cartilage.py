@@ -6,6 +6,8 @@ machinery, analogous to the ``get_*`` helpers). These thin functional wrappers
 provide the public measurement surface in ``measurements``; the classes are also
 re-exported for callers that need the intermediate landmarks.
 """
+from typing import Optional
+
 import pyvista as pv
 
 from morphometry.cartilage.knee import (
@@ -13,16 +15,21 @@ from morphometry.cartilage.knee import (
     Femur,
     plot_knee_segments,
     plot_knee_thickness,
+    find_thinnest_area,
+    plot_thinnest_point,
 )
 
 __all__ = [
     "calculate_tibial_cartilage_thickness",
     "calculate_femoral_cartilage_thickness",
     "calculate_knee_cartilage_thickness",
+    "calculate_thinnest_cartilage_area",
     "Tibia",
     "Femur",
     "plot_knee_segments",
     "plot_knee_thickness",
+    "find_thinnest_area",
+    "plot_thinnest_point",
 ]
 
 
@@ -88,3 +95,36 @@ def calculate_knee_cartilage_thickness(image, femur_label: int, tibia_label: int
     if isinstance(plot, pv.Plotter):
         plot_knee_thickness(tibia, femur, tibia_results, femur_results, plotter=plot, show=False)
     return {'tibia': tibia_results, 'femur': femur_results}
+
+
+def calculate_thinnest_cartilage_area(image, femur_label: int, tibia_label: int,
+                                      method: str = 'knn', neighbourhood_mm: float = 3.0,
+                                      radius_mm: Optional[float] = None,
+                                      plot: bool | pv.Plotter = False) -> dict:
+    """
+    Find the thinnest area of the tibiofemoral cartilage in one call.
+
+    Computes the tibial and femoral thickness maps and locates the thinnest neighbourhood
+    of the combined (contact-region) cartilage, robust to single-voxel outliers. See
+    :func:`morphometry.cartilage.knee.find_thinnest_area` for the algorithm.
+
+    :param image: An Image of the knee cartilage segmentation.
+    :param femur_label: The label of the femoral cartilage.
+    :param tibia_label: The label of the tibial cartilage.
+    :param method: Thickness method, 'knn' or 'mesh'.
+    :param neighbourhood_mm: Diameter (mm) of the median-smoothing neighbourhood.
+    :param radius_mm: Radius (mm) of the refinement disc (defaults to ``neighbourhood_mm / 2``).
+    :param plot: Pass a PyVista ``Plotter`` to render the cartilage with an arrow marking
+        the thinnest point (thickness-heatmap base). ``False`` disables plotting.
+    :return: The result dict from :func:`find_thinnest_area`.
+    """
+    tibia = Tibia(image, tibia_label)
+    tibia_results = tibia.calculate_thickness(method)
+    femur = Femur(image, femur_label)
+    femur_results = femur.calculate_thickness(tibia, method)
+    thinnest = find_thinnest_area(tibia_results, femur_results, image,
+                                  neighbourhood_mm=neighbourhood_mm, radius_mm=radius_mm)
+    if isinstance(plot, pv.Plotter):
+        plot_thinnest_point(tibia, femur, tibia_results, femur_results, thinnest,
+                            plotter=plot, show=False)
+    return thinnest

@@ -3,7 +3,7 @@ import pyvista as pv
 import numpy as np
 from typing import Optional, Tuple
 from scipy.spatial import KDTree
-from scipy.ndimage import label
+from scipy.ndimage import label, generic_filter
 from sklearn.cluster import KMeans
 from morphometry.image_io import Image
 
@@ -878,6 +878,205 @@ def _restrict_to_contact_cluster(points: np.ndarray, reference_si: float) -> np.
 
     kept = si_sorted[labels == best_label]
     return points[(points[:, 2] >= kept.min()) & (points[:, 2] <= kept.max())]
+
+
+def _flatten_thickness(thicknesses: dict) -> dict:
+    """
+    Flatten a per-subregion thickness dict into a single ``{(x, y): thickness}`` map.
+
+    Coordinates that appear in more than one subregion (rare, at subregion boundaries)
+    are averaged; ``NaN`` / missing values are dropped.
+
+    :param thicknesses: ``{subregion: {(x, y): thickness}}`` as returned by
+        ``calculate_thickness``.
+    :return: A flat ``{(x, y): thickness}`` map over all subregions.
+    """
+    accumulated: dict = {}
+    for subregion_map in thicknesses.values():
+        for coord, value in subregion_map.items():
+            if value is None or np.isnan(value):
+                continue
+            accumulated.setdefault(coord, []).append(float(value))
+    return {coord: float(np.mean(values)) for coord, values in accumulated.items()}
+
+
+def find_thinnest_area(tibia_thickness: dict, femur_thickness: dict, image: Image,
+                       neighbourhood_mm: float = 3.0, radius_mm: Optional[float] = None) -> dict:
+    """
+    Locate the thinnest *area* of the tibiofemoral cartilage, robust to outliers.
+
+    A plain ``argmin`` over a thickness map is sensitive to single erroneous voxels, so
+    this searches for the thinnest neighbourhood instead. The tibial and femoral thickness
+    maps are summed over the axial coordinates present in *both* (the contact region),
+    the combined map is median-smoothed to suppress single-voxel outliers, the thinnest
+    neighbourhood centre is found, and the result is refined to the actual thinnest voxel
+    within a disc around that centre.
+
+    :param tibia_thickness: Per-subregion tibial thickness dict (from
+        ``Tibia.calculate_thickness``): ``{subregion: {(x, y): thickness}}``.
+    :param femur_thickness: Per-subregion femoral thickness dict (from
+        ``Femur.calculate_thickness``).
+    :param image: The segmentation image; only its in-plane voxel spacing is used, to
+        convert the physical neighbourhood/radius sizes into an odd kernel size.
+    :param neighbourhood_mm: Diameter (mm) of the median-smoothing neighbourhood. The
+        kernel size ``k = round(neighbourhood_mm / in-plane spacing)`` is forced odd and
+        at least 3, so the search is comparable across differently-sampled scans.
+    :param radius_mm: Radius (mm) of the refinement disc around the neighbourhood centre.
+        Defaults to ``neighbourhood_mm / 2`` so the disc matches the smoothing extent.
+    :return: A dict with ``'point'`` (the actual thinnest ``(x, y)`` voxel), ``'center'``
+        (the smoothed-neighbourhood centre ``(x, y)``), ``'center_thickness'`` (the robust,
+        median-smoothed combined thickness of the thin area, mm), ``'combined_thickness'``
+        (the raw, non-outlier-suppressed tibial + femoral thickness at ``point``, mm),
+        ``'tibial_thickness'`` / ``'femoral_thickness'`` (the per-bone contributions at
+        ``point``), and ``'kernel_size'`` (``k``).
+    :raises ValueError: If the two maps share no overlapping coordinates.
+    """
+    tibia_flat = _flatten_thickness(tibia_thickness)
+    femur_flat = _flatten_thickness(femur_thickness)
+
+    overlap = set(tibia_flat) & set(femur_flat)
+    if not overlap:
+        raise ValueError('Tibial and femoral thickness maps have no overlapping coordinates.')
+
+    coords = np.array(list(overlap), dtype=int)
+    x_min, y_min = coords[:, 0].min(), coords[:, 1].min()
+    x_max, y_max = coords[:, 0].max(), coords[:, 1].max()
+
+    # Rasterise the per-bone maps onto dense grids over the overlap bounding box; cells
+    # outside the (irregular) overlap footprint stay NaN. Indexing by grid position keeps
+    # everything downstream free of float-coordinate dict lookups.
+    tibia_grid = np.full((x_max - x_min + 1, y_max - y_min + 1), np.nan)
+    femur_grid = np.full_like(tibia_grid, np.nan)
+    for coord in overlap:
+        gx, gy = int(coord[0]) - x_min, int(coord[1]) - y_min
+        tibia_grid[gx, gy] = tibia_flat[coord]
+        femur_grid[gx, gy] = femur_flat[coord]
+    grid = tibia_grid + femur_grid          # combined thickness; NaN outside the overlap
+    valid = ~np.isnan(grid)
+
+    spacing = float(np.mean(image.spacing[:2]))
+    k = int(round(neighbourhood_mm / spacing))
+    if k % 2 == 0:
+        k += 1
+    k = max(3, k)
+
+    # Median smooth with reflection padding, ignoring NaN neighbours.
+    smoothed = generic_filter(grid, np.nanmedian, size=k, mode='reflect')
+
+    # Restrict the neighbourhood-centre search to the overlap footprint.
+    search = np.where(valid & ~np.isnan(smoothed), smoothed, np.inf)
+    ci, cj = np.unravel_index(np.argmin(search), search.shape)
+    center = (float(ci + x_min), float(cj + y_min))
+
+    # Refine to the actual thinnest voxel within a disc around the centre, on the raw map.
+    # The disc radius defaults to half the neighbourhood so it matches the smoothing extent
+    # (k is a diameter) rather than doubling it.
+    radius = neighbourhood_mm / 2.0 if radius_mm is None else radius_mm
+    r = max(1, int(round(radius / spacing)))
+    ii, jj = np.indices(grid.shape)
+    disc = (ii - ci) ** 2 + (jj - cj) ** 2 <= r ** 2
+    restricted = np.where(disc & valid, grid, np.inf)
+    pi, pj = np.unravel_index(np.argmin(restricted), restricted.shape)
+    point = (float(pi + x_min), float(pj + y_min))
+
+    return {
+        'point': point,
+        'center': center,
+        # 'center_thickness' is the robust (median-smoothed) combined thickness of the thin
+        # area; 'combined_thickness' is the raw thickness at the actual thinnest voxel and
+        # so is not outlier-suppressed.
+        'center_thickness': float(smoothed[ci, cj]),
+        'combined_thickness': float(grid[pi, pj]),
+        'tibial_thickness': float(tibia_grid[pi, pj]),
+        'femoral_thickness': float(femur_grid[pi, pj]),
+        'kernel_size': k,
+    }
+
+
+def _thinnest_point_physical(tibia: 'Tibia', femur: 'Femur', point: tuple) -> np.ndarray:
+    """
+    Locate the 3D physical position of a thinnest ``(x, y)`` column on the contact surface.
+
+    The thinnest point is an axial ``(x, y)`` coordinate (the thickness maps discard the
+    superior-inferior axis). Its depth is recovered from the cartilage voxels in that
+    column: the femoral tibia-facing surface (largest z) and the tibial femur-facing
+    surface (smallest z) bracket the joint contact, so their midpoint is used. If only one
+    bone has voxels in the column, that bone's contact surface is used instead.
+
+    :param tibia: The ``Tibia`` (its ``point_cloud`` and ``image`` are read).
+    :param femur: The ``Femur`` (its ``point_cloud`` is read).
+    :param point: The thinnest ``(x, y)`` voxel coordinate.
+    :return: The marker's physical ``(x, y, z)`` position.
+    :raises ValueError: If neither bone has cartilage voxels in the column.
+    """
+    if getattr(tibia, 'point_cloud', None) is None:
+        tibia.get_surface_points()
+    x, y = int(point[0]), int(point[1])
+
+    def surface_z(point_cloud, extreme):
+        if point_cloud is None or len(point_cloud) == 0:
+            return None
+        column = point_cloud[(point_cloud[:, 0] == x) & (point_cloud[:, 1] == y)]
+        return None if len(column) == 0 else extreme(column[:, 2])
+
+    femur_z = surface_z(femur.point_cloud, np.max)   # femoral tibia-facing (inferior) surface
+    tibia_z = surface_z(tibia.point_cloud, np.min)   # tibial femur-facing (superior) surface
+    zs = [z for z in (femur_z, tibia_z) if z is not None]
+    if not zs:
+        raise ValueError(f'No cartilage voxels found in column {point} to place the marker.')
+
+    index = np.array([[x, y, float(np.mean(zs))]])
+    return _indices_to_physical(tibia.image, index)[0]
+
+
+def plot_thinnest_point(tibia: 'Tibia', femur: 'Femur', tibia_thickness: dict,
+                        femur_thickness: dict, thinnest: dict, plotter: pv.Plotter = None,
+                        show: bool = None, base: str = 'thickness') -> pv.Plotter:
+    """
+    Render the knee cartilage in 3D and mark the thinnest point with an arrow.
+
+    :param tibia: The ``Tibia`` for the knee.
+    :param femur: The ``Femur`` for the same knee.
+    :param tibia_thickness: The tibial thickness dict (used when ``base='thickness'``).
+    :param femur_thickness: The femoral thickness dict (used when ``base='thickness'``).
+    :param thinnest: The result dict from :func:`find_thinnest_area` (its ``'point'`` is marked).
+    :param plotter: An existing PyVista ``Plotter`` to draw into (a new one if ``None``).
+    :param show: Whether to call ``plotter.show()``. Defaults to ``True`` only when this
+        function created the plotter.
+    :param base: ``'thickness'`` to render the thickness heatmap, or ``'segments'`` to
+        render the raw subregion voxel volume, underneath the arrow.
+    :return: The ``Plotter`` the scene was drawn into.
+    """
+    if base not in ('thickness', 'segments'):
+        raise ValueError("base must be 'thickness' or 'segments'.")
+    created = plotter is None
+    if plotter is None:
+        plotter = pv.Plotter()
+
+    if base == 'segments':
+        plot_knee_segments(tibia, femur, plotter=plotter, show=False)
+    else:
+        plot_knee_thickness(tibia, femur, tibia_thickness, femur_thickness,
+                            plotter=plotter, show=False)
+
+    marker = _thinnest_point_physical(tibia, femur, thinnest['point'])
+
+    # Point an arrow at the marker from an oblique offset scaled to the scene size.
+    b = plotter.bounds
+    diagonal = float(np.linalg.norm([b[1] - b[0], b[3] - b[2], b[5] - b[4]]))
+    length = 0.2 * diagonal if diagonal > 0 else 1.0
+    direction = np.array([1.0, 0.0, 1.0])
+    direction /= np.linalg.norm(direction)
+    start = marker - direction * length
+    arrow = pv.Arrow(start=start, direction=direction, scale=length)
+    plotter.add_mesh(arrow, color='red')
+    plotter.add_point_labels(np.array([marker]), ['thinnest'], point_color='red',
+                             point_size=12, font_size=14, text_color='red',
+                             always_visible=True)
+
+    if show or (show is None and created):
+        plotter.show()
+    return plotter
 
 
 def build_cartilage_meshes(superior_points: np.ndarray, inferior_points: np.ndarray) -> Tuple[pv.PolyData, pv.PolyData]:
