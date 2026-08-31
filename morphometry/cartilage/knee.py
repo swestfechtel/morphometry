@@ -9,9 +9,10 @@ from morphometry.image_io import Image
 
 
 class Tibia:
-    def __init__(self, image: Image, cartilage_label: int):
+    def __init__(self, image: Image, cartilage_label: int, outlier_ratio: float = 0.1):
         self.image = image
         self.cartilage_label = cartilage_label
+        self.outlier_ratio = outlier_ratio
         self.left_landmarks, self.right_landmarks = None, None
         self.center = None
         self.point_cloud = None
@@ -25,6 +26,7 @@ class Tibia:
         """
         image_array = self.image.array
         cartilage = np.where(image_array == self.cartilage_label, 1, 0)
+        cartilage = _remove_mask_outliers(cartilage, self.outlier_ratio)
         cartilage = np.argwhere(cartilage)
         self.point_cloud = cartilage.astype(float)
         self.superior_surface, self.inferior_surface = get_superior_and_inferior_surface_points(cartilage)
@@ -357,9 +359,10 @@ class Tibia:
 
 
 class Femur:
-    def __init__(self, image: Image, cartilage_label: int):
+    def __init__(self, image: Image, cartilage_label: int, outlier_ratio: float = 0.1):
         self.image = image
         self.cartilage_label = cartilage_label
+        self.outlier_ratio = outlier_ratio
         self.dividing_line = None
         self.left_part, self.right_part = None, None
         self.left_cwbz, self.right_cwbz = None, None
@@ -369,6 +372,7 @@ class Femur:
         self.alf, self.arf, self.plf, self.prf = None, None, None, None
 
         cartilage = np.where(self.image.array == self.cartilage_label, 1, 0)
+        cartilage = _remove_mask_outliers(cartilage, self.outlier_ratio)
         self.point_cloud = np.argwhere(cartilage).astype(float)
 
         # Split the cartilage into its two condyles along the intercondylar notch. The
@@ -385,6 +389,18 @@ class Femur:
         line_lr = slope * self.point_cloud[:, 1] + intercept
         self.left_part = self.point_cloud[self.point_cloud[:, 0] > line_lr]
         self.right_part = self.point_cloud[self.point_cloud[:, 0] <= line_lr]
+
+    def _si_gap(self) -> float:
+        """
+        The S-I gap (in voxels) that separates the folded trochlea from the contact surface.
+
+        Fixed at ~1.5 mm of superior-inferior clearance, converted to voxels via the S-I
+        voxel spacing, so :func:`_restrict_to_contact_cluster` splits fold-from-contact
+        consistently across differently-sampled scans.
+
+        :return: The gap threshold in voxels (at least 2).
+        """
+        return max(2.0, 1.5 / float(self.image.spacing[2]))
 
     def extract_central_weightbearing_zone(self, tibia: Tibia, side: str = 'left'):
         """
@@ -422,7 +438,7 @@ class Femur:
         # (it folds into the same A-P range as the weight-bearing surface). Keep only the
         # superior-inferior cluster in contact with the tibia to exclude that fold.
         central_weightbearing_zone = _restrict_to_contact_cluster(
-            central_weightbearing_zone, central_tibia[:, 2].min())
+            central_weightbearing_zone, central_tibia[:, 2].min(), max_gap=self._si_gap())
 
         if side == 'left':
             self.left_cwbz = central_weightbearing_zone
@@ -487,6 +503,11 @@ class Femur:
     def extract_anterior_posterior_zones(self, side: str = 'left'):
         """
         Extract the anterior and posterior zones of the cartilage.
+
+        The posterior zone is restricted to the superior-inferior cluster contiguous with
+        the weight-bearing surface (see :func:`_restrict_to_contact_cluster`) so a flexed
+        knee's folded trochlea — which falls posterior to the CWBZ in image coordinates — is
+        excluded; the anterior zone genuinely is the trochlea and is left unrestricted.
         :param side: The side (patient) of the cartilage.
         """
         # split_axis = np.median(self.point_cloud[:, 0])
@@ -497,12 +518,23 @@ class Femur:
         cwbz_most_anterior = cwbz[:, 1].min()
         cwbz_most_posterior = cwbz[:, 1].max()
 
+        anterior_zone = cartilage[cartilage[:, 1] < cwbz_most_anterior]
+        posterior_zone = cartilage[cartilage[:, 1] > cwbz_most_posterior]
+
+        # At high flexion the folded anterior trochlea also falls posterior to the CWBZ in
+        # image A-P coordinates, so the posterior zone picks it up as a separate superior
+        # S-I cluster. Keep only the cluster contiguous with the weight-bearing surface (the
+        # anterior zone genuinely is the trochlea, so it is left untouched).
+        if len(posterior_zone) > 0:
+            posterior_zone = _restrict_to_contact_cluster(
+                posterior_zone, float(cwbz[:, 2].mean()), max_gap=self._si_gap())
+
         if side == 'left':
-            self.left_anterior_zone = cartilage[cartilage[:, 1] < cwbz_most_anterior]
-            self.left_posterior_zone = cartilage[cartilage[:, 1] > cwbz_most_posterior]
+            self.left_anterior_zone = anterior_zone
+            self.left_posterior_zone = posterior_zone
         else:
-            self.right_anterior_zone = cartilage[cartilage[:, 1] < cwbz_most_anterior]
-            self.right_posterior_zone = cartilage[cartilage[:, 1] > cwbz_most_posterior]
+            self.right_anterior_zone = anterior_zone
+            self.right_posterior_zone = posterior_zone
 
     def extract_subregions(self):
         """
@@ -773,6 +805,34 @@ class Femur:
         return plotter
 
 
+def _remove_mask_outliers(mask: np.ndarray, threshold_ratio: float = 0.1) -> np.ndarray:
+    """
+    Remove small connected components from a binary cartilage mask.
+
+    Segmentations may contain small mislabelled blobs or detached voxel clusters that
+    corrupt the reconstructed cartilage surfaces/meshes. This keeps only the connected
+    components (26-connectivity) whose size exceeds ``threshold_ratio`` of the total
+    masked volume, removing such outliers while retaining the genuine cartilage — a single
+    femoral horseshoe, or the two tibial plateaus, are all far larger than the threshold.
+    This mirrors :meth:`Segmentation.remove_outliers` but operates on a single extracted
+    cartilage mask (backend-agnostic, no mutation of the shared segmentation).
+
+    :param mask: A binary (0/1) mask of a single cartilage label.
+    :param threshold_ratio: Minimum component size as a fraction of the total masked
+        volume; components at or below it are removed. ``<= 0`` disables removal.
+    :return: The cleaned binary mask (same dtype as the input).
+    """
+    if threshold_ratio <= 0:
+        return mask
+    labeled, n = label(mask, structure=np.ones((3, 3, 3), dtype=bool))
+    if n <= 1:
+        return mask
+    sizes = np.bincount(labeled.ravel())
+    sizes[0] = 0
+    keep = sizes > threshold_ratio * sizes.sum()
+    return keep[labeled].astype(mask.dtype)
+
+
 def _femoral_condyle_dividing_line(cartilage: np.ndarray, min_size: int = 40) -> Tuple[float, float]:
     """
     Fit the anterior-posterior axis that separates the two femoral condyles.
@@ -836,36 +896,40 @@ def _femoral_condyle_dividing_line(cartilage: np.ndarray, min_size: int = 40) ->
     return float(slope), float(intercept)
 
 
-def _restrict_to_contact_cluster(points: np.ndarray, reference_si: float) -> np.ndarray:
+def _restrict_to_contact_cluster(points: np.ndarray, reference_si: float,
+                                 max_gap: float = 3.0) -> np.ndarray:
     """
     Keep only the superior-inferior cluster of points nearest a reference S-I level.
 
-    The femoral central weight-bearing zone is selected by an anterior-posterior (and
-    left-right) window derived from the tibial plateau. At high knee flexion the curved
-    femoral cartilage folds back on itself, so that window intersects the cartilage at two
-    separate superior-inferior levels: the true weight-bearing surface (in contact with
-    the tibia) and the anterior trochlea, which has rotated into the same A-P range. This
-    helper removes the fold by clustering the candidate points along the S-I axis (axis 2)
-    — splitting wherever there is a large S-I gap — and keeping only the cluster closest to
-    the tibial contact level. At low flexion the candidates form a single cluster and are
-    returned unchanged.
+    The femoral central weight-bearing / posterior zones are selected by an anterior-
+    posterior (and left-right) window. At high knee flexion the curved femoral cartilage
+    folds back on itself, so that window intersects the cartilage at two separate
+    superior-inferior levels: the true weight-bearing surface (in contact with the tibia)
+    and the anterior trochlea, which has rotated into the same A-P range. This helper
+    removes the fold by clustering the candidate points along the S-I axis (axis 2) —
+    splitting wherever there is an S-I gap larger than ``max_gap`` voxels — and keeping only
+    the cluster closest to the tibial contact level. At low flexion the candidates form a
+    single cluster and are returned unchanged.
 
-    :param points: An ``Nx3`` array of candidate weight-bearing voxels (LPI index space).
+    ``max_gap`` is an *absolute* voxel gap (the caller scales it by the S-I voxel spacing):
+    the two surfaces are separated by an anatomical clearance of a few voxels, whereas a
+    genuine single contact band is S-I-contiguous. A span-relative threshold would fail
+    here, because a *distant* fold inflates the span and pushes the threshold above the
+    real (small) valley gap between the fold and the contact surface. This assumes the true
+    zone is itself S-I-contiguous within ``max_gap``; a genuine internal S-I gap larger than
+    that would trim the zone to the reference-side sub-cluster.
+
+    :param points: An ``Nx3`` array of candidate voxels (LPI index space).
     :param reference_si: The tibial contact S-I level (axis 2) the true zone sits against,
-        e.g. the most-superior tibial central-zone voxel.
+        e.g. the most-superior tibial central-zone voxel, or the CWBZ's mean S-I level.
+    :param max_gap: The maximum S-I gap (in voxels) within one cluster; larger gaps split.
     :return: The subset of ``points`` belonging to the S-I cluster nearest ``reference_si``.
     """
     if len(points) == 0:
         return points
     si_sorted = np.sort(points[:, 2])
-    span = si_sorted[-1] - si_sorted[0]
-    if span == 0:
-        return points
 
-    # A gap is a cluster boundary when it is large relative to the overall S-I span; the
-    # 10% (min 2 voxel) threshold cleanly separates a folded trochlea from the contact
-    # surface while never splitting a single, contiguous weight-bearing cluster.
-    tolerance = max(2.0, 0.1 * span)
+    tolerance = max(2.0, max_gap)
     labels = np.zeros(len(si_sorted), dtype=int)
     for boundary in np.where(np.diff(si_sorted) > tolerance)[0]:
         labels[boundary + 1:] += 1

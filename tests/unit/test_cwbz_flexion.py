@@ -24,6 +24,28 @@ def _blob(x0, y0, z0, n=200, spread=3.0, seed=0):
     return np.round(pts)
 
 
+def test_drops_fold_across_a_small_valley():
+    """A fold separated by a small S-I valley (gap << 0.1*span) is still dropped.
+
+    Regression for the high-flexion right-CWBZ case: the distant fold inflates the S-I
+    span, so a span-relative gap tolerance (0.1*span) exceeds the real valley gap and
+    fails to split. The tolerance must be based on an absolute (spacing-scaled) gap.
+    """
+    rng = np.random.default_rng(0)
+    # Contact cluster near the reference, z in [100, 250]; fold z in [50, 90]; the
+    # valley z in [91, 99] is empty (gap ~10) but 0.1*span = 0.1*200 = 20 > 10.
+    contact = np.column_stack([rng.integers(0, 20, 4000), rng.integers(0, 20, 4000),
+                               rng.integers(100, 251, 4000)]).astype(float)
+    fold = np.column_stack([rng.integers(0, 20, 1000), rng.integers(0, 20, 1000),
+                            rng.integers(50, 91, 1000)]).astype(float)
+    points = np.vstack([contact, fold])
+
+    kept = _restrict_to_contact_cluster(points, 250.0)
+
+    assert kept[:, 2].min() >= 100, 'the fold below the valley should be dropped'
+    assert kept[:, 2].max() <= 250
+
+
 def test_drops_far_superior_fold():
     """Two S-I clusters: the far-superior fold is dropped, the near-tibia one kept."""
     # High axis2 = inferior (near the tibia); low axis2 = superior (the folded trochlea).
