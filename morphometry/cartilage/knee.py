@@ -196,6 +196,11 @@ class Tibia:
         self.art = np.array(art)
         self.prt = np.array(prt)
 
+        # A subregion is one anatomical patch: drop small disconnected fragments that the
+        # (x, y) classification can bucket in from the plateau edges / midline.
+        for attr in ('clt', 'ilt', 'elt', 'alt', 'plt', 'crt', 'irt', 'ert', 'art', 'prt'):
+            setattr(self, attr, _remove_subregion_fragments(getattr(self, attr)))
+
     def mesh_method(self, superior_surface: np.ndarray, inferior_surface: np.ndarray) -> dict:
         """
         Calculate the thickness of a cartilage using a mesh-based ray tracing method.
@@ -584,6 +589,11 @@ class Femur:
         self.icrf = np.array(icrf)
         self.ccrf = np.array(ccrf)
 
+        # Enforce subregion contiguity (a no-op once the zone-level fold restriction has
+        # removed the flexed-knee folds, but a general safety net for stray fragments).
+        for attr in ('alf', 'arf', 'plf', 'prf', 'eclf', 'iclf', 'cclf', 'ecrf', 'icrf', 'ccrf'):
+            setattr(self, attr, _remove_subregion_fragments(getattr(self, attr)))
+
 
     def mesh_method(self, superior_surface: np.ndarray, inferior_surface: np.ndarray) -> dict:
         """
@@ -831,6 +841,38 @@ def _remove_mask_outliers(mask: np.ndarray, threshold_ratio: float = 0.1) -> np.
     sizes[0] = 0
     keep = sizes > threshold_ratio * sizes.sum()
     return keep[labeled].astype(mask.dtype)
+
+
+def _remove_subregion_fragments(points: np.ndarray, ratio: float = 0.2) -> np.ndarray:
+    """
+    Drop small disconnected fragments from a subregion's voxel point cloud.
+
+    A subregion is a single anatomical patch, but the ``(x, y)``-based classification can
+    bucket a few edge voxels (e.g. anterior tibial cartilage that crosses the plateau
+    midline) into a subregion where they sit spatially disconnected from its main body.
+    This keeps only the 26-connectivity connected components whose voxel count is at least
+    ``ratio`` of the largest component's, removing such fragments while retaining a
+    genuinely multi-lobed subregion.
+
+    :param points: An ``Nx3`` array of the subregion's voxel indices.
+    :param ratio: Minimum component size as a fraction of the largest component; smaller
+        components are removed.
+    :return: The cleaned points (unchanged if empty or a single connected component).
+    """
+    if points is None or len(points) == 0:
+        return points
+    p = np.asarray(points)
+    idx = p.astype(int)
+    local = tuple((idx - idx.min(axis=0)).T)
+    grid = np.zeros(tuple(np.max(local, axis=1) + 1), dtype=bool)
+    grid[local] = True
+    labeled, n = label(grid, structure=np.ones((3, 3, 3), dtype=bool))
+    if n <= 1:
+        return points
+    sizes = np.bincount(labeled.ravel())
+    sizes[0] = 0
+    keep = sizes >= ratio * sizes.max()
+    return p[keep[labeled[local]]]
 
 
 def _femoral_condyle_dividing_line(cartilage: np.ndarray, min_size: int = 40) -> Tuple[float, float]:
