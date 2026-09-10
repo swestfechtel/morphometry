@@ -80,6 +80,52 @@ cap is the crop actually used.
 and reverts to the full-label behaviour); `--out`, `--n-rays`, `--cone-angle`
 override the rest.
 
+### Cone axis (`--axis`)
+
+`--axis` mirrors the measurement's `cone_axis` argument and controls where the ray
+cone points. Every render draws the axis itself as an arrow from the FHC, one colour
+per mode (acetabulum **purple**, superior **cyan**); in `compare` each panel draws
+*both* arrows — its own solid, the other thin and translucent — and prints the angle
+between them. The camera is placed perpendicular to the plane the two axes span
+(roughly an anterior view, superior up) so the tilt and the cone opening are visible
+rather than seen end-on, and the peri-acetabular crop is clipped to the far side of
+the FHC so it backs the rays instead of hiding them.
+
+| mode | axis | note |
+| --- | --- | --- |
+| `superior` (**default**) | straight up (world `+z`, which is Superior in both RAS+ and LPS) | fixed and standardised — samples the weight-bearing acetabular dome in every subject — but ignores individual acetabular orientation/version |
+| `acetabulum` (legacy) | FHC → peri-acetabular centroid | follows the individual acetabulum, but the centroid depends on how much ischium/pubis/ilium the label includes and on the crop radius, and it sits ~46° medial of superior, spraying ~half its rays into the non-articular acetabular fossa |
+| `compare` | both, side by side | one linked-camera scene, `subchondral_axis_comparison_{side}.png` |
+
+`--axis` defaults to whatever the library's `cone_axis` default is (read off the
+signature at import), currently `superior`; the render for that mode keeps the plain
+`subchondral_distance_3d_{side}.png` name and any other mode is suffixed
+`…_{side}_{axis}.png`, so the unsuffixed file always shows the default behaviour.
+
+```bash
+MORPH_NAKO_SAMPLE_DIR=/path/to/segmentations \
+    python docs/illustrations/plot_subchondral_3d.py --side left --axis compare --html
+```
+
+On the NaKo sample the two axes differ by ~40–55° (mean ≈46° over 8 cases, both
+hips), so with the default 45° half-angle the sampled regions only partially
+overlap and the superior axis reads systematically lower (see below). That gap is
+not a tie: the centroid axis is dragged medially by the ischium/pubis in the label
+and points roughly at the **acetabular fossa**, the non-articular depression where
+the femoral head touches no bone. Roughly half its rays cross the fossa and only
+stop at its far wall, which inflates the mean by ~1.5 mm and roughly triples the
+spread. Near the axis, where both modes sample true lunate surface, they agree
+(3.65–3.77 mm vs 3.78–3.94 mm over the innermost 0–20°). This is why `superior` is
+the library default; `acetabulum` is retained only to reproduce results captured
+before the default changed.
+
+`--table N` skips rendering, runs both axis modes over the first `N` sample cases ×
+both image sides, prints the comparison and writes it as CSV (`--table-csv`).
+Per-case failures are recorded as `NaN` rather than aborting the sweep. Over the
+first 8 cases the superior axis gave a mean 1.1–2.3 mm *smaller* distance with a
+markedly smaller spread (std ≈0.9 vs ≈2.2 mm), since it samples the roof only and
+avoids the deep/peripheral rays the tilted axis picks up.
+
 ## LaTeX / PDF
 
 `../reader_measurement_reference_table.tex` embeds these as an "Illustrations"
