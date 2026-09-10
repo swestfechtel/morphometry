@@ -182,3 +182,9 @@ cython_debug/
 # Third-party reference paper, kept locally (not ours to redistribute)
 Wirth_Eckstein_2008.pdf
 .claude/
+
+# Cohort outputs and SLURM job logs. Both sbatch scripts in scripts/ write into the
+# repo (results/nmdid, results/nako_subchondral, logs/); a NaKo sweep alone is 200 MB
+# of per-ray tables, which must never reach a commit.
+results/
+logs/
