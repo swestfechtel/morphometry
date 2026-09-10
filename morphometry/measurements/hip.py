@@ -24,7 +24,7 @@ from morphometry import geometry as G
 from morphometry.hip import (get_femoral_head_center, get_femoral_head_center_ct,
     get_femoral_neck_center, get_femoral_neck_center_ct, get_femoral_shaft_axis,
     get_femoral_shaft_axis_ct, get_femoral_neck_transition, get_p1, get_p2,
-    get_cartilage_inner_and_outer_surface_points)
+    get_acetabular_surface, get_cartilage_inner_and_outer_surface_points)
 from morphometry.femur import get_proximal_reference_line
 from morphometry.measurements.femur import _proximal_angle
 
@@ -384,7 +384,7 @@ def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', seg
 
     return anterior_angle, posterior_angle
 
-def calculate_acetabular_anteversion(hip_image: Segmentation, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, ct: bool = False, plot: bool | plt.Axes = False) -> Tuple[float, float]:
+def calculate_acetabular_anteversion(hip_image: Segmentation, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, ct: bool = False, plot: bool | plt.Axes = False, acetabulum_radius_factor: float = 0.) -> Tuple[float, float]:
     """
     Calculate the acetabular anteversion for both sides from a segmentation mask.
     :param hip_image: A segmentation mask of the hip.
@@ -393,6 +393,10 @@ def calculate_acetabular_anteversion(hip_image: Segmentation, femur_label: int =
     :param isotropic: Whether the image has isotropic voxels.
     :param ct: Whether the image is a CT scan.
     :param plot: Whether to plot the results.
+    :param acetabulum_radius_factor: If > 0, the acetabulum mask is first restricted to the
+    voxels within this multiple of the femoral head radius around the femoral head centre.
+    Use it when ``acetabulum_label`` covers the whole hip bone (as in whole-leg CT label maps)
+    rather than the acetabulum alone.
     :return: The acetabular anteversion for both sides.
     """
     left_mask = hip_image.array[:hip_image.shape[0] // 2]
@@ -404,25 +408,40 @@ def calculate_acetabular_anteversion(hip_image: Segmentation, femur_label: int =
     right_image = Segmentation.from_nibabel(right_image)
 
     if ct:
-        _, left_fhc = get_femoral_head_center_ct(left_image, segmentation_label=femur_label, side='left')
-        _, right_fhc = get_femoral_head_center_ct(right_image, segmentation_label=femur_label, side='right')
+        # the CT femoral head centre and radius come back in physical coordinates
+        r_left_mm, left_fhc = get_femoral_head_center_ct(left_image, segmentation_label=femur_label, side='left')
+        r_right_mm, right_fhc = get_femoral_head_center_ct(right_image, segmentation_label=femur_label, side='right')
 
         left_fhc = left_image.transform_physical_point_to_index(left_fhc)
         right_fhc = right_image.transform_physical_point_to_index(right_fhc)
     else:
-        _, left_fhc = get_femoral_head_center(left_image.array, side='left', segmentation_label=femur_label,
+        r_left_mm, left_fhc = get_femoral_head_center(left_image.array, side='left', segmentation_label=femur_label,
                                               isotropic=isotropic)
-        _, right_fhc = get_femoral_head_center(right_image.array, side='right', segmentation_label=femur_label,
+        r_right_mm, right_fhc = get_femoral_head_center(right_image.array, side='right', segmentation_label=femur_label,
                                                isotropic=isotropic)
+        # the MRI radius is in (isotropic) voxels; the surface extraction works in millimetres
+        in_plane = _voxel_spacing(hip_image)[0]
+        r_left_mm, r_right_mm = r_left_mm * in_plane, r_right_mm * in_plane
 
     slice_gap = abs(int(left_fhc[2]) - int(right_fhc[2]))
     correct_slice = min(int(left_fhc[2]), int(right_fhc[2])) + slice_gap // 2
 
-    p1_left = get_p1(left_mask[:, :, correct_slice], side='left', segmentation_label=acetabulum_label, fhc_y_index=int(left_fhc[1]))
-    p2_left = get_p2(left_mask[:, :, correct_slice], side='left', segmentation_label=acetabulum_label, fhc_y_index=int(left_fhc[1]))
+    if acetabulum_radius_factor > 0:
+        # a hip-bone label needs narrowing to the acetabulum; label 1 marks the kept voxels
+        spacing = _voxel_spacing(hip_image)
+        left_acet = _acetabulum_from_hip_bone(np.where(left_mask == acetabulum_label, 1, 0),
+                                              left_fhc, r_left_mm, spacing, acetabulum_radius_factor)
+        right_acet = _acetabulum_from_hip_bone(np.where(right_mask == acetabulum_label, 1, 0),
+                                               right_fhc, r_right_mm, spacing, acetabulum_radius_factor)
+        rim_label = 1
+    else:
+        left_acet, right_acet, rim_label = left_mask, right_mask, acetabulum_label
 
-    p1_right = get_p1(right_mask[:, :, correct_slice], side='right', segmentation_label=acetabulum_label, fhc_y_index=int(right_fhc[1]))
-    p2_right = get_p2(right_mask[:, :, correct_slice], side='right', segmentation_label=acetabulum_label, fhc_y_index=int(right_fhc[1]))
+    p1_left = get_p1(left_acet[:, :, correct_slice], side='left', segmentation_label=rim_label, fhc_y_index=int(left_fhc[1]))
+    p2_left = get_p2(left_acet[:, :, correct_slice], side='left', segmentation_label=rim_label, fhc_y_index=int(left_fhc[1]))
+
+    p1_right = get_p1(right_acet[:, :, correct_slice], side='right', segmentation_label=rim_label, fhc_y_index=int(right_fhc[1]))
+    p2_right = get_p2(right_acet[:, :, correct_slice], side='right', segmentation_label=rim_label, fhc_y_index=int(right_fhc[1]))
 
     femur_array = np.where(hip_image.array == femur_label, 1, 0)
     left_femur = femur_array[:femur_array.shape[0] // 2]
@@ -440,13 +459,17 @@ def calculate_acetabular_anteversion(hip_image: Segmentation, femur_label: int =
     p = p1_right
     s_right, projection_right = get_vector_through_point_perpendicular_to_line(u, v, p)
 
+    # The acetabular rim is a line, not a ray: which of its two directions p1 - p2 and the
+    # perpendicular s come out as is incidental, so the angle between them is only defined
+    # up to its supplement and has to be folded into [0, 90]. Without this an unlucky pair
+    # of signs reports a 7-degree version as 173.
     v1 = (p1_left - p2_left).astype('float32')
     v2 = s_left.copy()
-    left_aa = calculate_angle_between_vectors(v1, v2)
+    left_aa = G.fold_to_acute(calculate_angle_between_vectors(v1, v2))
 
     v1 = (p1_right - p2_right).astype('float32')
     v2 = s_right.copy()
-    right_aa = calculate_angle_between_vectors(v1, v2)
+    right_aa = G.fold_to_acute(calculate_angle_between_vectors(v1, v2))
 
     if plot is not False:
         plot.imshow(hip_image.array[:, :, correct_slice].T, cmap='gray')
@@ -488,6 +511,31 @@ def calculate_acetabular_depth(segmentation_mask: np.ndarray, side: str = 'left'
 
     return ad
 
+def _voxel_spacing(image: Segmentation) -> np.ndarray:
+    """The voxel size in millimetres along each array axis.
+
+    :param image: The image whose geometry to read.
+    :return: A length-3 array of millimetres per voxel.
+    """
+    return np.linalg.norm(np.asarray(image.affine)[:3, :3], axis=0)
+
+
+def _acetabulum_from_hip_bone(hip_mask: np.ndarray, fhc: np.ndarray, radius: float, spacing: np.ndarray,
+                              radius_factor: float) -> np.ndarray:
+    """Narrow a whole hip bone mask to the acetabular articular surface.
+
+    Whole-leg CT label maps do not segment the acetabulum separately, so the rim searches
+    would otherwise find the iliac wing. See ``get_acetabular_surface`` for the extraction.
+    :param hip_mask: A binary 3D mask of the hip bone (single image side).
+    :param fhc: The femoral head centre in index coordinates.
+    :param radius: The femoral head radius in millimetres.
+    :param spacing: The voxel size in millimetres along each axis.
+    :param radius_factor: How many head radii outward to look for the articular surface.
+    :return: A binary mask of the acetabular articular surface.
+    """
+    return get_acetabular_surface(hip_mask, fhc, radius, spacing, radius_factor=radius_factor)
+
+
 def _lateral_acetabular_edge_point(acetabulum_mask: np.ndarray, fhc: np.ndarray, radius: float,
                                    side: str, *, project: bool, upper_margin_factor: float) -> np.ndarray:
     """Find the most lateral acetabular edge point above the femoral head, one image side.
@@ -520,7 +568,7 @@ def _lateral_acetabular_edge_point(acetabulum_mask: np.ndarray, fhc: np.ndarray,
     return edge
 
 
-def calculate_center_edge_angle(hip_image: Segmentation, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, ct: bool = False, project: bool = False, plot: bool | plt.Axes = False, image_path: str = None) -> Tuple[float, float]:
+def calculate_center_edge_angle(hip_image: Segmentation, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, ct: bool = False, project: bool = False, plot: bool | plt.Axes = False, image_path: str = None, acetabulum_radius_factor: float = 0.) -> Tuple[float, float]:
     """
     Calculate the center edge angle for both sides from a segmentation mask.
     :param hip_image: A segmentation mask of the hip.
@@ -531,6 +579,10 @@ def calculate_center_edge_angle(hip_image: Segmentation, femur_label: int = 1, a
     :param project: Whether to project all landmarks onto a 2D plane before calculating the angle.
     :param plot: Whether to plot the results.
     :param image_path: File path to the original image for plotting.
+    :param acetabulum_radius_factor: If > 0, the acetabulum mask is first restricted to the
+    voxels within this multiple of the femoral head radius around the femoral head centre.
+    Use it when ``acetabulum_label`` covers the whole hip bone (as in whole-leg CT label maps)
+    rather than the acetabulum alone, otherwise the iliac wing is picked as the lateral edge.
     :return: The center edge angle for both sides.
     """
     left_mask = hip_image.array[:hip_image.shape[0] // 2]
@@ -544,6 +596,7 @@ def calculate_center_edge_angle(hip_image: Segmentation, femur_label: int = 1, a
     if ct:
         r_l, left_fhc = get_femoral_head_center_ct(left_image, segmentation_label=femur_label, side='left')
         r_r, right_fhc = get_femoral_head_center_ct(right_image, segmentation_label=femur_label, side='right')
+        r_l_mm, r_r_mm = r_l, r_r  # the CT radius comes back in millimetres; keep it before it is re-expressed
 
         left_fhc = left_image.transform_physical_point_to_index(left_fhc)
         right_fhc = right_image.transform_physical_point_to_index(right_fhc)
@@ -560,8 +613,30 @@ def calculate_center_edge_angle(hip_image: Segmentation, femur_label: int = 1, a
                                               isotropic=isotropic)
         r_r, right_fhc = get_femoral_head_center(right_image.array, side='right', segmentation_label=femur_label,
                                                isotropic=isotropic)
+        # the MRI radius is in (isotropic) voxels; the surface extraction works in millimetres
+        in_plane = _voxel_spacing(hip_image)[0]
+        r_l_mm, r_r_mm = r_l * in_plane, r_r * in_plane
 
     coronal_slice = int((right_fhc[1] + left_fhc[1]) // 2)
+
+    acetabulum_array = np.where(hip_image.array == acetabulum_label, 1, 0)
+    left_acetabulum = acetabulum_array[:acetabulum_array.shape[0] // 2]
+    right_acetabulum = acetabulum_array[acetabulum_array.shape[0] // 2:]
+
+    # before any projection: the surface extraction casts rays from the real femoral head
+    # centre, and `project` flattens its anterior-posterior coordinate to zero
+    if acetabulum_radius_factor > 0:
+        spacing = _voxel_spacing(hip_image)
+        left_acetabulum = _acetabulum_from_hip_bone(left_acetabulum, left_fhc, r_l_mm, spacing,
+                                                    acetabulum_radius_factor)
+        right_acetabulum = _acetabulum_from_hip_bone(right_acetabulum, right_fhc, r_r_mm, spacing,
+                                                     acetabulum_radius_factor)
+        # ``_lateral_acetabular_edge_point`` uses the radius for a slice-wise cut above the
+        # femoral head, so it wants the radius in slices. The conversion the CT branch above
+        # performs adds a millimetre radius to an index coordinate before re-transforming it,
+        # which yields an arbitrary number -- occasionally large enough to cut away the whole
+        # acetabular roof, leaving only voxels below the head and an angle past 90 degrees.
+        r_l, r_r = r_l_mm / spacing[2], r_r_mm / spacing[2]
 
     if project:
         left_fhc[1] = 0
@@ -571,24 +646,31 @@ def calculate_center_edge_angle(hip_image: Segmentation, femur_label: int = 1, a
     right_fhc_adj[0] += left_mask.shape[0]  # account for the left/right split of the sagittal axis
     G_vec = left_fhc - right_fhc_adj  # vector connecting the left and right femoral head centers
 
-    acetabulum_array = np.where(hip_image.array == acetabulum_label, 1, 0)
-    left_acetabulum = acetabulum_array[:acetabulum_array.shape[0] // 2]
-    right_acetabulum = acetabulum_array[acetabulum_array.shape[0] // 2:]
+    # The angle must be measured on real distances. This volume's voxels are strongly
+    # anisotropic on whole-leg CT (about 0.8 x 0.8 x 3.0 mm), and measuring in index space
+    # compresses the superior-inferior leg of the angle by the spacing ratio, inflating a
+    # 25-degree angle to about 60. Scaling the axes by the spacing (a positive, per-axis
+    # factor, so axis directions are unchanged) puts both legs in millimetres. Applied on
+    # the hip-bone path only: the index-space behaviour is what the isotropic MRI masks
+    # were calibrated on, and on those the scaling is uniform and changes nothing anyway.
+    scale = _voxel_spacing(hip_image) if acetabulum_radius_factor > 0 else np.ones(3)
 
     d = np.array([0, 0, -1])
-    n = G_vec / np.linalg.norm(G_vec)
+    n = (G_vec * scale) / np.linalg.norm(G_vec * scale)
     d_perp = d - np.dot(d, n) * n  # d_perp is perpendicular to G and goes in proximal direction
     d_perp *= 100  # scale the perpendicular vector to a reasonable length
-    s_right = right_fhc_adj + d_perp  # s is a point from the femoral head center with direction d_perp, just for visualisation
+    # d_perp lives in the scaled (millimetre) space; the overlays are drawn on voxel indices
+    d_perp_index = d_perp / scale
+    s_right = right_fhc_adj + d_perp_index  # s is a point from the femoral head center with direction d_perp, just for visualisation
     lat_right = _lateral_acetabular_edge_point(right_acetabulum, right_fhc, r_r, 'right',
                                                project=project, upper_margin_factor=C.CEA_UPPER_MARGIN_FACTOR_RIGHT)
-    s2_right = lat_right - right_fhc
+    s2_right = (lat_right - right_fhc) * scale
     cea_right = calculate_angle_between_vectors(d_perp, s2_right)
 
-    s_left = left_fhc + d_perp
+    s_left = left_fhc + d_perp_index
     lat_left = _lateral_acetabular_edge_point(left_acetabulum, left_fhc, r_l, 'left',
                                               project=project, upper_margin_factor=C.CEA_UPPER_MARGIN_FACTOR_LEFT)
-    s2_left = lat_left - left_fhc
+    s2_left = (lat_left - left_fhc) * scale
     cea_left = calculate_angle_between_vectors(d_perp, s2_left)
 
     if plot is not False:

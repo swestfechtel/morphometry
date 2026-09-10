@@ -347,6 +347,73 @@ def get_femoral_neck_transition(neck_points: np.ndarray, side: str = 'left') -> 
 
     return most_proximal_medial_point[0]  # this point is one possible transition point
 
+def get_acetabular_surface(hip_mask: np.ndarray, femoral_head_center: np.ndarray, radius: float,
+                           spacing: np.ndarray, radius_factor: float = 1.4,
+                           angular_resolution: float = None) -> np.ndarray:
+    """
+    Extract the acetabular articular surface from a whole hip bone mask.
+
+    Whole-leg CT label maps carry one label for the entire hip bone, so the rim searches
+    that expect an acetabulum-only mask latch onto the iliac wing instead. The acetabulum
+    is the part of the hip bone that *faces* the femoral head: casting rays outward from
+    the femoral head centre, the first bone voxel each ray meets is on the articular
+    surface, and everything behind it (the ilium above the roof, the ischium behind the
+    wall) is shadowed. The cast is vectorised -- directions are binned on a spherical grid
+    and the nearest voxel per bin is that bin's first hit -- rather than marched voxel by
+    voxel.
+
+    Rays that leave the cup through its opening find no bone within ``radius_factor``
+    head radii and contribute nothing, so the extracted patch ends at the acetabular rim.
+    :param hip_mask: A binary 3D mask of the hip bone (single image side).
+    :param femoral_head_center: The femoral head centre in index coordinates.
+    :param radius: The femoral head radius in millimetres.
+    :param spacing: The voxel size in millimetres along each axis.
+    :param radius_factor: How many head radii outward to look for the articular surface.
+    :param angular_resolution: The angular bin width in degrees; one first hit is kept per bin.
+    Defaults to one voxel of arc at the femoral head surface. Do not set this much finer:
+    bins narrower than the surface's own voxel spacing fall between voxel centres and come
+    up empty, and an empty bin lets the bone behind the acetabulum through.
+    :return: A binary mask of the acetabular articular surface.
+    """
+    surface = np.zeros_like(hip_mask)
+    voxels = np.argwhere(hip_mask)
+    if len(voxels) == 0:
+        return surface
+
+    offsets = (voxels - np.asarray(femoral_head_center, dtype=float)) * np.asarray(spacing, dtype=float)
+    distances = np.linalg.norm(offsets, axis=1)
+
+    within = (distances > 0) & (distances <= radius_factor * radius)
+    if not within.any():
+        return surface
+    voxels, offsets, distances = voxels[within], offsets[within], distances[within]
+
+    # bin the ray directions on a (polar, azimuth) grid; one bin is one ray
+    directions = offsets / distances[:, None]
+    if angular_resolution is None:
+        resolution = float(np.min(spacing)) / radius  # one voxel of arc at the head surface
+    else:
+        resolution = np.radians(angular_resolution)
+
+    theta = np.arccos(np.clip(directions[:, 2], -1, 1))
+    phi = np.arctan2(directions[:, 1], directions[:, 0]) + np.pi
+    polar = np.floor(theta / resolution).astype(np.int64)
+    # azimuthal circles shrink towards the poles, so widen the bins by 1/sin(theta) to keep
+    # every bin about one voxel of arc across -- otherwise polar bins are empty and leak
+    azimuth = np.floor(phi * np.maximum(np.sin(theta), resolution) / resolution).astype(np.int64)
+    rays = polar * (int(2 * np.pi / resolution) + 2) + azimuth
+
+    # within each ray keep the nearest voxel: sort by (ray, distance) and take each group's first
+    order = np.lexsort((distances, rays))
+    rays, voxels = rays[order], voxels[order]
+    first_hit = np.empty(len(rays), dtype=bool)
+    first_hit[0] = True
+    np.not_equal(rays[1:], rays[:-1], out=first_hit[1:])
+
+    surface[tuple(voxels[first_hit].T)] = 1
+    return surface
+
+
 def get_p1(acetabulum_array: np.ndarray, side: str = 'left', segmentation_label: int = 3, fhc_y_index: int = -1) -> np.ndarray:
     """
     Get the posterior acetabulum rim.
