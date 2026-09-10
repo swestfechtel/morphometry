@@ -25,9 +25,12 @@ allowed to remove the runaway, never to trim a sound slab.
 import nibabel as nib
 import numpy as np
 import pytest
+from scipy.ndimage import center_of_mass, label
 
 from morphometry import constants as C
-from morphometry.hip import _femoral_head_slab_bound, get_femoral_head_center, get_femoral_head_center_ct
+from morphometry.hip import (_femoral_head_slab_bound, _largest_component_centroid,
+                             get_femoral_head_center,
+                             get_femoral_head_center_ct)
 from morphometry.image_io import Segmentation
 
 # axcodes -> the affine that maps index space to nibabel's RAS+ world space; each column
@@ -327,3 +330,165 @@ def test_bound_never_leaves_the_volume():
         mask[:, :, z] = ((xx - 20) ** 2 + (yy - 20) ** 2 <= radius ** 2).astype(np.uint8)
     assert _femoral_head_slab_bound(mask, (20, 20), 0, (1.0, 1.0, 1.0)) == 9
 
+
+# --- where the column starts: two islands on the top slice --------------------------------
+#
+# A second, independent defect in the same walk, and the one that produces the *short*
+# slabs rather than the runaway. `get_femoral_head_center_ct` takes the centroid of the
+# ENTIRE topmost femur slice. When the femoral head and the greater trochanter both reach
+# that level the slice holds two islands, and the centroid of their union lands in the gap
+# between them — on background. The walk's first test is then already false, layer_low
+# never advances, and sphere_fit is handed a near-planar ring.
+#
+# `get_femoral_head_center` (MRI) has guarded this since it was written by keeping only the
+# largest connected component of that slice. Confirmed on NMDID case-158269 right, whose
+# top slice holds components of 13 and 3 voxels with the union centroid on background;
+# taking the largest component's centroid instead reveals a perfectly normal head.
+
+TWO_BLOB_SHAPE = (120, 80, 60)          #: wider grid, so the trochanter island clears the head
+TWO_BLOB_HEAD_INDEX = (40.0, 40.0, 7.823)  #: head centre; the z offset puts a real disc on slice 0
+TROCHANTER_COLUMN_XY = (95.0, 40.0)     #: centre of the separate trochanter island
+TROCHANTER_COLUMN_RADIUS_MM = 3.6       #: its radius; smaller than the head's cap, as anatomy has it
+TROCHANTER_MERGE_INDEX = 12             #: slice at which the trochanter joins the shaft
+
+
+def two_blob_femur() -> np.ndarray:
+    """A femoral head and a detached trochanter island reaching the same superior slice.
+
+    The head's centre is offset by a fraction of a slice so that slice 0 carries a real
+    disc (81 voxels) rather than a single pole voxel, and the trochanter island (37 voxels)
+    sits far enough lateral that the centroid of the union falls between them, on
+    background — and stays on background on the next slice down, which is what collapses
+    the slab rather than merely misplacing the column. The two join at
+    ``TROCHANTER_MERGE_INDEX`` via a bridge, as the real trochanter joins the shaft.
+    :return: A ``TWO_BLOB_SHAPE`` uint8 mask with the femur labelled 1.
+    """
+    xx, yy, zz = np.indices(TWO_BLOB_SHAPE).astype(float)
+    dx = (xx - TWO_BLOB_HEAD_INDEX[0]) * SPACING[0]
+    dy = (yy - TWO_BLOB_HEAD_INDEX[1]) * SPACING[1]
+    dz = (zz - TWO_BLOB_HEAD_INDEX[2]) * SPACING[2]
+    head = (dx ** 2 + dy ** 2 + dz ** 2) <= HEAD_RADIUS_MM ** 2
+    shaft = ((dx ** 2 + dy ** 2) <= SHAFT_RADIUS_MM ** 2) & (zz >= TWO_BLOB_HEAD_INDEX[2])
+    tx = (xx - TROCHANTER_COLUMN_XY[0]) * SPACING[0]
+    ty = (yy - TROCHANTER_COLUMN_XY[1]) * SPACING[1]
+    trochanter = (tx ** 2 + ty ** 2) <= TROCHANTER_COLUMN_RADIUS_MM ** 2
+    bridge = ((xx >= 46) & (xx <= 99) & (yy >= 34) & (yy <= 46)
+              & (zz >= TROCHANTER_MERGE_INDEX))
+    return (head | shaft | trochanter | bridge).astype(np.uint8)
+
+
+def test_two_blob_phantom_actually_has_the_defect():
+    """Guard the phantom itself: two islands, union centroid on background, head largest.
+
+    Without this the measurement tests below could pass for the wrong reason — a phantom
+    that quietly stopped reproducing the defect would look like a fix.
+    """
+    top = two_blob_femur()[:, :, 0]
+    labelled, count = label(top)
+    sizes = [int(np.count_nonzero(labelled == i)) for i in range(1, count + 1)]
+    assert count == 2, f"expected two islands on the top slice, got {count}"
+
+    centroid = center_of_mass(top)
+    column = (int(centroid[0]), int(centroid[1]))
+    assert top[column] == 0, "the union centroid must land on background for the defect to bite"
+
+    largest = int(np.argmax(sizes)) + 1
+    assert largest == labelled[int(TWO_BLOB_HEAD_INDEX[0]), int(TWO_BLOB_HEAD_INDEX[1])], (
+        "the head must be the largest island, else the guard would select the trochanter")
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_ct_two_blob_top_slice_still_measures_the_head(side):
+    """The measurement must survive a two-island top slice.
+
+    Both halves of the assertion carry their own side: with the defect present the left
+    side returns a plausible-looking 27.1 mm radius centred 37 mm away from the head,
+    while the right side returns a 15.1 mm radius. Only checking both catches both.
+    """
+    image = _segmentation(two_blob_femur())
+    truth = np.asarray(image.transform_index_to_physical_point(TWO_BLOB_HEAD_INDEX), dtype=float)
+
+    radius, center = get_femoral_head_center_ct(image, segmentation_label=1, side=side)
+    error = float(np.linalg.norm(np.asarray(center, dtype=float) - truth))
+
+    assert PLAUSIBLE_RADIUS_MM[0] <= radius <= PLAUSIBLE_RADIUS_MM[1], (
+        f"fitted radius {radius:.1f} mm outside {PLAUSIBLE_RADIUS_MM} mm — "
+        "the column probably started on background between the two islands")
+    assert error <= HEAD_RADIUS_MM, (
+        f"fitted centre is {error:.1f} mm from the true head centre {truth} — "
+        "the column probably started on background between the two islands")
+
+
+# --- the column must land *inside* the island, not merely near it ------------------------
+#
+# Picking the largest island is not by itself enough: a centroid is not a guaranteed
+# interior point. NMDID case-127214 right has a top slice of islands [48, 1] whose 48-voxel
+# component is concave enough that its own centroid falls in its concavity, on background,
+# so the column starts outside the bone exactly as it did before the guard. The centroid is
+# kept where it already lands inside the component — that keeps the guard inert on the
+# ordinary convex case — and otherwise falls back to the nearest component voxel.
+
+
+def crescent_slice(shape: tuple[int, int] = (80, 80)) -> np.ndarray:
+    """A C-shaped component whose own centroid lies in its concavity, plus a speck.
+
+    A 4-voxel-thick arc opening toward +x. Its centroid sits inside the arc's hole, on
+    background, which is the geometry that defeats a plain centroid. The single-voxel speck
+    reproduces the second island of the real case, so the largest-island selection runs too.
+    :param shape: Slice shape in voxels.
+    :return: A 2D uint8 mask.
+    """
+    yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
+    radius = np.sqrt((xx - 40.0) ** 2 + (yy - 40.0) ** 2)
+    angle = np.degrees(np.arctan2(yy - 40.0, xx - 40.0))
+    arc = (radius >= 10) & (radius <= 14) & (np.abs(angle) > 50)
+    mask = arc.astype(np.uint8)
+    mask[5, 5] = 1
+    return mask
+
+
+def test_crescent_phantom_actually_has_the_defect():
+    """Guard the phantom: two islands, and the larger one's centroid is on background."""
+    mask = crescent_slice()
+    labelled, count = label(mask)
+    sizes = [int(np.count_nonzero(labelled == i)) for i in range(1, count + 1)]
+    assert count == 2 and max(sizes) > 100
+
+    largest = int(np.argmax(sizes)) + 1
+    centroid = center_of_mass(labelled == largest)
+    assert (labelled == largest)[int(centroid[0]), int(centroid[1])] == 0, (
+        "the largest island's centroid must fall outside it for this phantom to bite")
+
+
+def test_column_lands_inside_a_concave_component():
+    """The returned column must be a voxel of the largest island, not just close to it.
+
+    Reproduces NMDID case-127214 right: islands [48, 1] where the larger one is concave, so
+    selecting it is not enough — its centroid is still background and the slab still
+    collapses.
+    """
+    mask = crescent_slice()
+    labelled, _ = label(mask)
+    sizes = [int(np.count_nonzero(labelled == i)) for i in range(1, labelled.max() + 1)]
+    largest = int(np.argmax(sizes)) + 1
+
+    column = _largest_component_centroid(mask)
+    assert (labelled == largest)[column] == 1, (
+        f"column {column} is not inside the largest island — the slab will collapse")
+
+
+@pytest.mark.parametrize("centre", [(40.0, 40.0), (33.7, 51.2), (20.4, 19.6)])
+def test_convex_component_keeps_the_truncated_centroid(centre):
+    """On an ordinary convex island the answer must not move by even one voxel.
+
+    This is the inertness pin for the fallback: snapping to the nearest component voxel
+    unconditionally would shift the column by up to a voxel on essentially every hip, since
+    the truncated centroid is rarely the closest voxel to the true centroid. The fallback
+    must engage only when the truncated centroid is actually outside the component.
+    """
+    yy, xx = np.mgrid[0:80, 0:80]
+    disc = (((xx - centre[1]) ** 2 + (yy - centre[0]) ** 2) <= 9.0 ** 2).astype(np.uint8)
+    expected_centroid = center_of_mass(disc)
+    expected = (int(expected_centroid[0]), int(expected_centroid[1]))
+    assert disc[expected] == 1, "phantom disc must contain its own truncated centroid"
+    assert _largest_component_centroid(disc) == expected
