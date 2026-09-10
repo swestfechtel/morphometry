@@ -7,6 +7,7 @@ from typing import Union
 
 import SimpleITK as sitk
 import nibabel as nib
+import logging
 import numpy as np
 import pydicom
 from scipy.ndimage import label
@@ -272,6 +273,29 @@ class Segmentation(Image):
             raise NotImplementedError('SimpleITK not implemented yet.')
 
 
+def _crop_z(source, start: int, end: int):
+    """
+    Crop an Image / Segmentation along the superior-inferior (third) axis.
+
+    The cropped volume keeps the source geometry: for nibabel the affine's
+    translation is advanced by ``start`` slices so that index ``0`` of the crop maps
+    to the same physical point as index ``start`` of the source (``sitk.RegionOfInterest``
+    does this on its own). Without that shift every ``transform_index_to_physical_point``
+    on a sub-volume would be off by ``start`` slices.
+    :param source: The Image or Segmentation to crop.
+    :param start: First slice of the crop (inclusive).
+    :param end: Last slice of the crop (exclusive).
+    :return: The underlying nibabel / SimpleITK image of the crop.
+    """
+    if source.type == 'nibabel':
+        affine = source.affine.copy()
+        affine[:3, 3] = affine[:3, :3].dot(np.array([0, 0, start])) + affine[:3, 3]
+        return nib.Nifti1Image(source.array[:, :, start:end], affine, source.header)
+
+    return sitk.RegionOfInterest(source.image, size=[source.shape[0], source.shape[1], end - start],
+                                 index=[0, 0, start])
+
+
 def split_ct_image(segmentation: Segmentation, image: Image = None, femur_label: int = 1, hip_label: int = 7, patella_label: int = 5, fibula_label: int = 3) -> Tuple[
     Tuple[Image, Image, Image], Tuple[Segmentation, Segmentation, Segmentation]]:
     """
@@ -296,43 +320,17 @@ def split_ct_image(segmentation: Segmentation, image: Image = None, femur_label:
     num_fibula_slices = ankle_end - knee_end + 1
     ankle_start = ankle_end - int(0.3 * num_fibula_slices)
 
-    print(f"Hip slices: {hip_start} to {hip_end}, Knee slices: {knee_start} to {knee_end}, Ankle slices: {ankle_start} to {ankle_end}")
+    logging.debug("Hip slices: %s to %s, Knee slices: %s to %s, Ankle slices: %s to %s",
+                  hip_start, hip_end, knee_start, knee_end, ankle_start, ankle_end)
 
     if image is not None:
         hip_image = Image(image.type)
         knee_image = Image(image.type)
         ankle_image = Image(image.type)
 
-        hip_image.image = nib.Nifti1Image(image.array[:, :, hip_start:hip_end], image.affine,
-                                          image.header) if image.type == 'nibabel' else sitk.RegionOfInterest(image.image,
-                                                                                                              size=[
-                                                                                                                  image.shape[
-                                                                                                                      0],
-                                                                                                                  image.shape[
-                                                                                                                      1],
-                                                                                                                  hip_end - hip_start],
-                                                                                                              index=[0, 0,
-                                                                                                                     hip_start])
-        knee_image.image = nib.Nifti1Image(image.array[:, :, knee_start:knee_end], image.affine,
-                                           image.header) if image.type == 'nibabel' else sitk.RegionOfInterest(image.image,
-                                                                                                               size=[
-                                                                                                                   image.shape[
-                                                                                                                       0],
-                                                                                                                   image.shape[
-                                                                                                                       1],
-                                                                                                                   knee_end - knee_start],
-                                                                                                               index=[0, 0,
-                                                                                                                      knee_start])
-        ankle_image.image = nib.Nifti1Image(image.array[:, :, ankle_start:ankle_end], image.affine,
-                                            image.header) if image.type == 'nibabel' else sitk.RegionOfInterest(image.image,
-                                                                                                                size=[
-                                                                                                                    image.shape[
-                                                                                                                        0],
-                                                                                                                    image.shape[
-                                                                                                                        1],
-                                                                                                                    ankle_end - ankle_start],
-                                                                                                                index=[0, 0,
-                                                                                                                       ankle_start])
+        hip_image.image = _crop_z(image, hip_start, hip_end)
+        knee_image.image = _crop_z(image, knee_start, knee_end)
+        ankle_image.image = _crop_z(image, ankle_start, ankle_end)
 
         hip_image.metadata = image.metadata
         knee_image.metadata = image.metadata
@@ -342,18 +340,9 @@ def split_ct_image(segmentation: Segmentation, image: Image = None, femur_label:
     knee_segmentation = Segmentation(segmentation.type)
     ankle_segmentation = Segmentation(segmentation.type)
 
-    hip_segmentation.image = nib.Nifti1Image(segmentation.array[:, :, hip_start:hip_end], segmentation.affine,
-                                             segmentation.header) if segmentation.type == 'nibabel' else sitk.RegionOfInterest(
-        segmentation.image, size=[segmentation.shape[0], segmentation.shape[1], hip_end - hip_start],
-        index=[0, 0, hip_start])
-    knee_segmentation.image = nib.Nifti1Image(segmentation.array[:, :, knee_start:knee_end], segmentation.affine,
-                                              segmentation.header) if segmentation.type == 'nibabel' else sitk.RegionOfInterest(
-        segmentation.image, size=[segmentation.shape[0], segmentation.shape[1], knee_end - knee_start],
-        index=[0, 0, knee_start])
-    ankle_segmentation.image = nib.Nifti1Image(segmentation.array[:, :, ankle_start:ankle_end], segmentation.affine,
-                                               segmentation.header) if segmentation.type == 'nibabel' else sitk.RegionOfInterest(
-        segmentation.image, size=[segmentation.shape[0], segmentation.shape[1], ankle_end - ankle_start],
-        index=[0, 0, ankle_start])
+    hip_segmentation.image = _crop_z(segmentation, hip_start, hip_end)
+    knee_segmentation.image = _crop_z(segmentation, knee_start, knee_end)
+    ankle_segmentation.image = _crop_z(segmentation, ankle_start, ankle_end)
 
     hip_segmentation.metadata = segmentation.metadata
     knee_segmentation.metadata = segmentation.metadata

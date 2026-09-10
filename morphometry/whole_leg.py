@@ -41,7 +41,7 @@ def get_distal_articulating_surface(ankle_image: np.ndarray, tibia_label: int = 
 
     return largest_change - 1  # -1 because we want the slice before the change, which is the distal articulating surface
 
-def get_mechanical_axis(whole_leg_image: Segmentation, femur_label: int = 1, tibia_label: int = 2, fibula_label: int = 3, patella_label: int = 5, hip_label: int = 7, side: str = 'left') -> Tuple[np.ndarray, np.ndarray]:
+def get_mechanical_axis(whole_leg_image: Segmentation, femur_label: int = 1, tibia_label: int = 2, fibula_label: int = 3, patella_label: int = 5, hip_label: int = 7, side: str = 'left', masks: Tuple[Segmentation, Segmentation, Segmentation] = None) -> Tuple[np.ndarray, np.ndarray]:
     """
     Get the Mikulicz line of one image side.
 
@@ -53,19 +53,24 @@ def get_mechanical_axis(whole_leg_image: Segmentation, femur_label: int = 1, tib
     :param patella_label: The segmentation label of the patella.
     :param hip_label: The segmentation label of the hip.
     :param side: The side of the image (not patient!), either 'left' or 'right'.
+    :param masks: The (hip, knee, ankle) sub-volumes of ``whole_leg_image`` as returned by
+    ``split_ct_image``. Optional; computed here when omitted. Pass a pre-computed split to
+    avoid repeating it when several measurements are taken from the same leg.
     :return: The proximal and distal points of the Mikulicz line, i.e. the center of the femoral head and the center
     of the ankle.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
     r, femoral_head_center = get_femoral_head_center_ct(whole_leg_image, femur_label, side)
-    _, masks = split_ct_image(whole_leg_image, None, femur_label=femur_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label)
+    if masks is None:
+        _, masks = split_ct_image(whole_leg_image, None, femur_label=femur_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label)
     ankle_mask = masks[2]
 
-    ankle_mask = np.where(ankle_mask.array == tibia_label, 1, 0)  # set distal tibia to 1
-    ankle_center_index = get_distal_articulating_surface(ankle_mask, 1)
-    ankle_center = np.array(center_of_mass(ankle_mask[:, :, ankle_center_index]))
+    ankle_array = np.where(ankle_mask.array == tibia_label, 1, 0)  # set distal tibia to 1
+    ankle_center_index = get_distal_articulating_surface(ankle_array, 1)
+    ankle_center = np.array(center_of_mass(ankle_array[:, :, ankle_center_index]))
     ankle_center = np.array([ankle_center[0], ankle_center[1], ankle_center_index])
-    ankle_center = whole_leg_image.transform_index_to_physical_point(ankle_center)
+    # transform through the ankle sub-volume: its indices are relative to the crop, not the whole leg
+    ankle_center = ankle_mask.transform_index_to_physical_point(ankle_center)
 
     return femoral_head_center, ankle_center

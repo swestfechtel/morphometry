@@ -15,7 +15,7 @@ from morphometry.whole_leg import get_mechanical_axis, get_distal_articulating_s
 from morphometry.utils import get_vector_through_point_perpendicular_to_line, calculate_angle_between_vectors
 
 
-def calculate_mechanical_axis_deviation(whole_leg_image: Segmentation, femur_label: int = 1, tibia_label: int = 2, fibula_label: int = 3, patella_label: int = 5, hip_label: int = 7, side:str = 'left') -> float:
+def calculate_mechanical_axis_deviation(whole_leg_image: Segmentation, femur_label: int = 1, tibia_label: int = 2, fibula_label: int = 3, patella_label: int = 5, hip_label: int = 7, side: str = 'left', masks: Tuple[Segmentation, Segmentation, Segmentation] = None) -> float:
     """
     Calculate the deviation of the center of the knee from the Mikulicz line.
     :param whole_leg_image: An Image object of the whole leg segmentation mask.
@@ -25,19 +25,23 @@ def calculate_mechanical_axis_deviation(whole_leg_image: Segmentation, femur_lab
     :param patella_label: The segmentation label of the patella.
     :param hip_label: The segmentation label of the hip.
     :param side: The side of the image (not patient!), either 'left' or 'right'.
+    :param masks: The (hip, knee, ankle) sub-volumes of ``whole_leg_image`` as returned by
+    ``split_ct_image``. Optional; computed here when omitted.
     :return: The deviation of the center of the knee from the Mikulicz line.
     """
+    if masks is None:
+        _, masks = split_ct_image(whole_leg_image, None, femur_label=femur_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label)
 
-    femoral_head_center, ankle_center = get_mechanical_axis(whole_leg_image, femur_label=femur_label, tibia_label=tibia_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label, side=side)
-    _, masks = split_ct_image(whole_leg_image, None)
+    femoral_head_center, ankle_center = get_mechanical_axis(whole_leg_image, femur_label=femur_label, tibia_label=tibia_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label, side=side, masks=masks)
     knee_mask = masks[1]
 
-    knee_mask = knee_mask.array.copy()
-    knee_mask = np.where(knee_mask == tibia_label, 1, 0)
-    knee_mask = np.where(knee_mask > 1, 0, knee_mask)
+    knee_array = knee_mask.array.copy()
+    knee_array = np.where(knee_array == tibia_label, 1, 0)
+    knee_array = np.where(knee_array > 1, 0, knee_array)
 
-    knee_center = get_knee_center(knee_mask)
-    knee_center = whole_leg_image.transform_index_to_physical_point(knee_center)
+    knee_center = get_knee_center(knee_array)
+    # transform through the knee sub-volume: its indices are relative to the crop, not the whole leg
+    knee_center = knee_mask.transform_index_to_physical_point(knee_center)
 
     femoral_head_center[1] = 0  # project to frontal plane
     knee_center[1] = 0
@@ -57,7 +61,7 @@ def calculate_mechanical_axis_deviation(whole_leg_image: Segmentation, femur_lab
 
     return d
 
-def calculate_hip_knee_ankle_angle(whole_leg_image: Segmentation, femur_label: int = 1, tibia_label: int = 2, fibula_label: int = 3, patella_label: int = 5, hip_label: int = 7, side: str = 'left') -> float:
+def calculate_hip_knee_ankle_angle(whole_leg_image: Segmentation, femur_label: int = 1, tibia_label: int = 2, fibula_label: int = 3, patella_label: int = 5, hip_label: int = 7, side: str = 'left', masks: Tuple[Segmentation, Segmentation, Segmentation] = None) -> float:
     """
     Calculate the hip-knee-ankle angle.
     :param whole_leg_image: An Image object of the whole leg segmentation mask.
@@ -67,17 +71,22 @@ def calculate_hip_knee_ankle_angle(whole_leg_image: Segmentation, femur_label: i
     :param patella_label: The segmentation label of the patella.
     :param hip_label: The segmentation label of the hip.
     :param side: The side of the image (not patient!), either 'left' or 'right'.
+    :param masks: The (hip, knee, ankle) sub-volumes of ``whole_leg_image`` as returned by
+    ``split_ct_image``. Optional; computed here when omitted.
     :return: The hip-knee-ankle angle in degrees.
     """
-    femoral_head_center, ankle_center = get_mechanical_axis(whole_leg_image, femur_label=femur_label, tibia_label=tibia_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label, side=side)
-    _, masks = split_ct_image(whole_leg_image, None)
+    if masks is None:
+        _, masks = split_ct_image(whole_leg_image, None, femur_label=femur_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label)
+
+    femoral_head_center, ankle_center = get_mechanical_axis(whole_leg_image, femur_label=femur_label, tibia_label=tibia_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label, side=side, masks=masks)
     knee_mask = masks[1]
 
-    knee_mask = knee_mask.array.copy()
-    knee_mask = np.where(knee_mask == tibia_label, 1, 0)
-    knee_mask = np.where(knee_mask > 1, 0, knee_mask)
-    knee_center = get_knee_center(knee_mask)
-    knee_center = whole_leg_image.transform_index_to_physical_point(knee_center)
+    knee_array = knee_mask.array.copy()
+    knee_array = np.where(knee_array == tibia_label, 1, 0)
+    knee_array = np.where(knee_array > 1, 0, knee_array)
+    knee_center = get_knee_center(knee_array)
+    # transform through the knee sub-volume: its indices are relative to the crop, not the whole leg
+    knee_center = knee_mask.transform_index_to_physical_point(knee_center)
 
     hip_knee_vector = knee_center - femoral_head_center
     knee_ankle_vector = ankle_center - knee_center

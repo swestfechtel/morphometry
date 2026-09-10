@@ -6,6 +6,13 @@ guard the CT code paths through the measurements refactor -- in particular
 ``calculate_ccd_ct`` exercises ``get_femoral_neck_center_ct``, so it protects the
 planned MRI/CT neck-finding deduplication.
 
+The ``hka_ct_left`` / ``mad_ct_left`` goldens were re-captured when ``split_ct_image``
+started giving its crops the correct affine: the knee and ankle landmarks had been
+converted to physical points through the whole-leg affine, which placed them hundreds
+of millimetres off (above the femoral head), so the old values were not measuring a
+leg axis at all. Note that ``calculate_hip_knee_ankle_angle`` returns the *deviation*
+from a straight axis; the clinical hip-knee-ankle angle is 180 minus this value.
+
 Skipped unless the CT sample is available (set ``MORPH_CT_SAMPLE`` to override).
 """
 import pytest
