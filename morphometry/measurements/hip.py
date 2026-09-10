@@ -7,6 +7,8 @@ femoral offset). Landmark/reference helpers they rely on stay in
 
 "left"/"right" refers to the image side, not the patient side.
 """
+import logging
+
 import numpy as np
 import pyvista as pv
 import pandas as pd
@@ -36,6 +38,18 @@ from skimage.measure import find_contours
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from matplotlib import pyplot as plt
+
+# Module logger for non-fatal measurement diagnostics (see the ray-attrition warning in
+# ``_subchondral_distance_ray_tracing``). ``logging`` rather than ``warnings.warn`` on
+# purpose: the stdlib warning filter dedups by (message, category, module, lineno), so in
+# a cohort sweep only the first affected subject would be reported and every later one
+# silently swallowed. A logger emits every occurrence and is visible with no handler
+# configured, via Python's lastResort handler, which prints WARNING and above to stderr.
+# Note this does NOT reach ``api/logs/``: ``api/logging_config.py`` attaches its handlers
+# to the ``'api'`` logger, and this module is a sibling under root rather than a child of
+# it. An application that wants these records in its own log should attach a handler to
+# ``logging.getLogger('morphometry')``; a library must not configure logging itself.
+logger = logging.getLogger(__name__)
 
 
 def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1., debug: bool = False, plot: plt.Axes | pv.Plotter | bool = False) -> Tuple[float, float] | Tuple[float, float, plt.Figure]:
@@ -758,6 +772,30 @@ def _physical_distances_from_point(image: Image, voxels: np.ndarray, ref_index: 
     return np.linalg.norm(voxels_phys - ref_phys, axis=1)
 
 
+def _superior_direction() -> np.ndarray:
+    """
+    The unit physical-space vector pointing superiorly, as a world-space constant.
+
+    Both world spaces this package supports put Superior on physical ``+z``: nibabel
+    images are in **RAS+** (the NIfTI sform/qform are defined in RAS+) and
+    SimpleITK/DICOM images are in **LPS**, and the two conventions differ only in the
+    x and y signs. The superior direction is therefore ``[0, 0, 1]`` under either
+    backend, independent of how the voxel array happens to be indexed.
+
+    This is deliberately *not* derived from the image affine. Stepping along index
+    axis 2 would only be correct once ``transform_coordinate_system(('L', 'P', 'I'))``
+    has been called — an unverifiable precondition that silently returns an anterior
+    vector on as-stored data and an inverted one on an LPS/RAS image. Obliquity makes
+    the affine-derived version worse rather than better: ``nib.orientations`` only
+    permutes and flips axes and never resamples, so under a gantry-tilted affine index
+    axis 2 is merely the axis *nearest* inferior and is off true inferior by the full
+    tilt angle, while world ``+z`` remains the anatomical vertical the measurement
+    wants. Being a unit constant, it is also unaffected by voxel spacing.
+    :return: A (3,) unit vector in physical (mm) space pointing superiorly.
+    """
+    return np.array([0.0, 0.0, 1.0])
+
+
 def _sample_cone_directions(axis: np.ndarray, n_rays: int, cone_angle: float) -> np.ndarray:
     """
     Sample unit direction vectors evenly within a cone around a central axis.
@@ -804,6 +842,8 @@ def _subchondral_distance_ray_tracing(image: Image, fhc_index: np.ndarray, fhc_r
                                       n_rays: int = 200, cone_angle: float = 45.0,
                                       ray_length_factor: float = 3.0,
                                       acetabulum_radius_factor: float | None = 1.5,
+                                      cone_axis: str = 'superior',
+                                      min_ray_fraction: float = 0.7,
                                       plot: bool | plt.Axes | pv.Plotter = False) -> Tuple[float, float, float, float, np.ndarray, np.ndarray, np.ndarray]:
     """
     Measure the subchondral femoral-head-to-acetabulum distance by ray tracing.
@@ -824,6 +864,31 @@ def _subchondral_distance_ray_tracing(image: Image, fhc_index: np.ndarray, fhc_r
     peri-acetabular region — voxels within that many femoral-head radii of the FHC —
     before the centroid and hit search, dropping the wing so the cone centres on the
     bone that actually cups the head. Pass ``None`` to disable and use the full mask.
+
+    ``cone_axis`` selects how the cone is aimed. The default ``'superior'`` axis points
+    the cone straight up (see :func:`_superior_direction`), so it samples the same
+    anatomical target in every subject — the weight-bearing acetabular dome, which is
+    where a joint-space measurement is clinically meaningful — and does so independently
+    of the labelling scheme. The alternative ``'acetabulum'`` axis (FHC ->
+    peri-acetabular centroid) follows the individual acetabulum, but that centroid
+    depends on how much ischium / pubis / ilium the label happens to include and on
+    ``acetabulum_radius_factor``, so the axis — and hence which part of the lunate
+    surface is sampled — varies between subjects and between the MRI and CT labelling
+    schemes. Worse, on sample NaKo data that centroid axis is dragged roughly 40-55
+    degrees medially by the ischium / pubis (mean ~46 degrees off superior over 8 cases,
+    both hips), which with the default 45 degree cone half-angle sprays about half its
+    rays into the **acetabular fossa** — the non-articular depression where the femoral
+    head contacts no bone. Those fossa rays travel much further before hitting bone, so
+    they inflate the reported mean by ~1.5 mm and roughly triple its spread. Near the
+    axis, where both modes sample true lunate surface, they agree (3.65-3.77 mm vs
+    3.78-3.94 mm over the innermost 0-20 degrees). ``'acetabulum'`` is kept as an opt-in
+    for reproducing pre-existing results; it should not be used for new work.
+
+    The peri-acetabular crop is applied in both modes, since it also restricts the
+    acetabulum hit search and not only the axis. A fixed axis means rays are no longer
+    aimed at the label by construction, so in ``'superior'`` mode a meaningful fraction
+    of them clear the lateral acetabular rim and are dropped for want of an acetabulum
+    hit (see ``:param cone_axis:``).
     :param image: The Image/Segmentation providing index<->physical transforms.
     :param fhc_index: The femoral head center in index (voxel) coordinates.
     :param fhc_radius_index: The femoral head radius in index (voxel) units.
@@ -834,11 +899,36 @@ def _subchondral_distance_ray_tracing(image: Image, fhc_index: np.ndarray, fhc_r
     :param ray_length_factor: Ray length as a multiple of the femoral head radius (mm).
     :param acetabulum_radius_factor: Keep only acetabulum voxels within this many
         femoral-head radii of the FHC (physical distance); ``None`` uses the full mask.
+    :param cone_axis: Which direction the ray cone is centred on. ``'superior'`` (default)
+        aims it along world ``+z``, a fixed, standardised axis that samples the
+        weight-bearing acetabular dome in every subject; because it does not aim at the
+        label, the number of surviving rays can fall well below ``n_rays`` (3.5-18.5% lost
+        on healthy NaKo samples, all at the lateral acetabular rim), and heavy loss is
+        reported through ``min_ray_fraction``. ``'acetabulum'`` is the legacy behaviour:
+        it aims the cone from the FHC at the peri-acetabular centroid, an axis ~46 degrees
+        medial of superior on sample NaKo data, which sends roughly half the rays into the
+        non-articular acetabular fossa and so inflates the mean by ~1.5 mm and triples its
+        spread. Use it only to reproduce results captured before the default changed. Any
+        other value raises ``ValueError``.
+    :param min_ray_fraction: Warning threshold on the surviving-ray fraction, applied only
+        in ``'superior'`` mode. If fewer than this fraction of ``n_rays`` reach the
+        acetabulum, a WARNING is logged on this module's logger naming the count and the
+        likely cause. It never raises on the measurement and never changes the result; pass
+        0 to disable the warning. Must be in [0, 1]; anything else raises ``ValueError``.
+        The 0.7 default sits below the worst healthy sample measured (3.5-18.5% loss over
+        8 NaKo cases x both hips, i.e. survival down to 81.5%) with headroom, so it should
+        stay quiet on a normal cohort while still firing on a genuinely deficient
+        acetabulum.
     :param plot: A matplotlib Axes / PyVista Plotter to overlay the rays on, or False.
     :return: A tuple ``(mean, std, min, max, distances, exit_points, hit_points)`` where
         the distances are in mm and the exit/hit point arrays are (K, 3) physical coordinates
         for the K surviving rays.
     """
+    if cone_axis not in ('acetabulum', 'superior'):
+        raise ValueError(f"Unknown cone_axis {cone_axis!r}; valid options are 'acetabulum' and 'superior'")
+    if not 0.0 <= min_ray_fraction <= 1.0:
+        raise ValueError(f'min_ray_fraction must be in [0, 1] (0 disables the warning), got {min_ray_fraction!r}')
+
     fhc_index = np.asarray(fhc_index, dtype=float)
     shape = np.array(femur_mask.shape)
 
@@ -863,11 +953,14 @@ def _subchondral_distance_ray_tracing(image: Image, fhc_index: np.ndarray, fhc_r
             restricted[acetabulum_voxels[:, 0], acetabulum_voxels[:, 1], acetabulum_voxels[:, 2]] = 1
             acetabulum_mask = restricted
 
-    # cone axis: FHC -> peri-acetabular centroid, in physical space
-    acetabulum_centroid_phys = np.asarray(image.transform_index_to_physical_point(acetabulum_voxels.mean(axis=0)), dtype=float)
-    axis = acetabulum_centroid_phys - fhc_phys
-    if np.linalg.norm(axis) < 1e-6:
-        raise ValueError('Femoral head center coincides with acetabulum centroid; cannot define a cone axis')
+    # cone axis: either FHC -> peri-acetabular centroid, or straight up (superior)
+    if cone_axis == 'superior':
+        axis = _superior_direction()
+    else:
+        acetabulum_centroid_phys = np.asarray(image.transform_index_to_physical_point(acetabulum_voxels.mean(axis=0)), dtype=float)
+        axis = acetabulum_centroid_phys - fhc_phys
+        if np.linalg.norm(axis) < 1e-6:
+            raise ValueError('Femoral head center coincides with acetabulum centroid; cannot define a cone axis')
 
     directions = _sample_cone_directions(axis, n_rays, cone_angle)
     fhc_voxel = np.rint(fhc_index).astype(int)
@@ -924,6 +1017,19 @@ def _subchondral_distance_ray_tracing(image: Image, fhc_index: np.ndarray, fhc_r
     if len(distances) == 0:
         raise ValueError('No valid rays connected the femoral head to the acetabulum')
 
+    # Ray attrition is only meaningful for a fixed axis. The 'acetabulum' axis is built by
+    # aiming at the label's own centroid, so its rays cannot miss the label the way a fixed
+    # axis can; a low survival count there would say nothing about acetabular coverage and
+    # the threshold is not calibrated for it. Keep the check scoped to 'superior'.
+    if cone_axis == 'superior' and len(distances) < min_ray_fraction * n_rays:
+        logger.warning(
+            'Subchondral distance (superior axis): only %d of %d rays (%.1f%%) reached the '
+            'acetabulum, below the %.0f%% expected; the missing rays typically clear the '
+            'lateral acetabular rim (a truncated field of view can also cost rays), which '
+            'worsens with a deficient/dysplastic lateral roof and biases the reported mean '
+            'low because the discarded rays are the long ones.',
+            len(distances), n_rays, 100.0 * len(distances) / n_rays, 100.0 * min_ray_fraction)
+
     distances = np.array(distances)
     exit_points = np.array(exit_points)
     hit_points = np.array(hit_points)
@@ -949,6 +1055,8 @@ def calculate_subchondral_distance_ray_tracing(image: Segmentation, side: str = 
                                                acetabulum_label: int = 3, isotropic: bool = False,
                                                n_rays: int = 200, cone_angle: float = 45.0,
                                                acetabulum_radius_factor: float | None = 1.5,
+                                               cone_axis: str = 'superior',
+                                               min_ray_fraction: float = 0.7,
                                                plot: bool | plt.Axes | pv.Plotter = False) -> Tuple[float, float, float, float, np.ndarray, np.ndarray, np.ndarray]:
     """
     Measure the subchondral femoral-head-to-acetabulum distance on an MRI hip segmentation.
@@ -968,6 +1076,39 @@ def calculate_subchondral_distance_ray_tracing(image: Segmentation, side: str = 
     :param acetabulum_radius_factor: Restrict the acetabulum label to voxels within this
         many femoral-head radii of the FHC before aiming the cone, so a whole-pelvis label
         does not bias the axis toward the iliac wing; ``None`` uses the full mask.
+    :param cone_axis: Which direction the ray cone is centred on. ``'superior'`` (default)
+        aims it straight up along world ``+z`` — a fixed, standardised axis that samples the
+        weight-bearing acetabular dome, the part of the joint where a subchondral distance is
+        clinically meaningful, in every subject and independently of the labelling scheme.
+        ``'acetabulum'`` is the legacy behaviour: it aims the cone from the FHC at the
+        peri-acetabular centroid, which follows the subject's own acetabulum but depends on how
+        much ischium / pubis / ilium the label happens to include and on
+        ``acetabulum_radius_factor``, so the sampled part of the lunate surface varies between
+        subjects and between the MRI and CT labelling schemes. On sample NaKo data that centroid
+        axis sits roughly 40-55 degrees medial of superior (mean ~46 over 8 cases, both hips),
+        which with the default 45 degree half-angle sends about half its rays into the
+        non-articular **acetabular fossa**, where the head contacts no bone; those long fossa
+        rays inflate the mean by ~1.5 mm and roughly triple its spread. Where the two modes
+        overlap — the innermost 0-20 degrees of the cone, all true lunate surface — they agree
+        (3.65-3.77 mm vs 3.78-3.94 mm). Prefer the default; use ``'acetabulum'`` only to
+        reproduce results captured before the default changed. Because ``'superior'`` does not
+        aim at the label by construction, the number of surviving rays can fall well below
+        ``n_rays`` — 3.5-18.5% were lost across 8 healthy NaKo samples x both hips, every one of
+        them clearing the lateral acetabular rim. Heavy loss is logged as a WARNING (see
+        ``min_ray_fraction``), so it need not be noticed unaided, though ``len(distances)``
+        remains the exact count. This matters most in acetabular dysplasia: a deficient
+        lateral roof drops proportionally more rays, and the reported mean, taken over the
+        surviving medial rays, is then biased low in exactly the cohort of interest. Note that
+        the superior axis itself does not depend on the LPI precondition, but the rest of this
+        function does — ``side`` and the upstream axis-0 left/right split still assume it. Any
+        other value raises ``ValueError``.
+    :param min_ray_fraction: Warning threshold on the surviving-ray fraction, applied only in
+        ``'superior'`` mode: if fewer than this fraction of ``n_rays`` reach the acetabulum, a
+        WARNING is logged naming the count and the likely cause. It never raises on the
+        measurement and never changes the result; pass 0 to disable the warning. Must be in
+        [0, 1]; anything else raises ``ValueError``. The 0.7 default sits below the worst
+        healthy sample measured (survival down to 81.5%) with headroom, so it should stay quiet
+        on a normal cohort while still firing on a genuinely deficient acetabulum.
     :param plot: A matplotlib Axes / PyVista Plotter to overlay the rays on, or False.
     :return: A tuple ``(mean, std, min, max, distances, exit_points, hit_points)`` in mm.
     """
@@ -979,11 +1120,15 @@ def calculate_subchondral_distance_ray_tracing(image: Segmentation, side: str = 
 
     return _subchondral_distance_ray_tracing(image, fhc_idx, r_idx, femur_mask, acetabulum_mask,
                                              n_rays=n_rays, cone_angle=cone_angle,
-                                             acetabulum_radius_factor=acetabulum_radius_factor, plot=plot)
+                                             acetabulum_radius_factor=acetabulum_radius_factor,
+                                             cone_axis=cone_axis,
+                                             min_ray_fraction=min_ray_fraction, plot=plot)
 
 def calculate_subchondral_distance_ray_tracing_ct(femur_image: Segmentation, side: str = 'left', femur_label: int = 1,
                                                   acetabulum_label: int = 7, n_rays: int = 200, cone_angle: float = 45.0,
                                                   acetabulum_radius_factor: float | None = 1.5,
+                                                  cone_axis: str = 'superior',
+                                                  min_ray_fraction: float = 0.7,
                                                   plot: bool | plt.Axes | pv.Plotter = False) -> Tuple[float, float, float, float, np.ndarray, np.ndarray, np.ndarray]:
     """
     Measure the subchondral femoral-head-to-acetabulum distance on a whole-leg CT segmentation.
@@ -1002,6 +1147,39 @@ def calculate_subchondral_distance_ray_tracing_ct(femur_image: Segmentation, sid
     :param acetabulum_radius_factor: Restrict the hip-bone label to voxels within this many
         femoral-head radii of the FHC before aiming the cone, so the iliac wing does not bias
         the axis; ``None`` uses the full mask.
+    :param cone_axis: Which direction the ray cone is centred on. ``'superior'`` (default)
+        aims it straight up along world ``+z`` — a fixed, standardised axis that samples the
+        weight-bearing acetabular dome, the part of the joint where a subchondral distance is
+        clinically meaningful, in every subject and independently of the labelling scheme.
+        ``'acetabulum'`` is the legacy behaviour: it aims the cone from the FHC at the
+        peri-acetabular centroid, which follows the subject's own acetabulum but depends on how
+        much of the hip bone the label happens to include and on ``acetabulum_radius_factor``,
+        so the sampled part of the lunate surface varies between subjects and between the MRI
+        and CT labelling schemes. On sample NaKo data that centroid axis sits roughly 40-55
+        degrees medial of superior (mean ~46 over 8 cases, both hips), which with the default
+        45 degree half-angle sends about half its rays into the non-articular **acetabular
+        fossa**, where the head contacts no bone; those long fossa rays inflate the mean by
+        ~1.5 mm and roughly triple its spread. Where the two modes overlap — the innermost
+        0-20 degrees of the cone, all true lunate surface — they agree (3.65-3.77 mm vs
+        3.78-3.94 mm). Prefer the default; use ``'acetabulum'`` only to reproduce results
+        captured before the default changed. Because ``'superior'`` does not
+        aim at the label by construction, the number of surviving rays can fall well below
+        ``n_rays`` — 3.5-18.5% were lost across 8 healthy NaKo samples x both hips, every one of
+        them clearing the lateral acetabular rim. Heavy loss is logged as a WARNING (see
+        ``min_ray_fraction``), so it need not be noticed unaided, though ``len(distances)``
+        remains the exact count. This matters most in acetabular dysplasia: a deficient
+        lateral roof drops proportionally more rays, and the reported mean, taken over the
+        surviving medial rays, is then biased low in exactly the cohort of interest. Note that
+        the superior axis itself does not depend on the LPI precondition, but the rest of this
+        function does — ``side`` and the upstream axis-0 left/right split still assume it. Any
+        other value raises ``ValueError``.
+    :param min_ray_fraction: Warning threshold on the surviving-ray fraction, applied only in
+        ``'superior'`` mode: if fewer than this fraction of ``n_rays`` reach the acetabulum, a
+        WARNING is logged naming the count and the likely cause. It never raises on the
+        measurement and never changes the result; pass 0 to disable the warning. Must be in
+        [0, 1]; anything else raises ``ValueError``. The 0.7 default sits below the worst
+        healthy sample measured (survival down to 81.5%) with headroom, so it should stay quiet
+        on a normal cohort while still firing on a genuinely deficient acetabulum.
     :param plot: A matplotlib Axes / PyVista Plotter to overlay the rays on, or False.
     :return: A tuple ``(mean, std, min, max, distances, exit_points, hit_points)`` in mm.
     """
@@ -1017,7 +1195,9 @@ def calculate_subchondral_distance_ray_tracing_ct(femur_image: Segmentation, sid
 
     return _subchondral_distance_ray_tracing(femur_image, fhc_idx, r_idx, femur_mask, acetabulum_mask,
                                              n_rays=n_rays, cone_angle=cone_angle,
-                                             acetabulum_radius_factor=acetabulum_radius_factor, plot=plot)
+                                             acetabulum_radius_factor=acetabulum_radius_factor,
+                                             cone_axis=cone_axis,
+                                             min_ray_fraction=min_ray_fraction, plot=plot)
 
 def calculate_cartilage_thickness_knn(segmentation_mask: np.ndarray, cartilage_label: int = 2) -> Tuple[float, float, float, float]:
     """

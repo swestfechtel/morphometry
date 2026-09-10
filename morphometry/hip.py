@@ -23,9 +23,125 @@ from sklearn.decomposition import PCA
 from matplotlib import pyplot as plt
 
 
+def _largest_component_centroid(slice_mask: np.ndarray) -> Tuple[int, int]:
+    """Centroid of the largest connected component of a single mask slice.
+
+    The topmost slice of a proximal-femur mask frequently holds more than one island: the
+    femoral head and the greater trochanter reach the same superior level and appear as two
+    separate blobs. The centroid of their *union* then lands in the gap between them, on
+    background, and a column dropped there is outside the bone from the start. Restricting
+    to the largest island first keeps the centroid on the anatomy, which is what
+    :func:`get_femoral_head_center` has always done for MRI.
+
+    Selecting the island is not sufficient on its own, because a centroid is not a
+    guaranteed interior point: a concave island — an arc of cortex around a marrow void, a
+    crescent of partial-volume voxels — places its own centroid in its concavity, on
+    background, and the column starts outside the bone exactly as it did before. So the
+    centroid is used where it already lands inside the island, and the nearest island voxel
+    substitutes where it does not. Keeping the centroid in the ordinary case matters: the
+    truncated centroid is rarely the *closest* voxel to the true centroid, so snapping
+    unconditionally would move the column by up to a voxel on almost every hip.
+    :param slice_mask: A 2D binary mask; must contain at least one foreground voxel.
+    :return: The ``(x, y)`` index of a voxel of the largest connected component.
+    """
+    labelled, num_features = label(slice_mask)
+    if num_features > 1:
+        sizes = [np.count_nonzero(labelled == i) for i in range(1, num_features + 1)]
+        slice_mask = labelled == (int(np.argmax(sizes)) + 1)
+
+    centroid = center_of_mass(slice_mask)
+    column = (int(centroid[0]), int(centroid[1]))
+    if slice_mask[column]:
+        return column
+
+    voxels = np.argwhere(slice_mask)  # concave island: fall back to its nearest voxel
+    nearest = voxels[np.argmin(np.sum((voxels - np.asarray(centroid)) ** 2, axis=1))]
+    return int(nearest[0]), int(nearest[1])
+
+
+def _femoral_head_slab_bound(mask: np.ndarray, column: Tuple[int, int], layer_high: int,
+                             spacing: Tuple[float, float, float]) -> int:
+    """Find the last slice a femoral-head slab may plausibly extend to.
+
+    Both femoral-head-centre functions delimit the head by dropping a single-voxel
+    column through the centroid of the topmost head slice and walking it inferiorly
+    until it leaves the bone. On a straight, vertically aligned proximal femur the
+    column never leaves the bone — it runs head into neck into shaft — and the sphere
+    is then fitted to the whole proximal femur, silently returning a radius two to
+    three times anatomical, centred far inferior of the real head.
+
+    This bounds that walk by the head's own size, measured from the same data. Descending
+    from ``layer_high``, the connected component containing the column is taken on each
+    slice and its equivalent radius ``sqrt(area / pi)`` recorded. That radius grows to the
+    head's equator and then shrinks; when the neck or greater trochanter merges into the
+    component it jumps back up. The descent stops at that post-equator jump (or as soon as
+    the column leaves the bone), and the largest radius seen bounds the slab at one head
+    diameter below ``layer_high``.
+
+    That reasoning holds only if the equator was actually in view, i.e. if the radius was
+    seen to rise and then fall away from its peak by more than
+    ``C.FEMORAL_HEAD_RADIUS_JUMP``. It is not in view when the acquisition is cropped
+    through the head (the radius is still rising when the bone ends, so the largest radius
+    seen is a chord and not the head's own) or when ``layer_high``'s centroid falls between
+    two blobs and the column starts outside the bone. In both cases there is no measurement
+    of the head to bound anything with, and guessing one truncates a sound slab — so no
+    bound is applied and the caller's walk runs as it always did. The fall has to clear the
+    same tolerance as the merge jump because a single voxel of rasterisation noise is
+    otherwise enough to pass for an equator: on one NMDID hip a 713 -> 708 voxel flicker
+    did exactly that, and the resulting cap cut a sound slab by a quarter.
+
+    The bound is deliberately generous — a full diameter measured from the head's own
+    equator, plus ``C.FEMORAL_HEAD_SLAB_MARGIN_SLICES`` — so that it is inert wherever the
+    walk already terminates sensibly and only truncates the runaway case.
+    :param mask: A binary 3D mask of the femur, index-ordered ``(x, y, z)`` with z
+        increasing inferiorly (LPI).
+    :param column: The ``(x, y)`` index of the column dropped through the head.
+    :param layer_high: Index of the topmost femoral-head slice; the descent starts here.
+    :param spacing: Voxel spacing ``(sx, sy, sz)``. Any consistent length unit works —
+        millimetres for the CT path, in-plane voxels (so ``(1, 1, x_ratio)``) for the
+        MRI path — as long as all three components share it.
+    :return: The deepest slice index the column walk may stop at, clipped to the volume;
+        the last slice of the volume (i.e. no effective bound) when the head's equator was
+        never observed.
+    """
+    sx, sy, sz = spacing
+    previous_radius = None
+    max_radius = 0.0
+    max_drop = 0.0  # how far the radius has fallen below its running peak
+    shrinking = False
+    layer = layer_high
+
+    while layer < mask.shape[2]:
+        labelled, _ = label(mask[:, :, layer])
+        component = labelled[column[0], column[1]]
+        if component == 0:
+            break  # the column has left the bone; nothing below can belong to the head
+        radius = float(np.sqrt(np.count_nonzero(labelled == component) * sx * sy / np.pi))
+        if previous_radius is not None:
+            if radius < previous_radius:
+                shrinking = True  # past the head's equator
+            elif shrinking and radius - previous_radius > C.FEMORAL_HEAD_RADIUS_JUMP:
+                break  # neck / trochanter merged in: this slice is no longer head
+        max_radius = max(max_radius, radius)
+        max_drop = max(max_drop, max_radius - radius)
+        previous_radius = radius
+        layer += 1
+
+    if max_drop <= C.FEMORAL_HEAD_RADIUS_JUMP:
+        return mask.shape[2] - 1  # equator never seen: max_radius is not a head radius
+
+    slab_layers = int(round(2.0 * max_radius / sz)) + C.FEMORAL_HEAD_SLAB_MARGIN_SLICES
+    return min(layer_high + slab_layers, mask.shape[2] - 1)
+
+
 def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, return_layers: bool = False, x_ratio: float = 1., isotropic: bool = False) -> Tuple[float, np.ndarray] | Tuple[float, np.ndarray, int, int]:
     """
     Get the center of the femoral head from a segmentation mask.
+
+    The head is delimited by dropping a column through the centroid of its topmost slice
+    and walking it inferiorly until it leaves the bone; that walk is capped at one head
+    diameter by :func:`_femoral_head_slab_bound` so a column that stays inside bone past
+    the head cannot drag neck and shaft into the sphere fit.
     :param segmentation_mask: A segmentation mask of the proximal femur where the femur is 1 and everything else 0.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
@@ -60,8 +176,11 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
 
     com_high = center_of_mass(segmentation_mask[:, :, layer_high])
     com_high = (int(com_high[0]), int(com_high[1]))
+    # the walk works in index space, so the length unit is the in-plane voxel and the
+    # slice spacing in that unit is exactly the slice-thickness correction x_ratio
+    layer_max = _femoral_head_slab_bound(segmentation_mask, com_high, layer_high, (1., 1., x_ratio))
     layer_low = layer_high + 1
-    while segmentation_mask[com_high[0], com_high[1], layer_low] != 0:
+    while layer_low < layer_max and segmentation_mask[com_high[0], com_high[1], layer_low] != 0:
         layer_low += 1
 
     point_cloud = get_contour_points(segmentation_mask)
@@ -100,6 +219,13 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
 def get_femoral_head_center_ct(femur_image: Segmentation, segmentation_label: int = 1, side: str = 'left') -> Tuple[float, np.ndarray]:
     """
     Get the center of the femoral head from a whole-leg CT segmentation mask.
+
+    As in the MRI variant, the column that delimits the head starts at the centroid of the
+    largest island of the topmost femur slice (:func:`_largest_component_centroid`, so a
+    slice holding both head and trochanter does not put the column in the gap between
+    them), and the slab handed to the sphere fit is capped at one head diameter by
+    :func:`_femoral_head_slab_bound` (so on a straight femur the walk cannot run head into
+    neck into shaft and return a radius far above anatomical).
     :param femur_image: A segmentation mask of the whole leg.
     :param segmentation_label: The label of the femur in the segmentation mask.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
@@ -109,12 +235,14 @@ def get_femoral_head_center_ct(femur_image: Segmentation, segmentation_label: in
     contour_points = get_contour_points(mask)
 
     layer_high = np.amin(contour_points[:, 2])
-    com_high = center_of_mass(mask[:, :, layer_high])
-    com_high = (int(com_high[0]), com_high[1])
-    com_high = (int(com_high[0]), int(com_high[1]))
+    # restrict to the largest island first: a top slice holding both the head and the
+    # greater trochanter would otherwise put the column in the gap between them
+    com_high = _largest_component_centroid(mask[:, :, layer_high])
+    layer_max = _femoral_head_slab_bound(mask, com_high, layer_high,
+                                         tuple(abs(float(s)) for s in femur_image.spacing[:3]))
     layer_low = layer_high + 1
 
-    while mask[com_high[0], com_high[1], layer_low] != 0:
+    while layer_low < layer_max and mask[com_high[0], com_high[1], layer_low] != 0:
         layer_low += 1
 
     contour_points = contour_points[contour_points[:, 2] >= layer_high]

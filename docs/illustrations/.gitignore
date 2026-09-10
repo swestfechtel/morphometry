@@ -3,6 +3,8 @@
 # are the committed didactic set).
 subchondral_distance_3d_*.png
 subchondral_distance_3d_*.html
+subchondral_axis_comparison_*.png
+subchondral_axis_comparison_*.html
 
 # Batch case gallery (render_case_gallery.py) — inspection artifacts, regenerable
 cases/

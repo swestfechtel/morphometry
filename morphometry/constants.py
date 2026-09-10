@@ -47,6 +47,22 @@ FEMORAL_NECK_SPHERE_OUTER_FACTOR = 1.2
 FEMORAL_NECK_OUTLIER_STD = 2.0
 #: |z-score| above which a femoral-head slice is treated as too small and skipped.
 FEMORAL_HEAD_LAYER_ZSCORE = 2.0
+#: Growth of the column's slice-equivalent radius, *after* it has started shrinking,
+#: that is read as the neck / greater trochanter merging into the femoral head's
+#: connected component — i.e. the signal that the slab has left the head. Expressed in
+#: the in-plane length unit the caller works in (millimetres for CT, in-plane voxels for
+#: the MRI path, which are sub-millimetre on the hip protocols). Chosen small enough to
+#: catch the merge on the slice it happens and large enough to ride out the
+#: one-voxel-per-slice rasterisation jitter of a smoothly narrowing head.
+FEMORAL_HEAD_RADIUS_JUMP = 0.5
+#: Slices added to the measured head diameter when capping the femoral-head slab. One is
+#: geometry: a head of radius r spans 2r/sz slice *intervals*, and the column walk stops
+#: on the first slice past the head, one further down. The second is tolerance, for a head
+#: marginally taller than wide or a starting slice a touch above the superior pole —
+#: without it the cap trimmed a single slice off three of 92 otherwise untouched NMDID
+#: hips (radius moved 0.26-0.42 mm). Two slices leaves the cap inert on every hip measured
+#: while still cutting the runaway case from 63 slices to 18.
+FEMORAL_HEAD_SLAB_MARGIN_SLICES = 2
 
 # --- Subchondral / cartilage -------------------------------------------------
 #: Outer radius factor of the sphere shell used to find femoral-head surface points
