@@ -7,6 +7,8 @@ femoral offset). Landmark/reference helpers they rely on stay in
 
 "left"/"right" refers to the image side, not the patient side.
 """
+import logging
+
 import numpy as np
 import pyvista as pv
 import pandas as pd
@@ -36,6 +38,18 @@ from skimage.measure import find_contours
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from matplotlib import pyplot as plt
+
+# Module logger for non-fatal measurement diagnostics (see the ray-attrition warning in
+# ``_subchondral_distance_ray_tracing``). ``logging`` rather than ``warnings.warn`` on
+# purpose: the stdlib warning filter dedups by (message, category, module, lineno), so in
+# a cohort sweep only the first affected subject would be reported and every later one
+# silently swallowed. A logger emits every occurrence and is visible with no handler
+# configured, via Python's lastResort handler, which prints WARNING and above to stderr.
+# Note this does NOT reach ``api/logs/``: ``api/logging_config.py`` attaches its handlers
+# to the ``'api'`` logger, and this module is a sibling under root rather than a child of
+# it. An application that wants these records in its own log should attach a handler to
+# ``logging.getLogger('morphometry')``; a library must not configure logging itself.
+logger = logging.getLogger(__name__)
 
 
 def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1., debug: bool = False, plot: plt.Axes | pv.Plotter | bool = False) -> Tuple[float, float] | Tuple[float, float, plt.Figure]:
@@ -747,6 +761,7 @@ def _subchondral_distance_ray_tracing(image: Image, fhc_index: np.ndarray, fhc_r
                                       ray_length_factor: float = 3.0,
                                       acetabulum_radius_factor: float | None = 1.5,
                                       cone_axis: str = 'superior',
+                                      min_ray_fraction: float = 0.7,
                                       plot: bool | plt.Axes | pv.Plotter = False) -> Tuple[float, float, float, float, np.ndarray, np.ndarray, np.ndarray]:
     """
     Measure the subchondral femoral-head-to-acetabulum distance by ray tracing.
@@ -806,13 +821,22 @@ def _subchondral_distance_ray_tracing(image: Image, fhc_index: np.ndarray, fhc_r
         aims it along world ``+z``, a fixed, standardised axis that samples the
         weight-bearing acetabular dome in every subject; because it does not aim at the
         label, the number of surviving rays can fall well below ``n_rays`` (3.5-18.5% lost
-        on healthy NaKo samples, all at the lateral acetabular rim), so check
-        ``len(distances)`` if the coverage matters. ``'acetabulum'`` is the legacy behaviour:
+        on healthy NaKo samples, all at the lateral acetabular rim), and heavy loss is
+        reported through ``min_ray_fraction``. ``'acetabulum'`` is the legacy behaviour:
         it aims the cone from the FHC at the peri-acetabular centroid, an axis ~46 degrees
         medial of superior on sample NaKo data, which sends roughly half the rays into the
         non-articular acetabular fossa and so inflates the mean by ~1.5 mm and triples its
         spread. Use it only to reproduce results captured before the default changed. Any
         other value raises ``ValueError``.
+    :param min_ray_fraction: Warning threshold on the surviving-ray fraction, applied only
+        in ``'superior'`` mode. If fewer than this fraction of ``n_rays`` reach the
+        acetabulum, a WARNING is logged on this module's logger naming the count and the
+        likely cause. It never raises on the measurement and never changes the result; pass
+        0 to disable the warning. Must be in [0, 1]; anything else raises ``ValueError``.
+        The 0.7 default sits below the worst healthy sample measured (3.5-18.5% loss over
+        8 NaKo cases x both hips, i.e. survival down to 81.5%) with headroom, so it should
+        stay quiet on a normal cohort while still firing on a genuinely deficient
+        acetabulum.
     :param plot: A matplotlib Axes / PyVista Plotter to overlay the rays on, or False.
     :return: A tuple ``(mean, std, min, max, distances, exit_points, hit_points)`` where
         the distances are in mm and the exit/hit point arrays are (K, 3) physical coordinates
@@ -820,6 +844,8 @@ def _subchondral_distance_ray_tracing(image: Image, fhc_index: np.ndarray, fhc_r
     """
     if cone_axis not in ('acetabulum', 'superior'):
         raise ValueError(f"Unknown cone_axis {cone_axis!r}; valid options are 'acetabulum' and 'superior'")
+    if not 0.0 <= min_ray_fraction <= 1.0:
+        raise ValueError(f'min_ray_fraction must be in [0, 1] (0 disables the warning), got {min_ray_fraction!r}')
 
     fhc_index = np.asarray(fhc_index, dtype=float)
     shape = np.array(femur_mask.shape)
@@ -909,6 +935,19 @@ def _subchondral_distance_ray_tracing(image: Image, fhc_index: np.ndarray, fhc_r
     if len(distances) == 0:
         raise ValueError('No valid rays connected the femoral head to the acetabulum')
 
+    # Ray attrition is only meaningful for a fixed axis. The 'acetabulum' axis is built by
+    # aiming at the label's own centroid, so its rays cannot miss the label the way a fixed
+    # axis can; a low survival count there would say nothing about acetabular coverage and
+    # the threshold is not calibrated for it. Keep the check scoped to 'superior'.
+    if cone_axis == 'superior' and len(distances) < min_ray_fraction * n_rays:
+        logger.warning(
+            'Subchondral distance (superior axis): only %d of %d rays (%.1f%%) reached the '
+            'acetabulum, below the %.0f%% expected; the missing rays typically clear the '
+            'lateral acetabular rim (a truncated field of view can also cost rays), which '
+            'worsens with a deficient/dysplastic lateral roof and biases the reported mean '
+            'low because the discarded rays are the long ones.',
+            len(distances), n_rays, 100.0 * len(distances) / n_rays, 100.0 * min_ray_fraction)
+
     distances = np.array(distances)
     exit_points = np.array(exit_points)
     hit_points = np.array(hit_points)
@@ -935,6 +974,7 @@ def calculate_subchondral_distance_ray_tracing(image: Segmentation, side: str = 
                                                n_rays: int = 200, cone_angle: float = 45.0,
                                                acetabulum_radius_factor: float | None = 1.5,
                                                cone_axis: str = 'superior',
+                                               min_ray_fraction: float = 0.7,
                                                plot: bool | plt.Axes | pv.Plotter = False) -> Tuple[float, float, float, float, np.ndarray, np.ndarray, np.ndarray]:
     """
     Measure the subchondral femoral-head-to-acetabulum distance on an MRI hip segmentation.
@@ -972,13 +1012,21 @@ def calculate_subchondral_distance_ray_tracing(image: Segmentation, side: str = 
         reproduce results captured before the default changed. Because ``'superior'`` does not
         aim at the label by construction, the number of surviving rays can fall well below
         ``n_rays`` — 3.5-18.5% were lost across 8 healthy NaKo samples x both hips, every one of
-        them clearing the lateral acetabular rim. Nothing announces that loss, so check
-        ``len(distances)``, the exact count of surviving rays, if the coverage matters. This
-        matters most in acetabular dysplasia: a deficient lateral roof drops proportionally more
-        rays, and the reported mean, taken over the surviving medial rays, is then biased low in
-        exactly the cohort of interest. Note that the superior axis itself does not depend on the
-        LPI precondition, but the rest of this function does — ``side`` and the upstream axis-0
-        left/right split still assume it. Any other value raises ``ValueError``.
+        them clearing the lateral acetabular rim. Heavy loss is logged as a WARNING (see
+        ``min_ray_fraction``), so it need not be noticed unaided, though ``len(distances)``
+        remains the exact count. This matters most in acetabular dysplasia: a deficient
+        lateral roof drops proportionally more rays, and the reported mean, taken over the
+        surviving medial rays, is then biased low in exactly the cohort of interest. Note that
+        the superior axis itself does not depend on the LPI precondition, but the rest of this
+        function does — ``side`` and the upstream axis-0 left/right split still assume it. Any
+        other value raises ``ValueError``.
+    :param min_ray_fraction: Warning threshold on the surviving-ray fraction, applied only in
+        ``'superior'`` mode: if fewer than this fraction of ``n_rays`` reach the acetabulum, a
+        WARNING is logged naming the count and the likely cause. It never raises on the
+        measurement and never changes the result; pass 0 to disable the warning. Must be in
+        [0, 1]; anything else raises ``ValueError``. The 0.7 default sits below the worst
+        healthy sample measured (survival down to 81.5%) with headroom, so it should stay quiet
+        on a normal cohort while still firing on a genuinely deficient acetabulum.
     :param plot: A matplotlib Axes / PyVista Plotter to overlay the rays on, or False.
     :return: A tuple ``(mean, std, min, max, distances, exit_points, hit_points)`` in mm.
     """
@@ -991,12 +1039,14 @@ def calculate_subchondral_distance_ray_tracing(image: Segmentation, side: str = 
     return _subchondral_distance_ray_tracing(image, fhc_idx, r_idx, femur_mask, acetabulum_mask,
                                              n_rays=n_rays, cone_angle=cone_angle,
                                              acetabulum_radius_factor=acetabulum_radius_factor,
-                                             cone_axis=cone_axis, plot=plot)
+                                             cone_axis=cone_axis,
+                                             min_ray_fraction=min_ray_fraction, plot=plot)
 
 def calculate_subchondral_distance_ray_tracing_ct(femur_image: Segmentation, side: str = 'left', femur_label: int = 1,
                                                   acetabulum_label: int = 7, n_rays: int = 200, cone_angle: float = 45.0,
                                                   acetabulum_radius_factor: float | None = 1.5,
                                                   cone_axis: str = 'superior',
+                                                  min_ray_fraction: float = 0.7,
                                                   plot: bool | plt.Axes | pv.Plotter = False) -> Tuple[float, float, float, float, np.ndarray, np.ndarray, np.ndarray]:
     """
     Measure the subchondral femoral-head-to-acetabulum distance on a whole-leg CT segmentation.
@@ -1033,13 +1083,21 @@ def calculate_subchondral_distance_ray_tracing_ct(femur_image: Segmentation, sid
         captured before the default changed. Because ``'superior'`` does not
         aim at the label by construction, the number of surviving rays can fall well below
         ``n_rays`` — 3.5-18.5% were lost across 8 healthy NaKo samples x both hips, every one of
-        them clearing the lateral acetabular rim. Nothing announces that loss, so check
-        ``len(distances)``, the exact count of surviving rays, if the coverage matters. This
-        matters most in acetabular dysplasia: a deficient lateral roof drops proportionally more
-        rays, and the reported mean, taken over the surviving medial rays, is then biased low in
-        exactly the cohort of interest. Note that the superior axis itself does not depend on the
-        LPI precondition, but the rest of this function does — ``side`` and the upstream axis-0
-        left/right split still assume it. Any other value raises ``ValueError``.
+        them clearing the lateral acetabular rim. Heavy loss is logged as a WARNING (see
+        ``min_ray_fraction``), so it need not be noticed unaided, though ``len(distances)``
+        remains the exact count. This matters most in acetabular dysplasia: a deficient
+        lateral roof drops proportionally more rays, and the reported mean, taken over the
+        surviving medial rays, is then biased low in exactly the cohort of interest. Note that
+        the superior axis itself does not depend on the LPI precondition, but the rest of this
+        function does — ``side`` and the upstream axis-0 left/right split still assume it. Any
+        other value raises ``ValueError``.
+    :param min_ray_fraction: Warning threshold on the surviving-ray fraction, applied only in
+        ``'superior'`` mode: if fewer than this fraction of ``n_rays`` reach the acetabulum, a
+        WARNING is logged naming the count and the likely cause. It never raises on the
+        measurement and never changes the result; pass 0 to disable the warning. Must be in
+        [0, 1]; anything else raises ``ValueError``. The 0.7 default sits below the worst
+        healthy sample measured (survival down to 81.5%) with headroom, so it should stay quiet
+        on a normal cohort while still firing on a genuinely deficient acetabulum.
     :param plot: A matplotlib Axes / PyVista Plotter to overlay the rays on, or False.
     :return: A tuple ``(mean, std, min, max, distances, exit_points, hit_points)`` in mm.
     """
@@ -1056,7 +1114,8 @@ def calculate_subchondral_distance_ray_tracing_ct(femur_image: Segmentation, sid
     return _subchondral_distance_ray_tracing(femur_image, fhc_idx, r_idx, femur_mask, acetabulum_mask,
                                              n_rays=n_rays, cone_angle=cone_angle,
                                              acetabulum_radius_factor=acetabulum_radius_factor,
-                                             cone_axis=cone_axis, plot=plot)
+                                             cone_axis=cone_axis,
+                                             min_ray_fraction=min_ray_fraction, plot=plot)
 
 def calculate_cartilage_thickness_knn(segmentation_mask: np.ndarray, cartilage_label: int = 2) -> Tuple[float, float, float, float]:
     """

@@ -1,18 +1,25 @@
-"""Unit tests for the subchondral ray-tracing cone axis.
+"""Unit tests for the subchondral ray-tracing cone axis and its ray-attrition warning.
 
 ``_superior_direction`` is a world-space constant rather than an affine-derived
-vector, so the point of these tests is the *invariance*: the same superior direction
-must come back no matter how the volume happens to be oriented on disk. An
-affine-derived implementation would return an anterior vector for the as-stored
-(L, I, P) case and an inverted one for LPS/RAS, so those cases pin the constant
-against a regression back to index-axis stepping. All of it runs on synthetic masks
-so it stays in the fast (no sample data) loop.
+vector, so the point of the first half of these tests is the *invariance*: the same
+superior direction must come back no matter how the volume happens to be oriented on
+disk. An affine-derived implementation would return an anterior vector for the
+as-stored (L, I, P) case and an inverted one for LPS/RAS, so those cases pin the
+constant against a regression back to index-axis stepping.
+
+The second half covers ``min_ray_fraction``: with a fixed superior axis the cone is
+no longer aimed at the label, so rays can clear the lateral acetabular rim and be
+discarded. That is logged, never raised, and only in ``'superior'`` mode. All of it
+runs on synthetic masks so it stays in the fast (no sample data) loop.
 """
+import logging
+
 import nibabel as nib
 import numpy as np
 import pytest
 
 from morphometry.image_io import Segmentation
+from morphometry.measurements import hip as hip_measurements
 from morphometry.measurements.hip import _subchondral_distance_ray_tracing, _superior_direction
 
 # axcodes -> the affine that maps index space to nibabel's RAS+ world space. Each
@@ -155,3 +162,119 @@ def test_unknown_cone_axis_raises():
     with pytest.raises(ValueError, match="cone_axis"):
         _subchondral_distance_ray_tracing(image, np.zeros(3), 1.0, empty, empty,
                                           cone_axis="sideways")
+
+
+# --- ray attrition warning ------------------------------------------------------------
+#
+# Synthetic geometry, so these run in the fast loop without the NaKo sample: a spherical
+# "femoral head" with a spherical-shell "acetabulum" cap above it, whose angular half-width
+# is the knob. Rays outside the cap clear its rim and are dropped exactly as they do at a
+# real lateral acetabular rim, so the surviving fraction is (1-cos cap)/(1-cos cone_angle).
+
+FHC_INDEX = np.array([30.0, 30.0, 40.0])
+
+
+def _synthetic_hip(cap_angle: float, shape: tuple[int, int, int] = (60, 60, 60)):
+    """A spherical femoral head under an acetabular shell cap of the given half-angle.
+
+    :param cap_angle: Angular half-width of the acetabular cap about the superior
+        direction, in degrees. Below the measurement's cone half-angle, rays near the
+        cone's edge miss the cap and are discarded.
+    :param shape: Volume shape in voxels.
+    :return: A tuple ``(image, femur_mask, acetabulum_mask)`` on an LPI 1 mm grid.
+    """
+    offsets = np.indices(shape).reshape(3, -1).T.astype(float) - FHC_INDEX
+    radii = np.linalg.norm(offsets, axis=1)
+    # superior is world +z; on an LPI grid that is the direction of decreasing index axis 2
+    cosine = np.where(radii > 0, -offsets[:, 2] / np.maximum(radii, 1e-9), 0.0)
+    angles = np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))
+
+    femur = (radii <= FEMUR_RADIUS).reshape(shape).astype(np.uint8)
+    acetabulum = ((radii >= 12.0) & (radii <= 15.0) & (angles <= cap_angle)).reshape(shape)
+    image = Segmentation.from_nibabel(
+        nib.Nifti1Image(np.zeros(shape, dtype=np.uint8), _affine("LPI")))
+    return image, femur, acetabulum.astype(np.uint8)
+
+
+def _trace(cap_angle: float, **kwargs):
+    """Run the ray tracer over the synthetic hip, with the peri-acetabular crop widened."""
+    image, femur, acetabulum = _synthetic_hip(cap_angle)
+    kwargs.setdefault("cone_axis", "superior")
+    return _subchondral_distance_ray_tracing(image, FHC_INDEX, FEMUR_RADIUS, femur,
+                                             acetabulum, n_rays=200,
+                                             acetabulum_radius_factor=2.0, **kwargs)
+
+
+def _warnings(caplog) -> list[str]:
+    """The WARNING-level messages captured from the hip measurement logger."""
+    return [r.getMessage() for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == "morphometry.measurements.hip"]
+
+
+def test_heavy_ray_loss_warns_once_and_still_returns(caplog):
+    """A narrow cap loses half the rays: exactly one WARNING, and a normal result."""
+    with caplog.at_level(logging.WARNING, logger="morphometry.measurements.hip"):
+        result = _trace(30.0)
+
+    messages = _warnings(caplog)
+    assert len(messages) == 1
+    assert "99 of 200 rays" in messages[0]        # (1-cos30)/(1-cos45) ~ 46%
+    assert "70%" in messages[0]                    # the configured threshold
+    assert "lateral acetabular rim" in messages[0]  # the actionable cause
+
+    mean, std, mn, mx, distances, exits, hits = result  # never raises, arity unchanged
+    assert len(distances) == 99
+    assert mean == pytest.approx(np.mean(distances))
+    assert exits.shape == hits.shape == (99, 3)
+
+
+def test_moderate_ray_loss_does_not_warn(caplog):
+    """Rays are lost but stay above the threshold, so nothing is logged."""
+    with caplog.at_level(logging.WARNING, logger="morphometry.measurements.hip"):
+        _, _, _, _, distances, _, _ = _trace(40.0)
+
+    assert 0.7 * 200 < len(distances) < 200  # genuinely lossy, just not enough to warn
+    assert _warnings(caplog) == []
+
+
+def test_min_ray_fraction_zero_disables_the_warning(caplog):
+    """The same heavy loss is silent once the threshold is switched off."""
+    with caplog.at_level(logging.WARNING, logger="morphometry.measurements.hip"):
+        _trace(30.0, min_ray_fraction=0.0)
+
+    assert _warnings(caplog) == []
+
+
+def test_acetabulum_axis_never_warns(caplog):
+    """The legacy axis stays silent: attrition is only meaningful for a fixed axis.
+
+    The 'acetabulum' axis is built by aiming at the label's own centroid, so a low
+    surviving-ray count there says nothing about acetabular coverage and the 0.7
+    threshold is not calibrated for it. The guard must stay scoped to 'superior'.
+    """
+    with caplog.at_level(logging.WARNING, logger="morphometry.measurements.hip"):
+        _, _, _, _, distances, _, _ = _trace(30.0, cone_axis="acetabulum")
+
+    assert len(distances) < 0.7 * 200  # the loss that would have warned in superior mode
+    assert _warnings(caplog) == []
+
+
+def test_public_wrapper_forwards_min_ray_fraction(monkeypatch):
+    """The threshold reaches the tracer from the public API, not just the private one."""
+    captured = {}
+
+    def _spy(*args, **kwargs):
+        captured.update(kwargs)
+        return (0.0, 0.0, 0.0, 0.0, np.zeros(1), np.zeros((1, 3)), np.zeros((1, 3)))
+
+    monkeypatch.setattr(hip_measurements, "_subchondral_distance_ray_tracing", _spy)
+    monkeypatch.setattr(hip_measurements, "get_femoral_head_center",
+                        lambda *a, **k: (FEMUR_RADIUS, FHC_INDEX))
+    image, femur, _ = _synthetic_hip(30.0)
+    image = Segmentation.from_nibabel(nib.Nifti1Image(femur, _affine("LPI")))
+
+    hip_measurements.calculate_subchondral_distance_ray_tracing(
+        image, cone_axis="superior", min_ray_fraction=0.42)
+
+    assert captured["cone_axis"] == "superior"
+    assert captured["min_ray_fraction"] == 0.42
