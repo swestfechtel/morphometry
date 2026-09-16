@@ -139,3 +139,46 @@ cd docs && pdflatex reader_measurement_reference_table.tex
 ```
 
 Re-run `build_pdf.py` after changing any SVG, then recompile the LaTeX.
+
+### 2D slices: `plot_subchondral_2d.py`
+
+The same measurement as three orthogonal slices of the PD MRI — sagittal, coronal and
+axial — all through the femoral head centre the measurement uses, with the femur,
+peri-acetabular crop and full pelvis label outlined, the head centre and radius, the
+cone axis, and the rays. The dashed cone edges are the actual angular extent of the
+rays in that slice, not the nominal ±45° half-angle, so they come out narrower and can
+be asymmetric: on case 100186 the coronal slice shows 23° laterally against 40°
+medially, because lateral rays clear the acetabular rim and are dropped.
+
+```bash
+MORPH_NAKO_SAMPLE_DIR=/path/to/segmentations \
+    python docs/illustrations/plot_subchondral_2d.py --case 0 --side left
+```
+
+Rays are 3D, so each panel draws rays whose head exit *and* acetabulum hit lie within
+`--slab` voxels (default 1.5) of the slice in bold, and a faint projection of all
+surviving rays. With the default superior axis the axial slice through the head centre
+is perpendicular to the cone axis, so it contains **no** rays: that panel shows only
+the projected footprint of the sampled roof and marks the axis as pointing out of the
+page. The MRI is read from `MORPH_NAKO_IMAGE_DIR` (default
+`/home/simon/Data/NaKo_sample/nifti`, `<stem>_0000.nii.gz`); without it the panels fall
+back to the segmentation. Writes `subchondral_distance_2d_{side}.png` (gitignored).
+
+### Golden-angle ray layout: `plot_golden_angle.py`
+
+Explains how the subchondral cone spreads its 200 rays, using the measurement's own
+`_sample_cone_directions`. Needs no sample data.
+
+```bash
+python docs/illustrations/plot_golden_angle.py
+```
+
+Writes `golden_angle.png` and `golden_angle.gif`, both viewed straight down the cone axis.
+The rays are placed by two independent rules: each is **turned** a further 137.5° (the
+golden angle) around the axis, and **tilted** a little further from it, evenly in area
+from ~2° out to the 45° rim. The four panels show the turn alone, the real layout, the
+same tilts with a round 90° turn (which stacks into four spokes and leaves wedges
+unsampled), and a slice through the axis — only 18 of 200 rays fall in it, reaching
+40.2° / 44.9°, which is why cone edges drawn from in-slice rays in
+`plot_subchondral_2d.py` look narrower than 45° even with no rays lost. The GIF places
+the rays one at a time.
