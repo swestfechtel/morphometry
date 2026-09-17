@@ -628,11 +628,12 @@ def sphere_fit(point_cloud: np.ndarray) -> Tuple[float, np.ndarray]:
     #   Assemble the f matrix
     f = np.zeros((len(sp_x), 1))
     f[:, 0] = (sp_x * sp_x) + (sp_y * sp_y) + (sp_z * sp_z)
-    C, residuals, rank, singval = np.linalg.lstsq(A, f)
+    # rcond=-1 pins the pre-NumPy-2 default, so the venv and the NumPy 2 docker image agree
+    C, residuals, rank, singval = np.linalg.lstsq(A, f, rcond=-1)
 
     #   solve for the radius
     t = (C[0] * C[0]) + (C[1] * C[1]) + (C[2] * C[2]) + C[3]
-    radius = math.sqrt(t)
+    radius = math.sqrt(t.item())
 
     return radius, np.array([C[0], C[1], C[2]]).T[0]  # not sure why this is necessary, returns a column vector otherwise
 

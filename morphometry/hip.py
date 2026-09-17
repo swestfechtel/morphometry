@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pyvista as pv
 import pandas as pd
@@ -21,6 +23,9 @@ from skimage.measure import find_contours
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from matplotlib import pyplot as plt
+
+# Module logger for non-fatal fit diagnostics; see the note in ``morphometry/measurements/hip.py``.
+logger = logging.getLogger(__name__)
 
 
 def _largest_component_centroid(slice_mask: np.ndarray) -> Tuple[int, int]:
@@ -134,7 +139,68 @@ def _femoral_head_slab_bound(mask: np.ndarray, column: Tuple[int, int], layer_hi
     return min(layer_high + slab_layers, mask.shape[2] - 1)
 
 
-def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, return_layers: bool = False, x_ratio: float = 1., isotropic: bool = False) -> Tuple[float, np.ndarray] | Tuple[float, np.ndarray, int, int]:
+def _fit_femoral_head_consensus(points: np.ndarray, com_high: Tuple[int, int], side: str,
+                                voxel_size: np.ndarray,
+                                tolerance_mm: float = C.FEMORAL_HEAD_CONSENSUS_TOLERANCE_MM,
+                                max_iterations: int = C.FEMORAL_HEAD_CONSENSUS_MAX_ITERATIONS,
+                                seed_depth_mm: float = C.FEMORAL_HEAD_SEED_DEPTH_MM) -> Tuple[float, np.ndarray]:
+    """Fit the femoral-head sphere to slab contour points by a seeded consensus fit, in millimetres.
+
+    The slab handed over by :func:`get_femoral_head_center` starts at the top of the femur and
+    usually reaches one to three slices past the head's equator, so it holds femoral-neck and
+    greater-trochanter surface besides the head. That surface lies lateral of the head and well
+    inside or outside the head sphere, so it is excluded by its distance from the sphere, not by a
+    medial-lateral cutoff (a cutoff cannot tell lateral head surface at the equator from neck
+    surface below it):
+
+    1. Seed: fit a sphere to the points on the medial side of the top-slice centroid (``x >=``
+       centroid on a left image half, ``x <=`` on a right one) that lie within ``seed_depth_mm`` of the
+       top slab slice, trimmed anteroposteriorly to the centroid's symmetric range. The neck and
+       trochanter are lateral, and the depth limit keeps the seed above the neck basin and the calcar,
+       which the slab can reach when the column walk stays in bone; so the seed is head surface.
+    2. Consensus: refit on every slab point whose distance from the current sphere's surface is at
+       most ``tolerance_mm``; repeat until the inlier set no longer changes (or ``max_iterations``).
+
+    Every step is defined relative to the head's own points and centroid, so the fit follows a
+    translation of the image exactly.
+    :param points: Slab contour points as ``(x, y, z)`` voxel indices, shape ``(n, 3)``.
+    :param com_high: The ``(x, y)`` voxel index of the top-slice centroid.
+    :param side: Side of the image (not patient!), either 'left' or 'right'.
+    :param voxel_size: Voxel size in mm along ``(x, y, z)``.
+    :param tolerance_mm: Inlier band around the sphere surface, in mm.
+    :param max_iterations: Maximum number of consensus refits.
+    :param seed_depth_mm: How far below the top slab slice, in mm, seed points may lie.
+    :return: The radius in mm and the centre in mm (index times ``voxel_size``).
+    :raises RuntimeError: If no seed points exist or the consensus collapses.
+    """
+    points = np.asarray(points, dtype=float)
+    points_mm = points * voxel_size
+
+    medial = points[:, 0] >= com_high[0] if side == 'left' else points[:, 0] <= com_high[0]
+    near_top = (points[:, 2] - np.min(points[:, 2])) * voxel_size[2] <= seed_depth_mm
+    seed = points[medial & near_top]
+    if len(seed) == 0:
+        raise RuntimeError('Femoral head consensus fit: no slab points medial of the top-slice centroid to seed from.')
+    # anteroposterior trim of the seed, symmetric about the centroid (as the former trim did)
+    seed = seed[seed[:, 1] <= 2 * com_high[1] - np.min(seed[:, 1])]
+    radius, center = sphere_fit(seed * voxel_size)
+
+    inliers = None
+    for _ in range(max_iterations):
+        candidate = np.abs(np.linalg.norm(points_mm - center, axis=1) - radius) <= tolerance_mm
+        if inliers is not None and np.array_equal(candidate, inliers):
+            break
+        if candidate.sum() < 4:
+            raise RuntimeError('Femoral head consensus fit collapsed: fewer than 4 points near the sphere.')
+        inliers = candidate
+        radius, center = sphere_fit(points_mm[inliers])
+    else:
+        logger.warning('Femoral head consensus fit did not converge within %d refits; using the last fit '
+                       '(radius %.1f mm).', max_iterations, radius)
+    return radius, center
+
+
+def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, return_layers: bool = False, x_ratio: float = 1., isotropic: bool = False, spacing: Optional[Tuple[float, float, float]] = None) -> Tuple[float, np.ndarray] | Tuple[float, np.ndarray, int, int]:
     """
     Get the center of the femoral head from a segmentation mask.
 
@@ -142,13 +208,22 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     and walking it inferiorly until it leaves the bone; that walk is capped at one head
     diameter by :func:`_femoral_head_slab_bound` so a column that stays inside bone past
     the head cannot drag neck and shaft into the sphere fit.
+
+    For non-isotropic images the sphere is fitted with :func:`_fit_femoral_head_consensus`, in
+    millimetres from ``spacing``. Without ``spacing`` the geometry is derived from ``x_ratio``
+    alone, i.e. voxels of ``(1, 1, x_ratio)`` with the in-plane voxel taken as 1 mm (exact for 1 mm
+    in-plane voxels; otherwise only the inlier band is scaled). This replaced a lateral cutoff at
+    ``0.9`` times an absolute voxel index, which made the centre depend on where the hip sat in the
+    image and let femoral-neck surface into the fit. The isotropic path is unchanged.
     :param segmentation_mask: A segmentation mask of the proximal femur where the femur is 1 and everything else 0.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
     :param return_layers: Whether to return layer_high and layer_low.
     :param x_ratio: Correction factor for slice thickness.
     :param isotropic: Whether the image has isotropic voxels.
-    :return: The radius and location of the femoral head center.
+    :param spacing: Voxel spacing in mm along the three index axes (e.g. ``Image.spacing``). Used by
+        the non-isotropic sphere fit; ``None`` derives the geometry from ``x_ratio``.
+    :return: The radius (in in-plane voxels) and the location (voxel index) of the femoral head center.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
     segmentation_mask = np.where(segmentation_mask == segmentation_label, 1, 0)
@@ -186,19 +261,25 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     point_cloud = get_contour_points(segmentation_mask)
     point_cloud = point_cloud[point_cloud[:, 2] >= layer_high]
     point_cloud = point_cloud[point_cloud[:, 2] <= layer_low]  # exclude everything that is not between layer_high and layer_low
+
+    if not isotropic:
+        voxel_size = np.abs(np.asarray(spacing, dtype=float)) if spacing is not None else np.array([1., 1., x_ratio])
+        r_mm, center_mm = _fit_femoral_head_consensus(point_cloud, com_high, side, voxel_size)
+        # back to the units the callers expect: in-plane voxels for the radius, voxel index for the centre
+        r, center = r_mm / voxel_size[0], center_mm / voxel_size
+        return (r, center) if not return_layers else (r, center, layer_high, layer_low)
+
     point_cloud = point_cloud.astype(np.float32) * np.array([1, 1, x_ratio])  # adjust for slice thickness
 
     # need to exclude lateral parts of the mask: compute distance between com and max medial point of femoral head,
     # then exclude everything that is farther away than this distance in the lateral direction
-    middle_slice = (layer_high * x_ratio + (layer_low * x_ratio - layer_high * x_ratio) // 2)
-    superior_half = point_cloud[point_cloud[:, 2] <= middle_slice]
     if side == 'left':
-        max_s = np.max(point_cloud[:, 0]) if isotropic else np.max(superior_half[:, 0]) * 0.9  # only look at the superior half of the femoral head
+        max_s = np.max(point_cloud[:, 0])
         radius = max_s - com_high[0]
         min_s = com_high[0] - radius  # the most lateral point of the femoral head
         point_cloud = point_cloud[point_cloud[:, 0] >= min_s]
     else:
-        min_s = np.min(point_cloud[:, 0]) if isotropic else np.min(superior_half[:, 0]) * 0.9 # only look at the superior half of the femoral head
+        min_s = np.min(point_cloud[:, 0])
         radius = com_high[0] - min_s
         max_s = com_high[0] + radius  # the most lateral point of the femoral head
         point_cloud = point_cloud[point_cloud[:, 0] <= max_s]

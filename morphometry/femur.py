@@ -429,7 +429,7 @@ def get_proximal_reference_line(hip_image: Image, side: str = 'left',
     r_fh, center, layer_high, layer_low = get_femoral_head_center(hip_image.array, side=side,
                                                                   segmentation_label=segmentation_label,
                                                                   return_layers=True, x_ratio=x_ratio,
-                                                                  isotropic=isotropic)
+                                                                  isotropic=isotropic, spacing=hip_image.spacing)
     center = center.astype(np.int16)
 
     if method == 'lee':

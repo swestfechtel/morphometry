@@ -67,7 +67,7 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
     hip_mask = hip_image.array
-    r, femoral_head_center = get_femoral_head_center(hip_mask, side=side, segmentation_label=segmentation_label, x_ratio=x_ratio, isotropic=isotropic)
+    r, femoral_head_center = get_femoral_head_center(hip_mask, side=side, segmentation_label=segmentation_label, x_ratio=x_ratio, isotropic=isotropic, spacing=hip_image.spacing)
     femoral_neck_points, femoral_neck_center = get_femoral_neck_center(hip_mask, (r, femoral_head_center), side=side, segmentation_label=segmentation_label, x_ratio=x_ratio)
 
     knee_mask = knee_image.array if knee_image else None
@@ -419,9 +419,9 @@ def calculate_acetabular_anteversion(hip_image: Segmentation, femur_label: int =
         right_fhc = right_image.transform_physical_point_to_index(right_fhc)
     else:
         r_left_mm, left_fhc = get_femoral_head_center(left_image.array, side='left', segmentation_label=femur_label,
-                                              isotropic=isotropic)
+                                              isotropic=isotropic, spacing=left_image.spacing)
         r_right_mm, right_fhc = get_femoral_head_center(right_image.array, side='right', segmentation_label=femur_label,
-                                               isotropic=isotropic)
+                                               isotropic=isotropic, spacing=right_image.spacing)
         # the MRI radius is in (isotropic) voxels; the surface extraction works in millimetres
         in_plane = _voxel_spacing(hip_image)[0]
         r_left_mm, r_right_mm = r_left_mm * in_plane, r_right_mm * in_plane
@@ -609,9 +609,9 @@ def calculate_center_edge_angle(hip_image: Segmentation, femur_label: int = 1, a
         r_r = np.linalg.norm(right_fhc - tmp)
     else:
         r_l, left_fhc = get_femoral_head_center(left_image.array, side='left', segmentation_label=femur_label,
-                                              isotropic=isotropic)
+                                              isotropic=isotropic, spacing=left_image.spacing)
         r_r, right_fhc = get_femoral_head_center(right_image.array, side='right', segmentation_label=femur_label,
-                                               isotropic=isotropic)
+                                               isotropic=isotropic, spacing=right_image.spacing)
         # the MRI radius is in (isotropic) voxels; the surface extraction works in millimetres
         in_plane = _voxel_spacing(hip_image)[0]
         r_l_mm, r_r_mm = r_l * in_plane, r_r * in_plane
@@ -1099,7 +1099,8 @@ def calculate_subchondral_distance_ray_tracing(image: Segmentation, side: str = 
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
-    r_idx, fhc_idx = get_femoral_head_center(image.array, side=side, segmentation_label=femur_label, isotropic=isotropic)
+    r_idx, fhc_idx = get_femoral_head_center(image.array, side=side, segmentation_label=femur_label, isotropic=isotropic,
+                                             spacing=image.spacing)
     femur_mask = np.where(image.array == femur_label, 1, 0)
     acetabulum_mask = np.where(image.array == acetabulum_label, 1, 0)
 
@@ -1223,7 +1224,8 @@ def calculate_femoral_offset(hip_image: Image, knee_image: Optional[Image] = Non
     :param plot: pv.Plotter: A PyVista plotter to visualize the femoral offset (optional).
     :return: The femoral offset in mm.
     """
-    r, c = get_femoral_head_center(hip_image.array, side=side, segmentation_label=femur_label, isotropic=isotropic)
+    r, c = get_femoral_head_center(hip_image.array, side=side, segmentation_label=femur_label, isotropic=isotropic,
+                                   spacing=hip_image.spacing)
     start, end = get_femoral_shaft_axis(hip_image.array, knee_mask=(knee_image.array if knee_image is not None else None), femur_label=femur_label, isotropic=isotropic)
 
     _, projection_vector = get_vector_through_point_perpendicular_to_line(start, (end - start), c)
@@ -1262,7 +1264,8 @@ def calculate_femoral_offset_projected(hip_image: Segmentation, knee_image: Opti
         r, c = get_femoral_head_center_ct(hip_image, segmentation_label=femur_label, side=side)
         start, end = get_femoral_shaft_axis_ct(hip_image, segmentation_label=femur_label)
     else:
-        r, c = get_femoral_head_center(hip_image.array, side=side, segmentation_label=femur_label, isotropic=isotropic)
+        r, c = get_femoral_head_center(hip_image.array, side=side, segmentation_label=femur_label, isotropic=isotropic,
+                                   spacing=hip_image.spacing)
         start, end = get_femoral_shaft_axis(hip_image.array,
                                             knee_mask=(knee_image.array if knee_image is not None else None),
                                             femur_label=femur_label, isotropic=isotropic)

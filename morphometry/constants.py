@@ -63,6 +63,30 @@ FEMORAL_HEAD_RADIUS_JUMP = 0.5
 #: hips (radius moved 0.26-0.42 mm). Two slices leaves the cap inert on every hip measured
 #: while still cutting the runaway case from 63 slices to 18.
 FEMORAL_HEAD_SLAB_MARGIN_SLICES = 2
+#: Inlier band, in mm, of the seeded consensus sphere fit of the MRI femoral head
+#: (:func:`morphometry.hip.get_femoral_head_center`, non-isotropic path): a slab contour point
+#: joins the fit when its distance from the current sphere's surface is at most this. About two
+#: in-plane voxels on the hip protocols -- wide enough to take in the rasterised head surface of
+#: every slice through the head, narrow enough to leave out femoral-neck and trochanter surface,
+#: which lies well inside or outside the head sphere. Not knife-edge: against 2.5 mm, tolerances of
+#: 2.0 / 3.0 mm move the centre by a median 0.25 / 0.21 mm (90th percentile 0.44 / 0.42 mm, max
+#: 3.1 / 3.7 mm) over the 300 fits of the 100 Augsburg reader-study hips (left, reflected right and
+#: direct right halves). Checked against the head's own circle centres on its top slices, the
+#: in-plane error is lowest at 2.0-2.5 mm (90th percentile 0.62-0.71 mm) and grows from 3 mm, where
+#: a wider band starts to admit neck surface.
+FEMORAL_HEAD_CONSENSUS_TOLERANCE_MM = 2.5
+#: How far below the top slice of the femoral-head slab, in mm, the consensus fit may take its seed
+#: points from. About one head radius (adult femoral heads are ~18-26 mm): the top slab slice sits at
+#: the superior pole, so this keeps the seed on the head down to roughly its equator, where the
+#: medial surface is still pure head. Deeper slab slices can hold the neck basin or the calcar, which
+#: the slab reaches whenever the column walk stays in bone (it is bounded by the pipelines'
+#: ``x_ratio``, which admits more slices than the true slice aspect); a seed started there stays there
+#: at every tolerance. At 10 mm slices this leaves three or four seed slices.
+FEMORAL_HEAD_SEED_DEPTH_MM = 30.0
+#: Refit rounds after which the consensus head fit stops even if its inlier set still changes. The
+#: inlier set creeps to a fixed point; on the Augsburg hips that takes a median 15 and at most 48 rounds
+#: at the default tolerance. Hitting the cap logs a WARNING on the ``morphometry.hip`` logger.
+FEMORAL_HEAD_CONSENSUS_MAX_ITERATIONS = 100
 
 # --- Subchondral / cartilage -------------------------------------------------
 #: Outer radius factor of the sphere shell used to find femoral-head surface points
