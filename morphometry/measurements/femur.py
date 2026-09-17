@@ -9,15 +9,18 @@ through :func:`_femoral_torsion_angle`.
 Landmarks are exposed separately via :func:`get_femoral_torsion_landmarks` so the
 ``calculate_*`` functions always return just the angle (no flag-dependent arity).
 
-"left"/"right" refers to the image side, not the patient side.
+"left"/"right" refers to the image side, not the patient side. The landmark searches are written
+for a left image half; a right half is measured as the left-right reflection of a left one and its
+landmarks are mapped back (``x -> n - 1 - x``), so both sides are mirror-equivariant by construction
+(see :func:`_mri_torsion`).
 """
 from typing import Tuple
 
 import numpy as np
 from matplotlib import pyplot as plt
 
-from morphometry.image_io import Image, Segmentation
-from morphometry.femur import get_proximal_reference_line, get_proximal_reference_line_ct
+from morphometry.image_io import Image, Segmentation, reflect_image_left_right
+from morphometry.femur import _mirror_index_x, get_proximal_reference_line, get_proximal_reference_line_ct
 from morphometry.knee import get_knee_reference_line
 from morphometry.utils import calculate_angle_between_vectors
 from morphometry import geometry as G
@@ -33,6 +36,8 @@ def _order_knee_points(knee_start: np.ndarray, knee_end: np.ndarray) -> Tuple[np
 def _proximal_angle(hip_start: np.ndarray, hip_end: np.ndarray, side: str) -> float:
     """Acute angle between the proximal (neck) reference line and the medial-lateral axis."""
     proximal_line = hip_end - hip_start
+    # the 'right' axis is still used by calculate_anteversion (landmarks mapped back to the right
+    # half); femoral torsion itself only composes with 'left', in the reflected frame
     x = np.array([-1, 0, 0]) if side == 'left' else np.array([1, 0, 0])
     return G.fold_to_acute(calculate_angle_between_vectors(proximal_line, x))
 
@@ -59,11 +64,49 @@ def _femoral_torsion_angle(hip_start: np.ndarray, hip_end: np.ndarray,
 
     distal_line = knee_end - knee_start
     distal_angle = G.fold_to_acute(calculate_angle_between_vectors(distal_line, np.array([-1, 0, 0])))
+    # production composes only with side='left' (a right half is reflected and measured in that
+    # frame, see _mri_torsion / _ct_torsion); the 'right' branch is kept because it pins the
+    # mirror-consistent convention exercised by tests/unit/test_torsion_angle_equivariance.py
     distal_orientation = (knee_end[1] - knee_start[1]) if side == 'left' else (knee_start[1] - knee_end[1])
 
     if np.sign(proximal_orientation) != np.sign(distal_orientation):
         return proximal_angle + distal_angle
     return proximal_angle - distal_angle
+
+
+def _mirror_landmarks(hip_start, hip_end, knee_start, knee_end, hip_width: int, knee_width: int):
+    """Map torsion landmarks between a left-right mirrored pair of images and re-order the knee points.
+
+    ``x -> width - 1 - x`` with the hip image's width for the ``hip_*`` points and the knee image's
+    width for the ``knee_*`` points; the condylar endpoints are then re-ordered with
+    :func:`_order_knee_points` in the target frame.
+    :return: ``(hip_start, hip_end, knee_start, knee_end)`` in the mirrored frame.
+    """
+    hip_start, hip_end = _mirror_index_x(hip_start, hip_width), _mirror_index_x(hip_end, hip_width)
+    knee_start, knee_end = _order_knee_points(_mirror_index_x(knee_start, knee_width),
+                                              _mirror_index_x(knee_end, knee_width))
+    return hip_start, hip_end, knee_start, knee_end
+
+
+def _mri_torsion(hip_image: Image, knee_mask: np.ndarray, side: str, method: str,
+                 segmentation_label: int, x_ratio: float, isotropic: bool):
+    """Femoral torsion (MRI) and its landmarks in the frame of the given image half.
+
+    A right image half is measured as the left-right reflection of a left half: the landmarks
+    are found by the left-side code on the reflected hip image and the reversed knee mask, the
+    angle is composed there with the left-side conventions, and only the landmarks are mapped
+    back (``x -> n - 1 - x``). The result is mirror-equivariant by construction, including the
+    knee condylar line (whose search is not itself mirror-symmetric) and ties in the condylar
+    ordering.
+    :return: ``(angle, (hip_start, hip_end, knee_start, knee_end))``.
+    """
+    if side == 'right':
+        points = _mri_torsion_reference_points(reflect_image_left_right(hip_image), knee_mask[::-1], 'left', method,
+                                               segmentation_label, x_ratio, isotropic)
+        angle = _femoral_torsion_angle(*points, 'left')
+        return angle, _mirror_landmarks(*points, hip_image.array.shape[0], knee_mask.shape[0])
+    points = _mri_torsion_reference_points(hip_image, knee_mask, side, method, segmentation_label, x_ratio, isotropic)
+    return _femoral_torsion_angle(*points, side), points
 
 
 def _mri_torsion_reference_points(hip_image: Image, knee_mask: np.ndarray, side: str, method: str,
@@ -98,9 +141,8 @@ def calculate_femoral_torsion(hip_image: Image, knee_mask: np.ndarray, side: str
     G.validate_side(side)
     assert method in ['lee', 'murphy', 'tomczak'], 'method must be "lee", "murphy" or "tomczak"'
 
-    hip_start, hip_end, knee_start, knee_end = _mri_torsion_reference_points(
+    angle, (hip_start, hip_end, knee_start, knee_end) = _mri_torsion(
         hip_image, knee_mask, side, method, segmentation_label, x_ratio, isotropic)
-    angle = _femoral_torsion_angle(hip_start, hip_end, knee_start, knee_end, side)
 
     if plot is not False:
         knee_bin = np.where(knee_mask == segmentation_label, 1, 0)
@@ -121,18 +163,60 @@ def calculate_femoral_torsion_ct(femur_image: Segmentation, knee_image: Segmenta
     """
     G.validate_side(side)
 
+    angle, (hip_start, hip_end, knee_start, knee_end) = _ct_torsion(femur_image, knee_image, side, segmentation_label)
+
+    if plot is not False:
+        knee_bin = np.where(knee_image.array == segmentation_label, 1, 0)
+        _plot_torsion(plot, femur_image.array, knee_bin, hip_start, hip_end, knee_start, knee_end, angle)
+    return angle
+
+
+def _ct_torsion(femur_image: Segmentation, knee_image: Segmentation, side: str, segmentation_label: int):
+    """Femoral torsion (whole-leg CT) and its landmarks in the frame of the given image half.
+
+    Right image halves are measured as the left-right reflection of a left half, exactly as in
+    :func:`_mri_torsion`; the reflection (not an index mirror) matters here because the CT femoral
+    head centre is located in physical space.
+    :return: ``(angle, (hip_start, hip_end, knee_start, knee_end))``.
+    """
+    if side == 'right':
+        points = _ct_torsion_reference_points(reflect_image_left_right(femur_image),
+                                              reflect_image_left_right(knee_image), 'left', segmentation_label)
+        angle = _femoral_torsion_angle(*points, 'left')
+        return angle, _mirror_landmarks(*points, femur_image.array.shape[0], knee_image.array.shape[0])
+    points = _ct_torsion_reference_points(femur_image, knee_image, side, segmentation_label)
+    return _femoral_torsion_angle(*points, side), points
+
+
+def _ct_torsion_reference_points(femur_image: Segmentation, knee_image: Segmentation, side: str,
+                                 segmentation_label: int):
+    """Resolve the CT proximal and distal reference points (axially aligned, ordered)."""
     hip_start, hip_end = get_proximal_reference_line_ct(femur_image, side=side, segmentation_label=segmentation_label)
     hip_start[2] = hip_end[2]  # align axial coordinate
 
     knee_bin = np.where(knee_image.array == segmentation_label, 1, 0)
     _, knee_start, knee_end = get_knee_reference_line(knee_bin, bone='femur', segmentation_label=segmentation_label)
     knee_start, knee_end = _order_knee_points(knee_start, knee_end)
+    return hip_start, hip_end, knee_start, knee_end
 
-    angle = _femoral_torsion_angle(hip_start, hip_end, knee_start, knee_end, side)
 
-    if plot is not False:
-        _plot_torsion(plot, femur_image.array, knee_bin, hip_start, hip_end, knee_start, knee_end, angle)
-    return angle
+def get_femoral_torsion_landmarks_ct(femur_image: Segmentation, knee_image: Segmentation, side: str = 'left',
+                                     segmentation_label: int = 1) -> dict:
+    """
+    Return the femoral-torsion reference landmarks (whole-leg CT) as a dict.
+
+    The CT counterpart of :func:`get_femoral_torsion_landmarks`: the points are voxel indices
+    (``hip_*`` in ``femur_image``, ``knee_*`` in ``knee_image``), axially aligned and ordered
+    exactly as used by :func:`calculate_femoral_torsion_ct`.
+    :param femur_image: A Segmentation of the femur (whole-leg) mask.
+    :param knee_image: A Segmentation of the distal-femur (knee) mask.
+    :param side: Side of the image (not patient!), either 'left' or 'right'.
+    :param segmentation_label: The label of the femur in the segmentation mask.
+    :return: ``{'hip_start', 'hip_end', 'knee_start', 'knee_end'}`` as numpy arrays.
+    """
+    G.validate_side(side)
+    _, (hip_start, hip_end, knee_start, knee_end) = _ct_torsion(femur_image, knee_image, side, segmentation_label)
+    return {'hip_start': hip_start, 'hip_end': hip_end, 'knee_start': knee_start, 'knee_end': knee_end}
 
 
 def get_femoral_torsion_landmarks(hip_image: Image, knee_mask: np.ndarray, side: str = 'left', method: str = 'lee',
@@ -146,7 +230,7 @@ def get_femoral_torsion_landmarks(hip_image: Image, knee_mask: np.ndarray, side:
     :return: ``{'hip_start', 'hip_end', 'knee_start', 'knee_end'}`` as numpy arrays.
     """
     G.validate_side(side)
-    hip_start, hip_end, knee_start, knee_end = _mri_torsion_reference_points(
+    _, (hip_start, hip_end, knee_start, knee_end) = _mri_torsion(
         hip_image, knee_mask, side, method, segmentation_label, x_ratio, isotropic)
     return {'hip_start': hip_start, 'hip_end': hip_end, 'knee_start': knee_start, 'knee_end': knee_end}
 

@@ -12,6 +12,7 @@ from morphometry.measurements.femur import (
     calculate_femoral_torsion,
     calculate_femoral_torsion_ct,
     get_femoral_torsion_landmarks,
+    get_femoral_torsion_landmarks_ct,
 )
 from morphometry.measurements.knee import (
     calculate_knee_rotation_angle,
@@ -59,6 +60,7 @@ __all__ = [
     "calculate_femoral_torsion",
     "calculate_femoral_torsion_ct",
     "get_femoral_torsion_landmarks",
+    "get_femoral_torsion_landmarks_ct",
     "calculate_knee_rotation_angle",
     "calculate_joint_line_convergence_angle",
     "calculate_tibial_torsion",

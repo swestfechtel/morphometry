@@ -375,6 +375,83 @@ def split_image_left_right(source):
     return crop_image(source, 0, 0, half), crop_image(source, 0, half, source.shape[0])
 
 
+def mirror_image_left_right(source):
+    """
+    Mirror an Image / Segmentation along its first (image left-right) index axis, keeping geometry correct.
+
+    The voxel data is reversed along index axis 0 (``array[::-1]`` for nibabel, the
+    ``(x, y, z)`` index x axis for SimpleITK), and the geometry is mirrored with it so that
+    every voxel keeps its physical location: index ``i`` of the mirrored image maps to the
+    same physical point as the parent's index ``n - 1 - i`` (``n = shape[0]``). For nibabel
+    the affine's first column is negated and its translation moved to the parent's index
+    ``n - 1``; for SimpleITK the first column of the direction matrix is negated and the
+    origin moved likewise. Spacing is unchanged.
+
+    Wrapping ``array[::-1]`` in the *unmirrored* affine instead places every voxel at the
+    physical location of its mirror partner. That is harmless for purely index-space code
+    and for distances between two points of the same image, but wrong for anything that
+    uses the physical positions themselves.
+    :param source: The Image or Segmentation to mirror (nibabel or SimpleITK backed). It is not modified.
+    :return: The mirrored image, of the same class and backend as ``source``, carrying over
+    its ``metadata`` and ``axcodes``.
+    """
+    n = source.shape[0]
+    mirrored = type(source)(source.type, metadata=source.metadata, axcodes=source.axcodes)
+    if source.type == 'nibabel':
+        affine = source.affine.copy()
+        affine[:3, 3] = source.affine[:3, :3].dot(np.array([n - 1, 0, 0])) + source.affine[:3, 3]
+        affine[:3, 0] = -source.affine[:3, 0]
+        mirrored.image = nib.Nifti1Image(source.array[::-1], affine, source.header)
+        return mirrored
+
+    array = sitk.GetArrayFromImage(source.image)[..., ::-1]  # (z, y, x): index x is the last array axis
+    image = sitk.GetImageFromArray(np.ascontiguousarray(array))
+    image.SetSpacing(source.image.GetSpacing())
+    direction = np.array(source.image.GetDirection(), dtype=float).reshape(3, 3)
+    direction[:, 0] = -direction[:, 0]
+    image.SetDirection(tuple(direction.ravel()))
+    image.SetOrigin(source.image.TransformIndexToPhysicalPoint((n - 1, 0, 0)))
+    for key in source.image.GetMetaDataKeys():
+        image.SetMetaData(key, source.image.GetMetaData(key))
+    mirrored.image = image
+    return mirrored
+
+
+def reflect_image_left_right(source):
+    """
+    Reflect an Image / Segmentation's anatomy left-right: reverse the voxels along index axis 0 and keep the geometry.
+
+    Unlike :func:`mirror_image_left_right`, which only relabels indices (every voxel keeps its
+    physical location, so a left leg stays a left leg in physical space), this produces the
+    *mirror twin* of the imaged anatomy: the voxel at index ``i`` moves to index ``n - 1 - i``
+    while the index-to-physical mapping is unchanged, so the content is reflected across the
+    plane through the image's central index-0 slice. A left femur becomes a right femur in
+    both index and physical space. This is the operation under which a side-dependent
+    measurement must be equivariant, and the one that lets right-sided anatomy be measured
+    by left-sided code: code that interprets physical directions (e.g. which physical ``x`` is
+    lateral in the whole-leg CT landmarks) sees a consistent left-sided leg only after a
+    reflection, not after a mirror. Distances and angles between reflected points are
+    preserved.
+
+    For purely index-space code the two operations are interchangeable.
+    :param source: The Image or Segmentation to reflect (nibabel or SimpleITK backed). It is not modified.
+    :return: The reflected image, of the same class and backend as ``source``, with the same
+    geometry, carrying over its ``metadata`` and ``axcodes``.
+    """
+    reflected = type(source)(source.type, metadata=source.metadata, axcodes=source.axcodes)
+    if source.type == 'nibabel':
+        reflected.image = nib.Nifti1Image(source.array[::-1], source.affine, source.header)
+        return reflected
+
+    array = sitk.GetArrayFromImage(source.image)[..., ::-1]  # (z, y, x): index x is the last array axis
+    image = sitk.GetImageFromArray(np.ascontiguousarray(array))
+    image.CopyInformation(source.image)
+    for key in source.image.GetMetaDataKeys():
+        image.SetMetaData(key, source.image.GetMetaData(key))
+    reflected.image = image
+    return reflected
+
+
 def split_ct_image(segmentation: Segmentation, image: Image = None, femur_label: int = 1, hip_label: int = 7, patella_label: int = 5, fibula_label: int = 3) -> Tuple[
     Tuple[Image, Image, Image], Tuple[Segmentation, Segmentation, Segmentation]]:
     """

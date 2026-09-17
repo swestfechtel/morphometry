@@ -8,7 +8,7 @@ from skimage.measure import find_contours
 from morphometry.hip import get_femoral_head_center, get_femoral_head_center_ct
 from morphometry.utils import rotate_mask_dorsal_points, find_notch, transform_point, points_on_circle, \
     get_contour, circle_fit, draw_circle, draw_line, extract_connected_components_2d
-from morphometry.image_io import Image, Segmentation, split_ct_image
+from morphometry.image_io import Image, Segmentation, reflect_image_left_right, split_ct_image
 from typing import Tuple
 
 
@@ -376,6 +376,20 @@ def get_trochanter_major_center(hip_image: Image, femoral_head_centre: np.ndarra
     center = np.array([center[0], center[1], trochanter_major_layer]).astype(np.int16)
     return center, radius
 
+def _mirror_index_x(point: np.ndarray, width: int) -> np.ndarray:
+    """
+    Map a voxel index between an image and its left-right reflection: ``x -> width - 1 - x``.
+
+    Exact for integer and continuous indices alike, and its own inverse.
+    :param point: A length-3 index (integer or float); it is not modified.
+    :param width: The size of the image along the first index axis.
+    :return: A copy of ``point`` with the first coordinate mirrored (same dtype).
+    """
+    mirrored = np.array(point, copy=True)
+    mirrored[0] = width - 1 - mirrored[0]
+    return mirrored
+
+
 def get_proximal_reference_line(hip_image: Image, side: str = 'left',
                                 method: str = 'lee', segmentation_label: int = 1,
                                 x_ratio: float = 1., isotropic: bool = False) -> Tuple[
@@ -383,29 +397,40 @@ def get_proximal_reference_line(hip_image: Image, side: str = 'left',
                                                                                  Tuple[np.ndarray, np.ndarray, float]:
     """
     Get the proximal reference line of a segmentation mask for calculating the femoral torsion.
+
+    The landmark search is written for a left image half. A right image half holds the mirror
+    image of that anatomy, so it is measured by reflecting it left-right
+    (:func:`morphometry.image_io.reflect_image_left_right`), running the left-side search on the
+    reflection, and mapping the landmarks back with ``x -> n - 1 - x``. This makes the right side
+    mirror-equivariant by construction: a mirrored left half measured with ``side='right'`` yields
+    exactly the mirrored left-side landmarks. (Patching a separate right-side branch had left it
+    systematically different from the left side: a flip off by one voxel, a head-trim that was not
+    the mirror of the left one, and rounding by truncation, which is not mirror-consistent.)
     :param hip_image: An Image object of the hip segmentation mask.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param method: The method to use for determining the reference line.
     :param segmentation_label: The label of the segmentation mask.
     :param x_ratio: Correction factor for slice thickness.
     :param isotropic: Whether the image has isotropic voxels.
-    :return: The start and end points of the reference line, the radius of the femoral head centre and the radius of the trochanter major if method is tomczak.
+    :return: The start and end points of the reference line (voxel indices of ``hip_image``), the radius of the
+    femoral head centre and the radius of the trochanter major if method is tomczak.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
     assert method in ['lee', 'murphy',
                       'tomczak'], 'Currently, only "lee", "murphy" and "tomczak" are supported as methods.'
+
+    if side == 'right':
+        width = hip_image.array.shape[0]
+        start, end, *radii = get_proximal_reference_line(reflect_image_left_right(hip_image), side='left',
+                                                         method=method, segmentation_label=segmentation_label,
+                                                         x_ratio=x_ratio, isotropic=isotropic)
+        return (_mirror_index_x(start, width), _mirror_index_x(end, width), *radii)
 
     r_fh, center, layer_high, layer_low = get_femoral_head_center(hip_image.array, side=side,
                                                                   segmentation_label=segmentation_label,
                                                                   return_layers=True, x_ratio=x_ratio,
                                                                   isotropic=isotropic)
     center = center.astype(np.int16)
-
-    if side == 'right':  # flip sagittal axis to make this 'left-sided'
-        segmentation_mask = hip_image.array[::-1]
-        center[0] = center[0] + (segmentation_mask.shape[0] // 2 - center[0]) * 2  # flip sagittal coordinate of center
-        tmp = nib.Nifti1Image(segmentation_mask, hip_image.affine, hip_image.header)
-        hip_image = Image.from_nibabel(tmp)
 
     if method == 'lee':
         array = hip_image.array.copy()
@@ -416,24 +441,32 @@ def get_proximal_reference_line(hip_image: Image, side: str = 'left',
     elif method == 'tomczak':
         end, r_tm = get_trochanter_major_center(hip_image, center, segmentation_label)
 
-    layer_selected = end[2]
-
-    if side == 'right':
-        end[0] = end[0] + (hip_image.array.shape[0] // 2 - end[0]) * 2  # flip sagittal coordinate back
-        center[0] = center[0] - (center[0] - hip_image.array.shape[0] // 2) * 2
-
     start: np.ndarray = np.array([center[0], center[1], center[2]])
     return (start, end, r_fh, r_tm) if method == 'tomczak' else (start, end, r_fh)
 
 def get_proximal_reference_line_ct(femur_image: Segmentation, side: str = 'left', segmentation_label: int = 1) -> Tuple[np.ndarray, np.ndarray]:
     """
     Get the proximal reference line of a CT femur segmentation for calculating the femoral torsion.
+
+    As in :func:`get_proximal_reference_line`, a right image half is measured as the left-right
+    reflection of a left one (left-side search on
+    :func:`morphometry.image_io.reflect_image_left_right`, landmarks mapped back with
+    ``x -> n - 1 - x``), so the two sides are mirror-equivariant by construction. The reflection,
+    not an index-relabelling mirror, is what is needed here: the femoral head centre is found in
+    physical space, where the lateral direction is a physical direction.
     :param femur_image: A Segmentation object of the femur segmentation mask.
     :param side: The side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
-    :return: The start and end points of the reference line.
+    :return: The start and end points of the reference line (voxel indices of ``femur_image``; the start is a
+    continuous index).
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
+    if side == 'right':
+        width = femur_image.array.shape[0]
+        start, end = get_proximal_reference_line_ct(reflect_image_left_right(femur_image), side='left',
+                                                    segmentation_label=segmentation_label)
+        return _mirror_index_x(start, width), _mirror_index_x(end, width)
 
     r_fh, fhc = get_femoral_head_center_ct(femur_image, segmentation_label, side)
     tmp = fhc + np.array([r_fh, 0, 0])  # rationale: point on the surface of the femoral head in arbitrary direction
@@ -451,20 +484,8 @@ def get_proximal_reference_line_ct(femur_image: Segmentation, side: str = 'left'
     mask[:, :, :hip_start] = 0
     mask[:, :, hip_end:] = 0
 
-    if side == 'right':
-        mask = mask[::-1]
-        fhc[0] = fhc[0] + (mask.shape[0] // 2 - fhc[0]) * 2  # flip sagittal coordinate of center
-        tmp = nib.Nifti1Image(mask, femur_image.affine, femur_image.header)
-        hip_image = Segmentation.from_nibabel(tmp)
-    else:
-        tmp = nib.Nifti1Image(mask, femur_image.affine, femur_image.header)
-        hip_image = Segmentation.from_nibabel(tmp)
-
+    hip_image = Segmentation.from_nibabel(nib.Nifti1Image(mask, femur_image.affine, femur_image.header))
     end = get_femoral_neck_base(hip_image, fhc, segmentation_label, False)
-
-    if side == 'right':
-        end[0] = end[0] + (hip_image.array.shape[0] // 2 - end[0]) * 2  # flip sagittal coordinate back
-        fhc[0] = fhc[0] - (fhc[0] - hip_image.array.shape[0] // 2) * 2
 
     start: np.ndarray = np.array([fhc[0], fhc[1], fhc[2]])
     return start, end
