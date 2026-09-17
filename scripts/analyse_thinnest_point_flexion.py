@@ -10,10 +10,29 @@ Because the flexion scans are separate acquisitions (the knee is repositioned), 
 coordinates are not comparable across angles. The posterior position is therefore measured
 *intrinsically* on the femur: the arc-length fraction of the thinnest point along the
 femoral tibia-facing articular surface at its sagittal slice (0 = anterior/trochlea,
-1 = posterior condyle). Per ``(subject, load)`` the trend is summarised with a Spearman
-rank correlation and a linear slope (fraction per degree); with only four angles per
-series no single test can be significant, so the cohort-level check is a one-sided binomial
-sign test over how many series show a posterior trend.
+1 = posterior condyle).
+
+The thinnest point is located per **compartment**: ``both`` (the whole knee, one point, as
+:func:`find_thinnest_area` finds it), ``left`` and ``right`` (the patient-left and
+patient-right tibiofemoral compartments, searched separately on the ``*LT`` / ``*RT``
+tibial subregions, see :func:`split_tibia_thickness_by_compartment`). **'left'/'right' is the patient side (from the NIfTI header after LPI
+reorientation), not medial/lateral**: patient-left is medial in a right knee and lateral in
+a left knee, so a per-side sign test reads as a medial or lateral result only if every knee
+in the cohort is the same side. A compartment whose search fails on a scan is written as NaN
+for that scan (with a warning) without discarding the other compartments; a scan whose
+thickness pipeline fails is written as NaN for all three compartments, so ``detail.csv``
+has exactly three rows per parsed file.
+
+Per ``(subject, load, compartment)`` the trend is summarised with a Spearman rank
+correlation and a linear slope (fraction per degree); with at most four angles per series
+no single test can be significant, so the cohort-level check is a one-sided binomial sign
+test over how many series show a posterior trend, run separately for each compartment.
+These per-compartment sign tests are separate, uncorrected tests, and the two load series
+of one subject are not independent.
+
+Outputs (``-o <dir>``): ``detail.csv`` in long format, one row per (scan, compartment);
+``summary.csv``, one row per (subject, load, compartment). Visualisations show one scene
+per scan with an arrow per compartment (``left`` red, ``right`` blue, ``both`` black).
 
 Example
 -------
@@ -38,15 +57,22 @@ import numpy as np
 from scipy.stats import spearmanr
 
 from morphometry.image_io import Segmentation
-from morphometry.cartilage.knee import Tibia, Femur, find_thinnest_area, plot_thinnest_point
+from morphometry.cartilage.knee import (
+    Tibia, Femur, find_thinnest_area, split_tibia_thickness_by_compartment, plot_thinnest_point,
+)
 
 # ``K<subject>_<flexion>_<load>`` with a .nii / .nii.gz extension.
 _NAME_RE = re.compile(r'^(K\d+)_(\d+)_([A-Za-z]+)\.nii(?:\.gz)?$')
 
-DETAIL_COLUMNS = ['subject', 'load', 'angle', 'thin_x', 'thin_y',
-                  'ap_fraction', 'combined_thickness', 'center_thickness']
-SUMMARY_COLUMNS = ['subject', 'load', 'n_angles', 'spearman_rho', 'spearman_p',
-                   'slope_per_deg', 'supports_hypothesis']
+# 'both' = whole knee; 'left' / 'right' = patient-side tibiofemoral compartments.
+COMPARTMENTS = ('both', 'left', 'right')
+
+# Per-compartment measurement fields, in detail.csv column order.
+MEASUREMENT_FIELDS = ['thin_x', 'thin_y', 'ap_fraction', 'combined_thickness',
+                      'center_thickness']
+DETAIL_COLUMNS = ['subject', 'load', 'angle', 'compartment'] + MEASUREMENT_FIELDS
+SUMMARY_COLUMNS = ['subject', 'load', 'compartment', 'n_angles', 'spearman_rho',
+                   'spearman_p', 'slope_per_deg', 'supports_hypothesis']
 
 
 def parse_filename(name: str) -> Optional[tuple]:
@@ -109,10 +135,64 @@ def articular_ap_fraction(femur: Femur, point: tuple, spacing) -> float:
     return float(arc[idx] / total)
 
 
-def process_file(path: str, femur_label: int, tibia_label: int, method: str,
-                 want_objects: bool = False) -> dict:
+def locate_thinnest_points(tibia_thickness: dict, femur_thickness: dict, image,
+                           label: str = '') -> dict:
     """
-    Compute the thinnest point and its articular-surface A-P fraction for one scan.
+    Find the thinnest cartilage area for the whole knee and for each patient-side compartment.
+
+    Each compartment is searched independently with :func:`find_thinnest_area` (``both`` on
+    the full tibial map, ``left`` / ``right`` on the tibial subregions of that side against
+    the full femoral map), so a failure in one compartment (e.g. a plateau with no
+    femoral overlap) does not discard the others.
+
+    :param tibia_thickness: Per-subregion tibial thickness dict.
+    :param femur_thickness: Per-subregion femoral thickness dict.
+    :param image: The segmentation image (passed through to :func:`find_thinnest_area`).
+    :param label: Scan identifier prefixed to failure warnings (e.g. ``'K1 30 belastet'``).
+    :return: ``{compartment: result or None}`` for every entry of :data:`COMPARTMENTS`,
+        where ``result`` is a :func:`find_thinnest_area` dict and ``None`` marks a failed
+        compartment (a warning naming the scan and compartment is printed to stderr).
+    """
+    subsets = {'both': tibia_thickness, **split_tibia_thickness_by_compartment(tibia_thickness)}
+    found = {}
+    for compartment in COMPARTMENTS:
+        try:
+            found[compartment] = find_thinnest_area(subsets[compartment], femur_thickness, image)
+        # Deliberately broad, like the per-scan guard in main(): one bad compartment must
+        # not abort the scan's other compartments.
+        except Exception as exc:
+            print(f'[warning] {label} compartment {compartment}: {type(exc).__name__}: {exc}',
+                  file=sys.stderr)
+            found[compartment] = None
+    return found
+
+
+def compartment_row(femur: Optional[Femur], thinnest: Optional[dict], spacing) -> dict:
+    """
+    Turn one compartment's thinnest-area result into its measurement fields.
+
+    :param femur: The scan's ``Femur`` (for the articular A-P fraction); unused if
+        ``thinnest`` is ``None``.
+    :param thinnest: A :func:`find_thinnest_area` result, or ``None`` for a failed compartment.
+    :param spacing: The image voxel spacing ``(sx, sy, sz)``.
+    :return: ``{field: value}`` for every entry of :data:`MEASUREMENT_FIELDS`; all ``NaN``
+        when ``thinnest`` is ``None``.
+    """
+    if thinnest is None:
+        return {field: np.nan for field in MEASUREMENT_FIELDS}
+    return {
+        'thin_x': thinnest['point'][0],
+        'thin_y': thinnest['point'][1],
+        'ap_fraction': articular_ap_fraction(femur, thinnest['point'], spacing),
+        'combined_thickness': thinnest['combined_thickness'],
+        'center_thickness': thinnest['center_thickness'],
+    }
+
+
+def process_file(path: str, femur_label: int, tibia_label: int, method: str,
+                 want_objects: bool = False, label: str = '') -> dict:
+    """
+    Compute the per-compartment thinnest points and their A-P fractions for one scan.
 
     :param path: Path to the segmentation NIfTI.
     :param femur_label: Label of the femoral cartilage.
@@ -120,9 +200,14 @@ def process_file(path: str, femur_label: int, tibia_label: int, method: str,
     :param method: Thickness method, 'knn' or 'mesh'.
     :param want_objects: If ``True``, also return the ``Tibia``/``Femur`` objects and
         thickness maps (needed for visualisation).
-    :return: A dict with ``thin_x``, ``thin_y``, ``ap_fraction``, ``combined_thickness``,
-        ``center_thickness`` (and, if requested, ``tibia``/``femur``/``tibia_thickness``/
-        ``femur_thickness``/``thinnest``).
+    :param label: Scan identifier used in per-compartment failure warnings.
+    :return: A dict with ``compartments``: ``{compartment: row}`` for every entry of
+        :data:`COMPARTMENTS`, each row as returned by :func:`compartment_row` (all ``NaN``
+        for a failed compartment). If requested, also ``tibia``/``femur``/
+        ``tibia_thickness``/``femur_thickness`` and ``thinnest`` (``{compartment: result}``
+        for the compartments that succeeded).
+    :raises Exception: Failures of the thickness pipeline itself (which affect every
+        compartment) propagate to the caller.
     """
     seg = Segmentation('nibabel')
     seg.read_image(path)
@@ -132,19 +217,43 @@ def process_file(path: str, femur_label: int, tibia_label: int, method: str,
     tibia_thickness = tibia.calculate_thickness(method)
     femur = Femur(seg, femur_label)
     femur_thickness = femur.calculate_thickness(tibia, method)
-    thinnest = find_thinnest_area(tibia_thickness, femur_thickness, seg)
+    thinnest = locate_thinnest_points(tibia_thickness, femur_thickness, seg, label=label)
 
-    result = {
-        'thin_x': thinnest['point'][0],
-        'thin_y': thinnest['point'][1],
-        'ap_fraction': articular_ap_fraction(femur, thinnest['point'], seg.spacing),
-        'combined_thickness': thinnest['combined_thickness'],
-        'center_thickness': thinnest['center_thickness'],
-    }
+    result = {'compartments': {c: compartment_row(femur, thinnest[c], seg.spacing)
+                               for c in COMPARTMENTS}}
     if want_objects:
         result.update(tibia=tibia, femur=femur, tibia_thickness=tibia_thickness,
-                      femur_thickness=femur_thickness, thinnest=thinnest)
+                      femur_thickness=femur_thickness,
+                      thinnest={c: t for c, t in thinnest.items() if t is not None})
     return result
+
+
+def failed_case() -> dict:
+    """
+    A placeholder :func:`process_file` result for a scan whose thickness pipeline failed.
+
+    Written out so that a failed scan stays visible in ``detail.csv`` (one all-NaN row per
+    compartment) instead of silently vanishing; :func:`analyse_series` drops the NaNs.
+
+    :return: ``{'compartments': {compartment: all-NaN row}}`` for every compartment.
+    """
+    return {'compartments': {c: compartment_row(None, None, None) for c in COMPARTMENTS}}
+
+
+def detail_rows(subject: str, load: str, angle: int, case: dict) -> list:
+    """
+    Long-format ``detail.csv`` rows for one scan: one row per compartment.
+
+    :param subject: Subject id.
+    :param load: Load configuration.
+    :param angle: Flexion angle (degrees).
+    :param case: A :func:`process_file` result.
+    :return: A list of rows (in :data:`COMPARTMENTS` order), each matching
+        :data:`DETAIL_COLUMNS`.
+    """
+    return [[subject, load, angle, compartment]
+            + [case['compartments'][compartment][field] for field in MEASUREMENT_FIELDS]
+            for compartment in COMPARTMENTS]
 
 
 def analyse_series(angles: list, fractions: list) -> dict:
@@ -154,7 +263,8 @@ def analyse_series(angles: list, fractions: list) -> dict:
     :param angles: Flexion angles (degrees).
     :param fractions: Articular-surface A-P fractions at those angles (``NaN`` allowed).
     :return: A dict with ``n_angles`` (finite points used), ``spearman_rho``,
-        ``spearman_p``, ``slope_per_deg`` and ``supports_hypothesis`` (slope > 0). Fields
+        ``spearman_p``, ``slope_per_deg`` and ``supports_hypothesis`` (slope > 0; a slope of
+        exactly 0 counts as *not* supporting rather than being excluded as a tie). Fields
         are ``NaN``/``None`` when fewer than three finite points are available.
     """
     a = np.array(angles, dtype=float)
@@ -194,7 +304,10 @@ def visualise_case(case: dict, subject: str, angle: int, load: str,
                    screenshot_dir: Optional[str], html_dir: Optional[str],
                    interactive: bool):
     """
-    Render one case's thinnest point, saving/showing per the requested outputs.
+    Render one case's thinnest points, saving/showing per the requested outputs.
+
+    All successfully located compartments are drawn into one scene, one labelled arrow
+    each (``left`` red, ``right`` blue, ``both`` black).
 
     :param case: A ``process_file`` result computed with ``want_objects=True``.
     :param subject: Subject id (for the output filename).
@@ -228,35 +341,67 @@ def visualise_case(case: dict, subject: str, angle: int, load: str,
         plotter.show()
 
 
+def sign_test_by_compartment(summaries: list) -> dict:
+    """
+    Run the cohort-level posterior-trend sign test separately for each compartment.
+
+    :param summaries: List of ``(subject, load, compartment, analysis)`` tuples, where
+        ``analysis`` is an :func:`analyse_series` result. Series whose
+        ``supports_hypothesis`` is ``None`` (too few finite points) are not counted.
+    :return: ``{compartment: (supporting, tested, p)}`` for every compartment present in
+        ``summaries``: the number of series with a posterior trend, the number of testable
+        series, and the one-sided binomial sign-test p-value.
+    """
+    counts: dict = {}
+    for _subject, _load, compartment, stats in summaries:
+        supporting, tested = counts.get(compartment, (0, 0))
+        if stats['supports_hypothesis'] is not None:
+            supporting += int(stats['supports_hypothesis'])
+            tested += 1
+        counts[compartment] = (supporting, tested)
+    return {c: (s, t, _sign_test_greater(s, t)) for c, (s, t) in counts.items()}
+
+
 def print_summary(summaries: list):
     """
-    Print the per-series trend table and the cohort-level conclusion.
+    Print the per-series trend table and the cohort-level conclusion, per compartment.
 
-    :param summaries: List of ``(subject, load, analysis)`` tuples.
+    :param summaries: List of ``(subject, load, compartment, analysis)`` tuples.
     """
-    print(f"\n{'subject':<8} {'load':<11} {'n':>2} {'spearman_rho':>13} {'slope/deg':>11} {'posterior?':>11}")
-    print('-' * 60)
-    supporting = tested = 0
-    for subject, load, stats in summaries:
-        if stats['supports_hypothesis'] is None:
-            print(f'{subject:<8} {load:<11} {stats["n_angles"]:>2}   (insufficient finite points)')
+    tests = sign_test_by_compartment(summaries)
+    for compartment in COMPARTMENTS:
+        rows = [(s, l, st) for s, l, c, st in summaries if c == compartment]
+        if not rows:
             continue
-        tested += 1
-        supporting += int(stats['supports_hypothesis'])
-        mark = 'yes' if stats['supports_hypothesis'] else 'no'
-        print(f'{subject:<8} {load:<11} {stats["n_angles"]:>2} {stats["spearman_rho"]:>13.3f} '
-              f'{stats["slope_per_deg"]:>11.5f} {mark:>11}')
+        print(f'\n=== compartment: {compartment} ===')
+        print(f"{'subject':<8} {'load':<11} {'n':>2} {'spearman_rho':>13} {'slope/deg':>11} {'posterior?':>11}")
+        print('-' * 60)
+        for subject, load, stats in rows:
+            if stats['supports_hypothesis'] is None:
+                print(f'{subject:<8} {load:<11} {stats["n_angles"]:>2}   (insufficient finite points)')
+                continue
+            mark = 'yes' if stats['supports_hypothesis'] else 'no'
+            print(f'{subject:<8} {load:<11} {stats["n_angles"]:>2} {stats["spearman_rho"]:>13.3f} '
+                  f'{stats["slope_per_deg"]:>11.5f} {mark:>11}')
+        print('-' * 60)
 
-    print('-' * 60)
-    if tested == 0:
-        print('No series had enough data to test.')
-        return
-    p = _sign_test_greater(supporting, tested)
-    print(f'\n{supporting}/{tested} series show a posterior trend (thinnest point moves '
-          f'posteriorly with flexion).')
-    print(f'One-sided binomial sign test: p = {p:.4f}.')
-    print('Note: only 4 flexion angles per series, so per-series correlations cannot reach '
-          'significance;\n      the cohort sign test is the meaningful hypothesis check.')
+        supporting, tested, p = tests[compartment]
+        if tested == 0:
+            print('No series had enough data to test.')
+            continue
+        print(f'{supporting}/{tested} series show a posterior trend (thinnest point moves '
+              f'posteriorly with flexion).')
+        print(f'One-sided binomial sign test: p = {p:.4f}.')
+
+    print('\nNotes:')
+    print('- At most 4 flexion angles per series, so per-series correlations cannot reach '
+          'significance;\n  the per-compartment cohort sign tests are the meaningful '
+          'hypothesis checks.')
+    print("- 'left'/'right' is the PATIENT side (NIfTI header after LPI reorientation). "
+          'Patient-left is medial in a right knee\n  and lateral in a left knee, so a per-side '
+          'test reads as medial/lateral only if every knee in the cohort is the same side.')
+    print('- The per-compartment sign tests are separate, uncorrected tests (no multiplicity '
+          'correction), and the\n  loaded/unloaded series of one subject are not independent.')
 
 
 def main(args: argparse.Namespace):
@@ -280,42 +425,62 @@ def main(args: argparse.Namespace):
         sys.exit(1)
 
     want_objects = args.visualize or args.screenshot is not None or args.html is not None
-    detail_rows: list = []
+    all_detail_rows: list = []
     summaries: list = []
 
     for key in sorted(series, key=lambda k: (_natural_subject_key(k[0]), k[1])):
         subject, load = key
-        angles, fractions = [], []
+        # One (angles, fractions) series per compartment, over this (subject, load).
+        angles: list = []
+        fractions: dict = {c: [] for c in COMPARTMENTS}
         for angle in sorted(series[key]):
             path = series[key][angle]
+            label = f'{subject} {angle} {load}'
             try:
                 case = process_file(path, args.femur_label, args.tibia_label, args.method,
-                                    want_objects=want_objects)
+                                    want_objects=want_objects, label=label)
+                want_render = want_objects
             # Deliberately broad: a cohort run should survive any single pathological scan
             # (segmentation defects surface as varied exceptions from the thickness pipeline).
+            # The scan is kept as all-NaN rows so it stays visible in detail.csv.
             except Exception as exc:
-                print(f'[warning] {subject} {angle} {load}: {type(exc).__name__}: {exc}',
-                      file=sys.stderr)
-                continue
-            detail_rows.append([subject, load, angle, case['thin_x'], case['thin_y'],
-                                case['ap_fraction'], case['combined_thickness'],
-                                case['center_thickness']])
+                print(f'[warning] {label}: {type(exc).__name__}: {exc} '
+                      f'(all compartments written as NaN)', file=sys.stderr)
+                case, want_render = failed_case(), False
+            all_detail_rows.extend(detail_rows(subject, load, angle, case))
             angles.append(angle)
-            fractions.append(case['ap_fraction'])
-            if want_objects:
+            for compartment in COMPARTMENTS:
+                fractions[compartment].append(case['compartments'][compartment]['ap_fraction'])
+            if want_render:
                 visualise_case(case, subject, angle, load, args.screenshot, args.html,
                                args.visualize)
 
-        summaries.append((subject, load, analyse_series(angles, fractions)))
+        for compartment in COMPARTMENTS:
+            summaries.append((subject, load, compartment,
+                              analyse_series(angles, fractions[compartment])))
 
     print_summary(summaries)
 
     if args.output:
-        _write_csv(args.output, DETAIL_COLUMNS, detail_rows, 'detail.csv', 'per-case')
-        summary_rows = [[s, l, st['n_angles'], st['spearman_rho'], st['spearman_p'],
-                         st['slope_per_deg'], st['supports_hypothesis']]
-                        for s, l, st in summaries]
-        _write_csv(args.output, SUMMARY_COLUMNS, summary_rows, 'summary.csv', 'per-series')
+        _write_csv(args.output, DETAIL_COLUMNS, all_detail_rows, 'detail.csv',
+                   'per-(scan, compartment)')
+        _write_csv(args.output, SUMMARY_COLUMNS, summary_rows(summaries), 'summary.csv',
+                   'per-(series, compartment)')
+
+
+def summary_rows(summaries: list) -> list:
+    """
+    ``summary.csv`` rows: one per ``(subject, load, compartment)`` series.
+
+    Series with too few finite angles are kept (NaN statistics, ``supports_hypothesis``
+    ``None``) so that they remain visible in the output.
+
+    :param summaries: List of ``(subject, load, compartment, analysis)`` tuples.
+    :return: A list of rows matching :data:`SUMMARY_COLUMNS`.
+    """
+    return [[s, l, c, st['n_angles'], st['spearman_rho'], st['spearman_p'],
+             st['slope_per_deg'], st['supports_hypothesis']]
+            for s, l, c, st in summaries]
 
 
 def _write_csv(output_dir: str, columns: list, rows: list, filename: str, label: str):

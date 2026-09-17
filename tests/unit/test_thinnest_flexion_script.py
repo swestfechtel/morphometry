@@ -1,13 +1,16 @@
-"""Unit tests for the pure helpers in scripts/test_thinnest_point_flexion.py.
+"""Unit tests for the pure helpers in scripts/analyse_thinnest_point_flexion.py.
 
-Only the filename parsing and the articular-surface arc-length fraction are unit-tested
-here (they are pure and data-independent); the end-to-end cohort analysis is exercised
-against real segmentations when the script is run.
+Filename parsing, the articular-surface arc-length fraction and the per-compartment
+bookkeeping (thinnest-point search with per-compartment failure isolation, long-format
+detail rows, per-compartment sign test) are unit-tested here with synthetic inputs; the
+end-to-end cohort analysis is exercised against real segmentations when the script is run.
 """
 import importlib.util
+import math
 import pathlib
 
 import numpy as np
+import pytest
 
 _SCRIPT = pathlib.Path(__file__).resolve().parents[2] / 'scripts' / 'analyse_thinnest_point_flexion.py'
 _spec = importlib.util.spec_from_file_location('thinnest_flexion', _SCRIPT)
@@ -44,3 +47,115 @@ def test_articular_ap_fraction_degenerate_returns_nan():
     """Too few points in the column -> NaN (skipped downstream)."""
     femur = _Femur(np.array([[5, 3, 20]], float))
     assert np.isnan(mod.articular_ap_fraction(femur, (5.0, 3.0), (1.0, 1.0, 1.0)))
+
+
+# --- per-compartment bookkeeping ------------------------------------------------------
+
+def test_csv_columns_carry_compartment():
+    """Detail rows are long format (compartment after angle); summaries are per compartment."""
+    assert mod.COMPARTMENTS == ('both', 'left', 'right')
+    assert mod.DETAIL_COLUMNS[:4] == ['subject', 'load', 'angle', 'compartment']
+    assert mod.SUMMARY_COLUMNS[:3] == ['subject', 'load', 'compartment']
+
+
+def _fake_thinnest(x):
+    return {'point': (float(x), 1.0), 'center': (float(x), 1.0), 'center_thickness': 2.0,
+            'combined_thickness': 1.5, 'tibial_thickness': 0.7, 'femoral_thickness': 0.8,
+            'kernel_size': 3}
+
+
+def test_locate_thinnest_points_isolates_compartment_failures(monkeypatch, capsys):
+    """A failing compartment becomes ``None`` (with a warning); the others are still found."""
+    tibia = {'clt': {(30.0, 1.0): 1.0}, 'crt': {(5.0, 1.0): 1.0}}
+    femur = {'c': {(30.0, 1.0): 1.0, (5.0, 1.0): 1.0}}
+
+    femur_args = []
+
+    def fake_find(tibia_subset, femur_thickness, image, **kwargs):
+        femur_args.append(femur_thickness)
+        keys = set(tibia_subset)
+        if keys == {'clt'}:
+            raise ValueError('no overlap')
+        return _fake_thinnest(99 if keys == {'clt', 'crt'} else 5)
+
+    monkeypatch.setattr(mod, 'find_thinnest_area', fake_find)
+    found = mod.locate_thinnest_points(tibia, femur, image=None, label='K1 0 belastet')
+
+    assert set(found) == set(mod.COMPARTMENTS)
+    assert found['left'] is None
+    assert found['both']['point'] == (99.0, 1.0)
+    assert found['right']['point'] == (5.0, 1.0)
+    # Every compartment searches against the *full* femoral map.
+    assert len(femur_args) == 3 and all(arg is femur for arg in femur_args)
+    err = capsys.readouterr().err
+    assert 'K1 0 belastet' in err and 'left' in err and 'no overlap' in err
+
+
+def test_compartment_row_nan_for_missing_result():
+    """A missing (failed) compartment yields an all-NaN measurement row."""
+    row = mod.compartment_row(None, None, (1.0, 1.0, 1.0))
+    assert set(row) == {'thin_x', 'thin_y', 'ap_fraction', 'combined_thickness',
+                        'center_thickness'}
+    assert all(math.isnan(v) for v in row.values())
+
+
+def test_detail_rows_one_per_compartment():
+    """``detail_rows`` emits one row per compartment in COMPARTMENTS order."""
+    nan_row = mod.compartment_row(None, None, (1.0, 1.0, 1.0))
+    case = {'compartments': {
+        'both': {'thin_x': 1.0, 'thin_y': 2.0, 'ap_fraction': 0.3,
+                 'combined_thickness': 1.1, 'center_thickness': 1.2},
+        'left': nan_row,
+        'right': {'thin_x': 5.0, 'thin_y': 6.0, 'ap_fraction': 0.7,
+                  'combined_thickness': 2.1, 'center_thickness': 2.2},
+    }}
+    rows = mod.detail_rows('K1', 'belastet', 30, case)
+    assert [r[:4] for r in rows] == [['K1', 'belastet', 30, 'both'],
+                                     ['K1', 'belastet', 30, 'left'],
+                                     ['K1', 'belastet', 30, 'right']]
+    assert rows[0][4:] == [1.0, 2.0, 0.3, 1.1, 1.2]
+    assert all(math.isnan(v) for v in rows[1][4:])
+    assert len(rows[0]) == len(mod.DETAIL_COLUMNS)
+
+
+def test_failed_case_yields_three_nan_detail_rows():
+    """A scan whose thickness pipeline failed still yields one all-NaN row per compartment."""
+    rows = mod.detail_rows('K2', 'unbelastet', 60, mod.failed_case())
+    assert [r[3] for r in rows] == list(mod.COMPARTMENTS)
+    for row in rows:
+        assert row[:3] == ['K2', 'unbelastet', 60]
+        assert all(math.isnan(v) for v in row[4:])
+
+
+def test_summary_rows_keep_insufficient_series():
+    """Series with too few finite angles still appear (NaN stats) in summary.csv rows."""
+    insufficient = mod.analyse_series([0, 30, 60], [0.1, np.nan, 0.5])
+    rows = mod.summary_rows([('K1', 'belastet', 'left', insufficient)])
+    assert len(rows) == 1 and rows[0][:4] == ['K1', 'belastet', 'left', 2]
+    assert rows[0][-1] is None
+    assert len(rows[0]) == len(mod.SUMMARY_COLUMNS)
+
+
+def test_sign_test_by_compartment_counts_each_compartment_separately():
+    """Supporting/tested counts and p-values are per compartment; untestable series skipped."""
+    def stats(supports):
+        if supports is None:                           # mirrors analyse_series' < 3 points
+            return {'n_angles': 2, 'spearman_rho': np.nan, 'spearman_p': np.nan,
+                    'slope_per_deg': np.nan, 'supports_hypothesis': None}
+        return {'n_angles': 4, 'spearman_rho': 0.5, 'spearman_p': 0.5,
+                'slope_per_deg': 0.01 if supports else -0.01, 'supports_hypothesis': supports}
+
+    summaries = [
+        ('K1', 'belastet', 'both', stats(True)),
+        ('K1', 'belastet', 'left', stats(True)),
+        ('K1', 'belastet', 'right', stats(False)),
+        ('K2', 'belastet', 'both', stats(True)),
+        ('K2', 'belastet', 'left', stats(None)),       # insufficient points
+        ('K2', 'belastet', 'right', stats(False)),
+    ]
+    tests = mod.sign_test_by_compartment(summaries)
+    assert tests['both'][:2] == (2, 2)
+    assert tests['left'][:2] == (1, 1)
+    assert tests['right'][:2] == (0, 2)
+    assert tests['both'][2] == pytest.approx(0.25)
+    assert tests['right'][2] == pytest.approx(1.0)
