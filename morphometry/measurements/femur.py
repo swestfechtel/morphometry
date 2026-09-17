@@ -63,7 +63,8 @@ def _femoral_torsion_angle(hip_start: np.ndarray, hip_end: np.ndarray,
     image half holds a patient-right femur, so medial is +x and anterior is -y. With the neck
     directed neck point -> head centre (``n``, pointing medially) and ``c`` along the condylar line,
     the angle measured from medial towards anterior in the (x, anterior) plane is
-    ``atan2(c_x * (-n_y) - (-c_y) * n_x, c . n) = atan2(-(c_x n_y - c_y n_x), c . n)``. The
+    ``atan2(c_x * (-n_y) - (-c_y) * n_x, c . n) = atan2(-(c_x n_y - c_y n_x), c . n)``
+    (:func:`morphometry.geometry.signed_axial_angle`, shared with the tibial torsion). The
     condylar line has no direction, so the angle is folded into (-90, 90] (equivalently, ``c`` is
     taken pointing the same way as ``n``); the endpoint order of the condylar points is irrelevant.
     A right image half holds the mirror-image femur (medial = -x), so ``side='right'`` negates the
@@ -88,20 +89,9 @@ def _femoral_torsion_angle(hip_start: np.ndarray, hip_end: np.ndarray,
         ``tests/unit/test_torsion_angle_equivariance.py``.
     :return: The femoral torsion angle in degrees, in (-90, 90]; negative means retrotorsion.
     """
-    neck = np.asarray(hip_start, dtype=float)[:2] - np.asarray(hip_end, dtype=float)[:2]
-    condyles = np.asarray(knee_start, dtype=float)[:2] - np.asarray(knee_end, dtype=float)[:2]
-    if side == 'right':
-        neck[0], condyles[0] = -neck[0], -condyles[0]
-
-    cross = -(condyles[0] * neck[1] - condyles[1] * neck[0])  # positive: neck anterior of the condylar line
-    dot = condyles[0] * neck[0] + condyles[1] * neck[1]
-    angle = float(np.degrees(np.arctan2(cross, dot)))
-    # the condylar line is undirected: fold into (-90, 90]
-    if angle > 90:
-        angle -= 180
-    elif angle <= -90:
-        angle += 180
-    return angle
+    neck = np.asarray(hip_start, dtype=float) - np.asarray(hip_end, dtype=float)
+    condyles = np.asarray(knee_start, dtype=float) - np.asarray(knee_end, dtype=float)
+    return G.signed_axial_angle(condyles, neck, side)
 
 
 def _mirror_landmarks(hip_start, hip_end, knee_start, knee_end, hip_width: int, knee_width: int):

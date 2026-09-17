@@ -46,6 +46,42 @@ def fold_to_obtuse(angle: float) -> float:
     return 180.0 - angle if angle < 90.0 else angle
 
 
+def signed_axial_angle(reference_line: np.ndarray, direction: np.ndarray, side: str) -> float:
+    """Signed axial-plane angle from an undirected reference line to a direction, for torsion measurements.
+
+    The angle is measured in the (x, y) index plane from ``reference_line`` to ``direction`` and folded
+    into (-90, 90]. On a left image half (a patient-right limb) it is positive for a rotation from
+    medial (+x) towards anterior (-y), which is the same sense as from lateral (-x) towards posterior
+    (+y): ``atan2(-(r_x d_y - r_y d_x), r . d)``. ``side='right'`` (the mirror-image limb) negates the x
+    components first, so mirrored inputs give the same angle.
+
+    This is the sign of femoral antetorsion (neck turned medial -> anterior relative to the posterior
+    condylar line) and of external tibial torsion (distal tibia -> fibula line turned lateral ->
+    posterior relative to the posterior tibial condylar line). Only the directions of the two lines
+    enter, so the angle is invariant to an in-plane rotation of the whole limb. The reference line is
+    undirected (the fold makes its endpoint order irrelevant). The angle is computed from voxel
+    indices, so it assumes equal in-plane x/y spacing.
+    :param reference_line: A vector along the reference line (only x and y are used).
+    :param direction: The measured direction vector (only x and y are used).
+    :param side: Image side, 'left' or 'right'.
+    :return: The signed angle in degrees, in (-90, 90].
+    """
+    reference = np.asarray(reference_line, dtype=float)[:2].copy()
+    measured = np.asarray(direction, dtype=float)[:2].copy()
+    if side == 'right':
+        reference[0], measured[0] = -reference[0], -measured[0]
+
+    cross = -(reference[0] * measured[1] - reference[1] * measured[0])
+    dot = reference[0] * measured[0] + reference[1] * measured[1]
+    angle = float(np.degrees(np.arctan2(cross, dot)))
+    # the reference line is undirected: fold into (-90, 90]
+    if angle > 90:
+        angle -= 180
+    elif angle <= -90:
+        angle += 180
+    return angle
+
+
 def split_left_right(array: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """Split a both-sides mask into (left, right) halves along the sagittal axis.
 
