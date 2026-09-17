@@ -424,7 +424,10 @@ def get_femoral_shaft_axis_ct(femur_image: Segmentation, segmentation_label: int
     Get the femoral shaft axis from a whole-leg CT segmentation mask using PCA.
     :param femur_image: A segmentation mask of the whole leg.
     :param segmentation_label: The label of the femur in the segmentation mask.
-    :return: Start and end point of the vector representing the femoral shaft axis.
+    :return: Start and end point of the vector representing the femoral shaft axis, as float
+    physical coordinates in mm. (They are deliberately not cast to integers: truncating
+    millimetre coordinates toward zero shifts the axis by up to 1 mm depending on the sign
+    of each coordinate, i.e. on where the image sits in the scanner frame.)
     """
 
     cleaned_mask = np.where(femur_image.array == segmentation_label, 1, 0)
@@ -455,7 +458,7 @@ def get_femoral_shaft_axis_ct(femur_image: Segmentation, segmentation_label: int
     start_point = centroid + t_min * direction
     end_point = centroid + t_max * direction
 
-    return start_point.astype(np.int32), end_point.astype(np.int32)
+    return start_point, end_point
 
 def get_femoral_neck_transition(neck_points: np.ndarray, side: str = 'left') -> np.ndarray:
     """
