@@ -30,8 +30,9 @@ running the left-side code, so the tests guard against reintroducing a separate 
 branch and verify the landmark mapping (``x -> n - 1 - x``) and the angle composition in the
 reflected frame. They cannot catch defects in the shared left-side code itself, which a mirrored
 probe reproduces identically on both sides -- e.g. its dependence on where the hip sits along x
-(the head trim scales an absolute index) or the angle composition's dependence on the in-plane
-rotation of the image.
+(the head trim scales an absolute index). (The angle composition's former dependence on the
+in-plane rotation of the image was such a defect; its rotation invariance is now tested directly in
+``tests/unit/test_femoral_torsion_composition.py``.)
 """
 import warnings
 from functools import lru_cache

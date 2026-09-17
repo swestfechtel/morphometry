@@ -5,6 +5,7 @@ pythonpath = ["."]
 addopts = "-ra"
 markers = [
     "needs_augsburg: requires the Augsburg PA000001 sample segmentations",
+    "needs_augsburg_reader_study: requires the Augsburg reader-study segmentations (MORPH_AUGSBURG_READER_STUDY)",
     "needs_nako: requires the NaKo sample hip segmentations",
     "needs_ct: requires a whole-leg CT segmentation (MORPH_CT_SAMPLE)",
     "stochastic: result depends on a stochastic method; assert structure/ranges, not exact values",

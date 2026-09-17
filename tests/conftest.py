@@ -52,6 +52,26 @@ def augsburg_pa000001():
 
 
 @pytest.fixture
+def augsburg_reader_study():
+    """A loader for one Augsburg reader-study patient's hip and knee segmentations.
+
+    :return: A function ``load(patient) -> {'hip': Segmentation, 'knee': Segmentation}`` (LPI,
+        de-outliered) that skips the test when that patient's files are absent.
+    """
+    base = data_paths.AUGSBURG_READER_STUDY
+
+    def load(patient: str) -> dict:
+        files = {n: base / patient / f"{n}_seg_test.nii.gz" for n in ("hip", "knee")}
+        if not all(p.exists() for p in files.values()):
+            pytest.skip(f"Augsburg reader-study patient {patient} not found under {base}")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return {n: _load_seg(p) for n, p in files.items()}
+
+    return load
+
+
+@pytest.fixture
 def nako_sample():
     """The first NaKo hip segmentation (isotropic; femur=1, cartilage=2, acetabulum=3)."""
     d = data_paths.NAKO_SAMPLE_DIR

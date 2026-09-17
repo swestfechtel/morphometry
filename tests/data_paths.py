@@ -18,6 +18,17 @@ AUGSBURG_PA000001 = Path(
     )
 )
 
+# The Augsburg reader-study directory: one ``<patient>/{hip,knee,ankle}_seg_test.nii.gz`` folder
+# per patient (hip: femur=1; knee: femur=1, tibia=2). Used for femoral-torsion cases whose
+# femoral head lies level with or posterior to the neck point in the image, which PA000001
+# never exercises.
+AUGSBURG_READER_STUDY = Path(
+    os.environ.get(
+        "MORPH_AUGSBURG_READER_STUDY",
+        "/home/simon/Data/Augsburg_large/reader_study_augsburg",
+    )
+)
+
 # Directory of NaKo hip MRI segmentations (isotropic; femur=1, cartilage=2,
 # acetabulum=3 — both image sides present in one mask).
 NAKO_SAMPLE_DIR = Path(
