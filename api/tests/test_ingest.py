@@ -147,6 +147,34 @@ def test_split_volume_returns_three_regions_summing_to_input():
     assert sum(z) == 30                        # partitions the full stack
 
 
+def test_split_volume_regions_keep_their_physical_position():
+    """Each region's index 0 maps to the whole volume's first slice of that region.
+
+    The regions used to inherit the whole volume's affine, so the knee and ankle
+    sub-volumes claimed to start at the hip's first slice.
+    """
+    volume = _stacked_volume()
+    affine = np.diag([-0.8, -0.8, -3.0, 1.0])
+    affine[:3, 3] = [40.0, 25.0, -120.0]
+    volume = Image.from_nibabel(nib.Nifti1Image(volume.array, affine))
+
+    regions = _split_volume(volume)
+    starts = {"hip": 0}
+    starts["knee"] = regions["hip"].array.shape[2]
+    starts["ankle"] = starts["knee"] + regions["knee"].array.shape[2]
+    assert (starts["knee"], starts["ankle"]) == (10, 20)  # the footprint changepoints of _stacked_volume
+
+    for region, start in starts.items():
+        sub = regions[region]
+        depth = sub.array.shape[2]
+        np.testing.assert_array_equal(sub.array, volume.array[:, :, start:start + depth])
+        np.testing.assert_allclose(np.asarray(sub.affine)[:3, :3], affine[:3, :3])  # spacing/orientation kept
+        for index in ([0, 0, 0], [3, 5, depth - 1]):
+            np.testing.assert_allclose(
+                sub.transform_index_to_physical_point(index),
+                volume.transform_index_to_physical_point([index[0], index[1], index[2] + start]))
+
+
 def test_orient_superoinferior_leaves_correct_volume_unchanged():
     """A hip-first (superior-first) volume must not be flipped."""
     volume = _stacked_volume()

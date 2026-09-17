@@ -18,7 +18,7 @@ import numpy as np
 import pydicom
 import ruptures
 
-from morphometry.image_io import Image
+from morphometry.image_io import Image, crop_image
 
 from api.db import repository
 from api.db.engine import session_scope
@@ -163,17 +163,27 @@ def _is_upside_down(arr: np.ndarray) -> bool:
 
 
 def _split_volume(transformed: Image) -> dict[str, Image]:
-    """Split a stacked whole-leg volume into hip/knee/ankle via changepoint detection."""
-    arr = transformed.array
-    num_pixels = _slice_footprint(arr)
+    """Split a stacked whole-leg volume into hip/knee/ankle via changepoint detection.
+
+    Each region is cut with :func:`morphometry.image_io.crop_image`, so its affine is
+    advanced to its own first slice: index 0 of the knee (ankle) volume maps to the same
+    physical point as slice ``knee_hip`` (``ankle_knee``) of ``transformed``. (The regions
+    used to inherit the whole volume's affine, placing knee and ankle on top of the hip.)
+    Index-space consumers -- the region masks concatenated back along z and saved with the
+    transformed volume's affine -- are unaffected by the origins.
+
+    :param transformed: The LPI-oriented, superior-first whole-leg volume.
+    :return: ``{"hip", "knee", "ankle"}`` sub-volumes partitioning ``transformed`` along z.
+    """
+    num_pixels = _slice_footprint(transformed.array)
     # ruptures returns [bkp1, bkp2, len(signal)] for n_bkps=2; the trailing length is ignored
     breakpoints = ruptures.KernelCPD().fit_predict(num_pixels, 2)
-    knee_hip, ankle_knee = breakpoints[0], breakpoints[1]
-    affine = transformed.affine
+    knee_hip, ankle_knee = int(breakpoints[0]), int(breakpoints[1])
+    depth = transformed.shape[2]
     return {
-        "hip": Image.from_nibabel(nib.Nifti1Image(arr[:, :, :knee_hip], affine=affine)),
-        "knee": Image.from_nibabel(nib.Nifti1Image(arr[:, :, knee_hip:ankle_knee], affine=affine)),
-        "ankle": Image.from_nibabel(nib.Nifti1Image(arr[:, :, ankle_knee:], affine=affine)),
+        "hip": crop_image(transformed, 2, 0, knee_hip),
+        "knee": crop_image(transformed, 2, knee_hip, ankle_knee),
+        "ankle": crop_image(transformed, 2, ankle_knee, depth),
     }
 
 
