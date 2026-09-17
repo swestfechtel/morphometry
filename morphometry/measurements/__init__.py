@@ -53,6 +53,8 @@ from morphometry.measurements.cartilage import (
     plot_knee_segments,
     plot_knee_thickness,
     find_thinnest_area,
+    find_thinnest_area_by_compartment,
+    split_tibia_thickness_by_compartment,
     plot_thinnest_point,
 )
 
@@ -91,5 +93,7 @@ __all__ = [
     "plot_knee_segments",
     "plot_knee_thickness",
     "find_thinnest_area",
+    "find_thinnest_area_by_compartment",
+    "split_tibia_thickness_by_compartment",
     "plot_thinnest_point",
 ]

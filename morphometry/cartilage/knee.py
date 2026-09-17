@@ -1,3 +1,5 @@
+import itertools
+
 import pandas as pd
 import pyvista as pv
 import numpy as np
@@ -1099,6 +1101,83 @@ def find_thinnest_area(tibia_thickness: dict, femur_thickness: dict, image: Imag
     }
 
 
+def split_tibia_thickness_by_compartment(tibia_thickness: dict) -> dict:
+    """
+    Partition a per-subregion tibial thickness dict into the two tibiofemoral compartments.
+
+    The compartment is identified by the subregion key suffix, matched case-insensitively
+    so both attribute names (``clt``) and display labels (``cLT``) work: ``*LT`` subregions
+    (cLT, iLT, eLT, aLT, pLT) belong to the patient-**left** plateau and ``*RT`` subregions
+    (cRT, iRT, eRT, aRT, pRT) to the patient-**right** plateau. This follows
+    :meth:`Tibia.classify_point` in LPI orientation, where increasing index ``x`` points
+    toward patient left (verified against the image affine on a real knee scan: the ``*LT``
+    voxels lie ~40 mm further toward patient left in world coordinates). Which of the two
+    is medial or lateral depends on whether the knee is a left or a right knee and is left
+    to the caller.
+
+    :param tibia_thickness: ``{subregion: {(x, y): thickness}}`` as returned by
+        :meth:`Tibia.calculate_thickness`.
+    :return: ``{'left': {subregion: map}, 'right': {subregion: map}}`` keyed by patient
+        side. The per-subregion maps are the original objects (not copied); a side is an
+        empty dict if the input holds none of its subregions.
+    :raises ValueError: If a key belongs to neither compartment (it would otherwise be
+        silently dropped from both searches).
+    """
+    split = {'left': {}, 'right': {}}
+    for key, subregion_map in tibia_thickness.items():
+        suffix = key.lower()[-2:]
+        if suffix == 'lt':
+            split['left'][key] = subregion_map
+        elif suffix == 'rt':
+            split['right'][key] = subregion_map
+        else:
+            raise ValueError(f"Tibial subregion {key!r} belongs to neither compartment "
+                             f"(expected a '*LT' or '*RT' key).")
+    return split
+
+
+def find_thinnest_area_by_compartment(tibia_thickness: dict, femur_thickness: dict,
+                                      image: Image, neighbourhood_mm: float = 3.0,
+                                      radius_mm: Optional[float] = None) -> dict:
+    """
+    Locate the thinnest cartilage area separately in each tibiofemoral compartment.
+
+    The tibial thickness dict is partitioned by patient side with
+    :func:`split_tibia_thickness_by_compartment`, and :func:`find_thinnest_area` is run on
+    each side's tibial subset against the *full* femoral map. Because that search only
+    considers coordinates where tibial and femoral thickness overlap, each search is
+    confined to its own plateau: a globally thinner point in the other compartment cannot
+    win, and the median smoothing never mixes values across the intercondylar notch (the
+    notch cells are outside the overlap and stay NaN).
+
+    :param tibia_thickness: Per-subregion tibial thickness dict (from
+        ``Tibia.calculate_thickness``): ``{subregion: {(x, y): thickness}}``.
+    :param femur_thickness: Per-subregion femoral thickness dict (from
+        ``Femur.calculate_thickness``); used whole for both compartments.
+    :param image: The segmentation image (in-plane spacing sets the kernel size).
+    :param neighbourhood_mm: Diameter (mm) of the median-smoothing neighbourhood, see
+        :func:`find_thinnest_area`.
+    :param radius_mm: Radius (mm) of the refinement disc, see :func:`find_thinnest_area`.
+    :return: ``{'left': result, 'right': result}`` keyed by **patient** side, where each
+        result has exactly the fields returned by :func:`find_thinnest_area` (voxel
+        indices in the same LPI index space).
+    :raises ValueError: If a compartment has no tibial thickness values or no overlap with
+        the femoral map (the message names the compartment), or if a tibial subregion key
+        belongs to neither compartment.
+    """
+    results = {}
+    for side, subset in split_tibia_thickness_by_compartment(tibia_thickness).items():
+        if not any(subset.values()):
+            raise ValueError(f"The patient-{side} compartment has no tibial thickness values.")
+        try:
+            results[side] = find_thinnest_area(subset, femur_thickness, image,
+                                               neighbourhood_mm=neighbourhood_mm,
+                                               radius_mm=radius_mm)
+        except ValueError as exc:
+            raise ValueError(f'The patient-{side} compartment: {exc}') from exc
+    return results
+
+
 def _thinnest_point_physical(tibia: 'Tibia', femur: 'Femur', point: tuple) -> np.ndarray:
     """
     Locate the 3D physical position of a thinnest ``(x, y)`` column on the contact surface.
@@ -1135,17 +1214,51 @@ def _thinnest_point_physical(tibia: 'Tibia', femur: 'Femur', point: tuple) -> np
     return _indices_to_physical(tibia.image, index)[0]
 
 
+# Arrow colours for labelled thinnest points (patient-side compartments and the whole knee);
+# unknown labels cycle through the spare colours.
+_THINNEST_COLORS = {'left': 'red', 'right': 'blue', 'both': 'black'}
+_THINNEST_SPARE_COLORS = ('magenta', 'darkorange', 'cyan', 'green', 'purple')
+
+
+def _add_thinnest_arrow(plotter: pv.Plotter, marker: np.ndarray, length: float,
+                        color: str, label: str):
+    """
+    Point a labelled arrow at a thinnest-point marker from an oblique offset.
+
+    :param plotter: The PyVista ``Plotter`` to draw into.
+    :param marker: The marker's physical ``(x, y, z)`` position (the arrow tip).
+    :param length: Arrow length in physical units (typically scaled to the scene size).
+    :param color: Colour of the arrow, the marker point and its label.
+    :param label: Text placed at the marker.
+    """
+    direction = np.array([1.0, 0.0, 1.0])
+    direction /= np.linalg.norm(direction)
+    start = marker - direction * length
+    arrow = pv.Arrow(start=start, direction=direction, scale=length)
+    plotter.add_mesh(arrow, color=color)
+    plotter.add_point_labels(np.array([marker]), [label], point_color=color,
+                             point_size=12, font_size=14, text_color=color,
+                             always_visible=True)
+
+
 def plot_thinnest_point(tibia: 'Tibia', femur: 'Femur', tibia_thickness: dict,
                         femur_thickness: dict, thinnest: dict, plotter: pv.Plotter = None,
                         show: bool = None, base: str = 'thickness') -> pv.Plotter:
     """
-    Render the knee cartilage in 3D and mark the thinnest point with an arrow.
+    Render the knee cartilage in 3D and mark the thinnest point(s) with arrows.
 
     :param tibia: The ``Tibia`` for the knee.
     :param femur: The ``Femur`` for the same knee.
     :param tibia_thickness: The tibial thickness dict (used when ``base='thickness'``).
     :param femur_thickness: The femoral thickness dict (used when ``base='thickness'``).
-    :param thinnest: The result dict from :func:`find_thinnest_area` (its ``'point'`` is marked).
+    :param thinnest: Either a single result dict from :func:`find_thinnest_area` (its
+        ``'point'`` is marked with a red arrow labelled ``'thinnest'``), or a
+        ``{label: result}`` dict such as the output of
+        :func:`find_thinnest_area_by_compartment`, optionally extended with a ``'both'``
+        whole-knee entry. Each entry then gets its own arrow in one scene, labelled
+        ``'thinnest (<label>)'`` and coloured by label (``left`` red, ``right`` blue,
+        ``both`` black; other labels cycle through spare colours). ``None`` entries
+        (e.g. a compartment whose search failed) are skipped.
     :param plotter: An existing PyVista ``Plotter`` to draw into (a new one if ``None``).
     :param show: Whether to call ``plotter.show()``. Defaults to ``True`` only when this
         function created the plotter.
@@ -1165,20 +1278,23 @@ def plot_thinnest_point(tibia: 'Tibia', femur: 'Femur', tibia_thickness: dict,
         plot_knee_thickness(tibia, femur, tibia_thickness, femur_thickness,
                             plotter=plotter, show=False)
 
-    marker = _thinnest_point_physical(tibia, femur, thinnest['point'])
-
-    # Point an arrow at the marker from an oblique offset scaled to the scene size.
+    # Arrow length is scaled to the cartilage scene, measured before any arrow is added.
     b = plotter.bounds
     diagonal = float(np.linalg.norm([b[1] - b[0], b[3] - b[2], b[5] - b[4]]))
     length = 0.2 * diagonal if diagonal > 0 else 1.0
-    direction = np.array([1.0, 0.0, 1.0])
-    direction /= np.linalg.norm(direction)
-    start = marker - direction * length
-    arrow = pv.Arrow(start=start, direction=direction, scale=length)
-    plotter.add_mesh(arrow, color='red')
-    plotter.add_point_labels(np.array([marker]), ['thinnest'], point_color='red',
-                             point_size=12, font_size=14, text_color='red',
-                             always_visible=True)
+
+    if 'point' in thinnest:                      # a single find_thinnest_area result
+        markers = [('thinnest', 'red', thinnest)]
+    else:                                        # {label: result}, e.g. per compartment
+        spare = itertools.cycle(_THINNEST_SPARE_COLORS)
+        markers = [(f'thinnest ({label})',
+                    _THINNEST_COLORS[label] if label in _THINNEST_COLORS else next(spare),
+                    result)
+                   for label, result in thinnest.items() if result is not None]
+
+    for label, color, result in markers:
+        marker = _thinnest_point_physical(tibia, femur, result['point'])
+        _add_thinnest_arrow(plotter, marker, length, color, label)
 
     if show or (show is None and created):
         plotter.show()

@@ -16,6 +16,8 @@ from morphometry.cartilage.knee import (
     plot_knee_segments,
     plot_knee_thickness,
     find_thinnest_area,
+    find_thinnest_area_by_compartment,
+    split_tibia_thickness_by_compartment,
     plot_thinnest_point,
 )
 
@@ -29,6 +31,8 @@ __all__ = [
     "plot_knee_segments",
     "plot_knee_thickness",
     "find_thinnest_area",
+    "find_thinnest_area_by_compartment",
+    "split_tibia_thickness_by_compartment",
     "plot_thinnest_point",
 ]
 
@@ -100,13 +104,16 @@ def calculate_knee_cartilage_thickness(image, femur_label: int, tibia_label: int
 def calculate_thinnest_cartilage_area(image, femur_label: int, tibia_label: int,
                                       method: str = 'knn', neighbourhood_mm: float = 3.0,
                                       radius_mm: Optional[float] = None,
-                                      plot: bool | pv.Plotter = False) -> dict:
+                                      plot: bool | pv.Plotter = False,
+                                      by_compartment: bool = False) -> dict:
     """
     Find the thinnest area of the tibiofemoral cartilage in one call.
 
     Computes the tibial and femoral thickness maps and locates the thinnest neighbourhood
     of the combined (contact-region) cartilage, robust to single-voxel outliers. See
-    :func:`morphometry.cartilage.knee.find_thinnest_area` for the algorithm.
+    :func:`morphometry.cartilage.knee.find_thinnest_area` for the algorithm and
+    :func:`morphometry.cartilage.knee.find_thinnest_area_by_compartment` for the
+    per-compartment variant.
 
     :param image: An Image of the knee cartilage segmentation.
     :param femur_label: The label of the femoral cartilage.
@@ -115,15 +122,22 @@ def calculate_thinnest_cartilage_area(image, femur_label: int, tibia_label: int,
     :param neighbourhood_mm: Diameter (mm) of the median-smoothing neighbourhood.
     :param radius_mm: Radius (mm) of the refinement disc (defaults to ``neighbourhood_mm / 2``).
     :param plot: Pass a PyVista ``Plotter`` to render the cartilage with an arrow marking
-        the thinnest point (thickness-heatmap base). ``False`` disables plotting.
-    :return: The result dict from :func:`find_thinnest_area`.
+        the thinnest point (one arrow per compartment when ``by_compartment``;
+        thickness-heatmap base). ``False`` disables plotting.
+    :param by_compartment: ``False`` (default) searches the whole knee and returns a single
+        result. ``True`` searches the patient-left and patient-right tibiofemoral
+        compartments separately.
+    :return: With ``by_compartment=False``, the result dict from :func:`find_thinnest_area`.
+        With ``by_compartment=True``, ``{'left': result, 'right': result}`` keyed by
+        **patient** side, from :func:`find_thinnest_area_by_compartment`.
     """
     tibia = Tibia(image, tibia_label)
     tibia_results = tibia.calculate_thickness(method)
     femur = Femur(image, femur_label)
     femur_results = femur.calculate_thickness(tibia, method)
-    thinnest = find_thinnest_area(tibia_results, femur_results, image,
-                                  neighbourhood_mm=neighbourhood_mm, radius_mm=radius_mm)
+    search = find_thinnest_area_by_compartment if by_compartment else find_thinnest_area
+    thinnest = search(tibia_results, femur_results, image,
+                      neighbourhood_mm=neighbourhood_mm, radius_mm=radius_mm)
     if isinstance(plot, pv.Plotter):
         plot_thinnest_point(tibia, femur, tibia_results, femur_results, thinnest,
                             plotter=plot, show=False)
