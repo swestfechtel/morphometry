@@ -1,11 +1,10 @@
 import sys
 sys.path.append('/home/simon/Work/morphometry')
 import SimpleITK as sitk
-import nibabel as nib
 import numpy as np
 from morphometry.measurements.femur import calculate_femoral_torsion
 from morphometry.measurements.tibia import calculate_tibial_torsion
-from morphometry.image_io import Image
+from morphometry.image_io import Image, split_image_left_right
 from argparse import ArgumentParser
 from matplotlib import pyplot as plt
 
@@ -36,17 +35,12 @@ if __name__ == '__main__':
     knee_mask = knee.array
     ankle_mask = ankle.array
 
-    left_hip = hip_mask[:hip_mask.shape[0] // 2]  # wtf, the sagittal axis seems to be flipped with the new coordinate system??
-    right_hip = hip_mask[hip_mask.shape[0] // 2:]
+    left_hip, right_hip = split_image_left_right(hip)  # image-side halves with correct per-half geometry
     left_knee = knee_mask[:knee_mask.shape[0] // 2]
     right_knee = knee_mask[knee_mask.shape[0] // 2:]
     left_ankle = ankle_mask[:ankle_mask.shape[0] // 2]
     right_ankle = ankle_mask[ankle_mask.shape[0] // 2:]
 
-    left_hip = nib.Nifti1Image(left_hip, hip.affine, hip.header)
-    left_hip = Image.from_nibabel(left_hip)
-    right_hip = nib.Nifti1Image(right_hip, hip.affine, hip.header)
-    right_hip = Image.from_nibabel(right_hip)
 
     if args.plot:
         try:

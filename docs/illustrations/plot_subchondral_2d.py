@@ -35,7 +35,6 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-import nibabel as nib  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib.patches import Circle  # noqa: E402
@@ -45,7 +44,7 @@ sys.path.append(str(HERE.parent.parent))  # repo root
 sys.path.append(str(HERE))                # the 3D companion script
 
 from morphometry.hip import get_femoral_head_center  # noqa: E402
-from morphometry.image_io import Image, Segmentation  # noqa: E402
+from morphometry.image_io import Image, Segmentation, split_image_left_right  # noqa: E402
 from morphometry.measurements import hip as H  # noqa: E402
 from plot_subchondral_3d import (DEFAULT_AXIS, _cone_axis,  # noqa: E402
                                  _peri_acetabular_mask, _sample_files)
@@ -86,8 +85,7 @@ def _load_pair(index: int, side: str) -> tuple[Segmentation, np.ndarray | None, 
     seg.transform_coordinate_system()
     seg.remove_outliers()
     half = seg.array.shape[0] // 2
-    arr = seg.array[:half] if side == "left" else seg.array[half:]
-    side_seg = Segmentation.from_nibabel(nib.Nifti1Image(arr, seg.affine, seg.header))
+    side_seg = split_image_left_right(seg)[0 if side == "left" else 1]
 
     mri = None
     img_path = DEFAULT_IMAGE_DIR / path.name.replace(".nii.gz", "_0000.nii.gz")

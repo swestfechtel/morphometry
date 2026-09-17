@@ -273,27 +273,106 @@ class Segmentation(Image):
             raise NotImplementedError('SimpleITK not implemented yet.')
 
 
+def _crop_axis(source, axis: int, start: int, end: int):
+    """
+    Crop an Image / Segmentation to the index range ``[start, end)`` along one index axis.
+
+    The crop keeps the source geometry: index ``i`` of the crop maps to the same physical
+    point as the source's index ``i`` advanced by ``start`` along ``axis``. For nibabel the
+    affine's translation is advanced by ``start`` voxels along ``axis`` (the linear
+    direction/spacing block is unchanged); ``sitk.RegionOfInterest`` sets the origin of the
+    region on its own. Without that shift every ``transform_index_to_physical_point`` on
+    the crop would be off by ``start`` voxels along ``axis`` -- a constant translation that
+    leaves in-crop distances intact but misplaces the crop in the scanner frame.
+
+    The axis is an *index* axis as used by ``transform_index_to_physical_point``, i.e. the
+    nibabel array axis and the SimpleITK ``(x, y, z)`` index axis. (``Image.array`` of a
+    SimpleITK image is ``(z, y, x)``, so index axis 0 there is the array's last axis.)
+    :param source: The Image or Segmentation to crop.
+    :param axis: The index axis to crop along (0, 1 or 2).
+    :param start: First voxel of the crop along ``axis`` (inclusive).
+    :param end: Last voxel of the crop along ``axis`` (exclusive).
+    :return: The underlying nibabel / SimpleITK image of the crop.
+    """
+    if source.type == 'nibabel':
+        offset = np.zeros(3)
+        offset[axis] = start
+        affine = source.affine.copy()
+        affine[:3, 3] = affine[:3, :3].dot(offset) + affine[:3, 3]
+        slicer = [slice(None)] * 3
+        slicer[axis] = slice(start, end)
+        return nib.Nifti1Image(source.array[tuple(slicer)], affine, source.header)
+
+    size = list(source.shape)
+    size[axis] = end - start
+    index = [0, 0, 0]
+    index[axis] = start
+    return sitk.RegionOfInterest(source.image, size=size, index=index)
+
+
 def _crop_z(source, start: int, end: int):
     """
     Crop an Image / Segmentation along the superior-inferior (third) axis.
 
-    The cropped volume keeps the source geometry: for nibabel the affine's
-    translation is advanced by ``start`` slices so that index ``0`` of the crop maps
-    to the same physical point as index ``start`` of the source (``sitk.RegionOfInterest``
-    does this on its own). Without that shift every ``transform_index_to_physical_point``
-    on a sub-volume would be off by ``start`` slices.
+    Thin wrapper around :func:`_crop_axis` with ``axis=2``: the crop's affine is advanced
+    by ``start`` slices so that index ``0`` of the crop maps to the same physical point as
+    index ``start`` of the source.
     :param source: The Image or Segmentation to crop.
     :param start: First slice of the crop (inclusive).
     :param end: Last slice of the crop (exclusive).
     :return: The underlying nibabel / SimpleITK image of the crop.
     """
-    if source.type == 'nibabel':
-        affine = source.affine.copy()
-        affine[:3, 3] = affine[:3, :3].dot(np.array([0, 0, start])) + affine[:3, 3]
-        return nib.Nifti1Image(source.array[:, :, start:end], affine, source.header)
+    return _crop_axis(source, 2, start, end)
 
-    return sitk.RegionOfInterest(source.image, size=[source.shape[0], source.shape[1], end - start],
-                                 index=[0, 0, start])
+
+def crop_image(source, axis: int, start: int, end: int):
+    """
+    Crop an Image / Segmentation to ``[start, end)`` along one index axis, keeping its geometry correct.
+
+    Public wrapper around :func:`_crop_axis`: index ``i`` of the crop maps to the same physical
+    point as the source's index ``i`` advanced by ``start`` along ``axis``, so sub-volumes can be
+    handled in physical space without knowing where they were cut from.
+    :param source: The Image or Segmentation to crop (nibabel or SimpleITK backed). It is not modified.
+    :param axis: The index axis to crop along (0, 1 or 2; for SimpleITK the ``(x, y, z)`` index axis).
+    :param start: First voxel of the crop along ``axis`` (inclusive).
+    :param end: Last voxel of the crop along ``axis`` (exclusive).
+    :return: The crop, of the same class and backend as ``source``, carrying over its
+    ``metadata`` and ``axcodes``.
+    """
+    crop = type(source)(source.type, metadata=source.metadata, axcodes=source.axcodes)
+    crop.image = _crop_axis(source, axis, start, end)
+    return crop
+
+
+def split_image_left_right(source):
+    """
+    Split an Image / Segmentation into its image-left and image-right halves, with correct geometry.
+
+    The split is at ``shape[0] // 2`` along the first index axis (the left-right axis once
+    the image is in LPI via ``transform_coordinate_system``): the left half holds indices
+    ``[0, half)``, the right half ``[half, shape[0])``, so for odd widths the right half is
+    one voxel wider. "left" / "right" refer to the *image* side, not the patient side.
+
+    Geometry guarantee: the left half keeps the parent's geometry unchanged, and index
+    ``i`` of the right half maps to the same physical point as the parent's index
+    ``i + [half, 0, 0]`` (its origin is advanced by ``half`` voxels, see
+    :func:`crop_image`); spacing and direction are unchanged on both halves. The
+    translation matters for everything that goes through physical space: wrapping the
+    right half in the parent's affine made the right half's coordinates overlay the left
+    half, so every right-side physical point landed on the left leg, ``half * spacing_x``
+    away from its true position (195 mm on the NMDID whole-leg CT test case, where the two
+    femoral head centres came out ~17 mm apart instead of ~195 mm). Distances and angles
+    measured within one half are translation-invariant and unaffected, and callers that
+    move between the halves in *index* space must still add ``half`` to right-half indices
+    themselves.
+
+    The pure array counterpart without any geometry is ``morphometry.geometry.split_left_right``.
+    :param source: The Image or Segmentation to split (nibabel or SimpleITK backed). It is not modified.
+    :return: ``(left, right)``, each of the same class and backend as ``source``, carrying
+    over its ``metadata`` and ``axcodes``.
+    """
+    half = source.shape[0] // 2
+    return crop_image(source, 0, 0, half), crop_image(source, 0, half, source.shape[0])
 
 
 def split_ct_image(segmentation: Segmentation, image: Image = None, femur_label: int = 1, hip_label: int = 7, patella_label: int = 5, fibula_label: int = 3) -> Tuple[

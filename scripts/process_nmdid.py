@@ -44,7 +44,7 @@ from scipy.ndimage import label as connected_components
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from morphometry.image_io import Segmentation, split_ct_image
+from morphometry.image_io import Segmentation, split_ct_image, split_image_left_right
 from morphometry.measurements.femur import calculate_femoral_torsion_ct
 from morphometry.measurements.hip import (calculate_acetabular_anteversion, calculate_ccd_ct,
                                           calculate_center_edge_angle, calculate_femoral_offset_projected)
@@ -206,14 +206,15 @@ def split_legs(seg: Segmentation) -> tuple:
     :return: ``(halves, whole, flags)`` -- per-side Segmentations, the re-joined
     Segmentation, and the per-side QC flag strings.
     """
-    half = seg.array.shape[0] // 2
-    arrays = {'left': clean_leg(seg.array[:half]), 'right': clean_leg(seg.array[half:])}
+    # split with per-half geometry: the right half's index 0 is the whole mask's index ``half``
+    raw = dict(zip(('left', 'right'), split_image_left_right(seg)))
+    arrays = {side: clean_leg(half.array) for side, half in raw.items()}
 
-    def _as_segmentation(array):
-        return Segmentation.from_nibabel(nib.Nifti1Image(array, seg.affine, seg.header))
+    def _as_segmentation(array, geometry):
+        return Segmentation.from_nibabel(nib.Nifti1Image(array, geometry.affine, geometry.header))
 
-    halves = {side: _as_segmentation(array) for side, array in arrays.items()}
-    whole = _as_segmentation(np.concatenate([arrays['left'], arrays['right']], axis=0))
+    halves = {side: _as_segmentation(arrays[side], raw[side]) for side in arrays}
+    whole = _as_segmentation(np.concatenate([arrays['left'], arrays['right']], axis=0), seg)
     flags = {side: qc_flags(array) for side, array in arrays.items()}
     return halves, whole, flags
 

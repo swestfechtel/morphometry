@@ -7,10 +7,9 @@ angles so the measurements refactor can be proven not to change them.
 Note the image-side / patient-side inversion: ``side='left'`` (left image half)
 corresponds to the patient's right leg, hence the ``_patient_right`` labels.
 """
-import nibabel as nib
 import pytest
 
-from morphometry.image_io import Image
+from morphometry.image_io import split_image_left_right
 from morphometry.measurements.femur import calculate_femoral_torsion
 from morphometry.measurements.tibia import calculate_tibial_torsion
 from tests.conftest import assert_golden
@@ -23,12 +22,12 @@ def torsion_inputs(augsburg_pa000001):
     """Left/right image halves of the hip/knee/ankle masks plus the x_ratio."""
     hip, knee, ankle = (augsburg_pa000001[k] for k in ("hip", "knee", "ankle"))
     x_ratio = abs(hip.spacing[2]) / 2 * abs(hip.spacing[0])
-    half_h = hip.array.shape[0] // 2
+    left_hip, right_hip = split_image_left_right(hip)
     half_k = knee.array.shape[0] // 2
     half_a = ankle.array.shape[0] // 2
     return {
-        "left_hip": Image.from_nibabel(nib.Nifti1Image(hip.array[:half_h], hip.affine, hip.header)),
-        "right_hip": Image.from_nibabel(nib.Nifti1Image(hip.array[half_h:], hip.affine, hip.header)),
+        "left_hip": left_hip,
+        "right_hip": right_hip,
         "left_knee": knee.array[:half_k],
         "right_knee": knee.array[half_k:],
         "left_ankle": ankle.array[:half_a],

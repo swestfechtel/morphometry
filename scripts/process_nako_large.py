@@ -7,13 +7,12 @@ sys.path.append('/home/sw521914/Work/morphometry')
 
 import pandas as pd
 import numpy as np
-import nibabel as nib
 
 from pathlib import Path
 from morphometry.measurements.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
     calculate_alpha_angle, calculate_acetabular_depth, calculate_center_edge_angle, \
     calculate_cartilage_thickness_knn, calculate_femoral_offset, calculate_femoral_offset_projected
-from morphometry.image_io import Segmentation
+from morphometry.image_io import Segmentation, split_image_left_right
 
 
 def f(patient):
@@ -22,13 +21,7 @@ def f(patient):
     mask.transform_coordinate_system()
     mask.remove_outliers()
 
-    mask_left = mask.array[:mask.array.shape[0] // 2]
-    mask_right = mask.array[mask.array.shape[0] // 2:]
-
-    mask_left = nib.Nifti1Image(mask_left, mask.affine, mask.header)
-    mask_left = Segmentation.from_nibabel(mask_left)
-    mask_right = nib.Nifti1Image(mask_right, mask.affine, mask.header)
-    mask_right = Segmentation.from_nibabel(mask_right)
+    mask_left, mask_right = split_image_left_right(mask)  # image-side halves with correct per-half geometry
 
     try:
         # ccd_left, _ = calculate_ccd(mask_left, None, 'left', 1, isotropic=True, plot=p)

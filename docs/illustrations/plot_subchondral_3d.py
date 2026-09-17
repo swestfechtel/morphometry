@@ -47,14 +47,13 @@ import os
 import sys
 from pathlib import Path
 
-import nibabel as nib
 import numpy as np
 import pyvista as pv
 
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))  # repo root
 
 from morphometry.hip import get_femoral_head_center  # noqa: E402
-from morphometry.image_io import Segmentation  # noqa: E402
+from morphometry.image_io import Segmentation, split_image_left_right  # noqa: E402
 from morphometry.measurements import hip as H   # noqa: E402
 from morphometry.measurements.hip import _physical_distances_from_point, _superior_direction  # noqa: E402
 
@@ -99,9 +98,8 @@ def _load_sample(index: int = 0) -> tuple[Segmentation, str]:
 
 def _split_side(seg: Segmentation, side: str) -> Segmentation:
     """Return the requested image-side half (split at shape[0]//2), like the pipelines."""
-    half = seg.array.shape[0] // 2
-    arr = seg.array[:half] if side == "left" else seg.array[half:]
-    return Segmentation.from_nibabel(nib.Nifti1Image(arr, seg.affine, seg.header))
+    left, right = split_image_left_right(seg)
+    return left if side == "left" else right
 
 
 def _surface_from_mask(image: Segmentation, mask: np.ndarray) -> pv.PolyData | None:

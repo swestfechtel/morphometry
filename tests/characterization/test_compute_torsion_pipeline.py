@@ -5,11 +5,10 @@ outliers -> split L/R -> femoral Lee/Murphy + tibial torsion per side, with the
 right-side coordinate shift) and asserts the results dict and the nested landmark
 structure the REST layer consumes. Guards the swethfechtel/torsion:latest rebuild.
 """
-import nibabel as nib
 import numpy as np
 import pytest
 
-from morphometry.image_io import Image, Segmentation
+from morphometry.image_io import split_image_left_right
 from morphometry.measurements.femur import calculate_femoral_torsion, get_femoral_torsion_landmarks
 from morphometry.measurements.tibia import calculate_tibial_torsion, get_tibial_torsion_landmarks
 
@@ -20,8 +19,7 @@ def test_compute_torsion_pipeline(augsburg_pa000001):
     hip_mask, knee_mask, ankle_mask = (augsburg_pa000001[k] for k in ("hip", "knee", "ankle"))
     x_ratio = abs(hip_mask.spacing[2]) / 2 * abs(hip_mask.spacing[0])
 
-    left_hip = Image.from_nibabel(nib.Nifti1Image(hip_mask.array[:hip_mask.array.shape[0] // 2], hip_mask.affine, hip_mask.header))
-    right_hip = Image.from_nibabel(nib.Nifti1Image(hip_mask.array[hip_mask.array.shape[0] // 2:], hip_mask.affine, hip_mask.header))
+    left_hip, right_hip = split_image_left_right(hip_mask)
     left_knee = knee_mask.array[:knee_mask.array.shape[0] // 2]
     right_knee = knee_mask.array[knee_mask.array.shape[0] // 2:]
     left_ankle = ankle_mask.array[:ankle_mask.array.shape[0] // 2]

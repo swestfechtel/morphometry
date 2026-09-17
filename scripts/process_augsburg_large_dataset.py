@@ -4,7 +4,6 @@ sys.path.append('/home/simon/Work/morphometry')
 
 import pandas as pd
 import numpy as np
-import nibabel as nib
 import traceback
 import pyvista as pv
 from pathlib import Path
@@ -14,7 +13,7 @@ from morphometry.measurements.knee import calculate_knee_rotation_angle
 from morphometry.measurements.whole_leg import calculate_bone_length
 from morphometry.measurements.ankle import calculate_pma_angle
 from morphometry.measurements.hip import calculate_ccd
-from morphometry.image_io import Segmentation
+from morphometry.image_io import Segmentation, split_image_left_right
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 from multiprocessing import Pool
@@ -42,29 +41,10 @@ def process_patient(patient):
 
     x_ratio = abs(hip.spacing[2]) / 2 * abs(hip.spacing[0])
 
-    hip_mask = hip.array
-    knee_mask = knee.array
-    ankle_mask = ankle.array
-
-    left_hip = hip_mask[:hip_mask.shape[0] // 2]
-    right_hip = hip_mask[hip_mask.shape[0] // 2:]
-    left_knee = knee_mask[:knee_mask.shape[0] // 2]
-    right_knee = knee_mask[knee_mask.shape[0] // 2:]
-    left_ankle = ankle_mask[:ankle_mask.shape[0] // 2]
-    right_ankle = ankle_mask[ankle_mask.shape[0] // 2:]
-
-    left_hip = nib.Nifti1Image(left_hip, hip.affine, hip.header)
-    left_hip = Segmentation.from_nibabel(left_hip)
-    right_hip = nib.Nifti1Image(right_hip, hip.affine, hip.header)
-    right_hip = Segmentation.from_nibabel(right_hip)
-    left_knee = nib.Nifti1Image(left_knee, knee.affine, knee.header)
-    left_knee = Segmentation.from_nibabel(left_knee)
-    right_knee = nib.Nifti1Image(right_knee, knee.affine, knee.header)
-    right_knee = Segmentation.from_nibabel(right_knee)
-    left_ankle = nib.Nifti1Image(left_ankle, ankle.affine, ankle.header)
-    left_ankle = Segmentation.from_nibabel(left_ankle)
-    right_ankle = nib.Nifti1Image(right_ankle, ankle.affine, ankle.header)
-    right_ankle = Segmentation.from_nibabel(right_ankle)
+    # image-side halves with correct per-half geometry
+    left_hip, right_hip = split_image_left_right(hip)
+    left_knee, right_knee = split_image_left_right(knee)
+    left_ankle, right_ankle = split_image_left_right(ankle)
 
     try:
         fig, ax = plt.subplots(1, 2)

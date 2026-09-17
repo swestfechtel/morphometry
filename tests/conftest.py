@@ -14,10 +14,9 @@ import warnings
 from pathlib import Path
 
 import numpy as np
-import nibabel as nib
 import pytest
 
-from morphometry.image_io import Segmentation
+from morphometry.image_io import Segmentation, split_image_left_right
 from tests import data_paths
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
@@ -81,12 +80,13 @@ def split_left_right(seg: Segmentation):
     """Split a both-sides mask into (left_image, right_image) Segmentations at shape[0]//2.
 
     Mirrors the image-side split used throughout the pipelines ("left"/"right" is
-    the image side, not the patient side).
+    the image side, not the patient side) by delegating to
+    ``morphometry.image_io.split_image_left_right``, so the right half carries its own,
+    correctly translated geometry.
+    :param seg: The both-sides segmentation.
+    :return: ``(left, right)`` Segmentations.
     """
-    half = seg.array.shape[0] // 2
-    left = Segmentation.from_nibabel(nib.Nifti1Image(seg.array[:half], seg.affine, seg.header))
-    right = Segmentation.from_nibabel(nib.Nifti1Image(seg.array[half:], seg.affine, seg.header))
-    return left, right
+    return split_image_left_right(seg)
 
 
 def _flatten(value):

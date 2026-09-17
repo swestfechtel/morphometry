@@ -4,7 +4,7 @@ import json
 import nibabel as nib
 import numpy as np
 
-from morphometry.image_io import Image, Segmentation
+from morphometry.image_io import Segmentation, split_image_left_right
 from morphometry.measurements.femur import calculate_femoral_torsion, get_femoral_torsion_landmarks
 from morphometry.measurements.tibia import calculate_tibial_torsion, get_tibial_torsion_landmarks
 
@@ -25,17 +25,12 @@ if __name__ == '__main__':
     knee_mask.remove_outliers()
     ankle_mask.remove_outliers()
 
-    left_hip = hip_mask.array[:hip_mask.array.shape[0] // 2]
-    right_hip = hip_mask.array[hip_mask.array.shape[0] // 2:]
+    # the hip halves are used through their geometry, so split them with the correct per-half affine
+    left_hip, right_hip = split_image_left_right(hip_mask)
     left_knee = knee_mask.array[:knee_mask.array.shape[0] // 2]
     right_knee = knee_mask.array[knee_mask.array.shape[0] // 2:]
     left_ankle = ankle_mask.array[:ankle_mask.array.shape[0] // 2]
     right_ankle = ankle_mask.array[ankle_mask.array.shape[0] // 2:]
-
-    left_hip = nib.Nifti1Image(left_hip, hip_mask.affine, hip_mask.header)
-    left_hip = Image.from_nibabel(left_hip)
-    right_hip = nib.Nifti1Image(right_hip, hip_mask.affine, hip_mask.header)
-    right_hip = Image.from_nibabel(right_hip)
 
     results = dict()
     landmarks_final = {

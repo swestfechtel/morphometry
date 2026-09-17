@@ -12,14 +12,13 @@ import logging
 import numpy as np
 import pyvista as pv
 import pandas as pd
-import nibabel as nib
 
 from morphometry.utils import sphere_fit, get_contour_points, calculate_angle_between_vectors, \
     calculate_min_distance_between_point_clouds, get_vector_through_point_perpendicular_to_line, \
     get_minimum_distance_between_line_and_point, num_connected_components, \
     extract_connected_components_2d, circumference_points, intersect_ndarrays, \
     sort_points_clockwise, sort_points_by_x, fit_circle_to_points
-from morphometry.image_io import Image, Segmentation
+from morphometry.image_io import Image, Segmentation, split_image_left_right
 from morphometry.bresenham import bresenhamline
 from morphometry import constants as C
 from morphometry import geometry as G
@@ -146,13 +145,9 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
             # distal_femur_coords = np.vectorize(knee_image.transform_index_to_physical_point)(distal_femur_coords)
             for i, coord in enumerate(proximal_femur_coords):
                 proximal_femur_coords[i] = hip_image.transform_index_to_physical_point(coord)
-                if side == 'right':
-                    proximal_femur_coords[i, 0] -= hip_mask.shape[0]  # adjust for right side
 
             for i, coord in enumerate(distal_femur_coords):
                 distal_femur_coords[i] = knee_image.transform_index_to_physical_point(coord)
-                if side == 'right':
-                    distal_femur_coords[i, 0] -= knee_mask.shape[0]
 
             plot.add_mesh(pv.PolyData(proximal_femur_coords.astype(np.float32)), color=('g' if side == 'left' else 'y'), opacity=.5)
             plot.add_mesh(pv.PolyData(distal_femur_coords.astype(np.float32)), color='b', opacity=.5)
@@ -169,25 +164,21 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
             femur_coords = np.argwhere(hip_mask == segmentation_label).astype(np.float32)
             for i, coord in enumerate(femur_coords):
                 femur_coords[i] = hip_image.transform_index_to_physical_point(coord)
-                if side == 'right':
-                    femur_coords[i, 0] -= hip_mask.shape[0]  # adjust for right side
-
 
             plot.add_mesh(pv.PolyData(femur_coords), color=('g' if side == 'left' else 'y'), opacity=.1)
 
-        femoral_head_center = hip_image.transform_index_to_physical_point(
-            femoral_head_center)  # transform to physical coordinates
-        femoral_neck_center = hip_image.transform_index_to_physical_point(femoral_neck_center)
-        shaft_axis_low = hip_image.transform_index_to_physical_point(shaft_axis_low)
-        shaft_axis_high = hip_image.transform_index_to_physical_point(shaft_axis_high)
+        if knee_image is None:
+            # the landmarks are still voxel indices of the hip mask; with a knee image they were
+            # already converted above (shaft_axis_low through the knee image, since it lies in
+            # the knee mask) and must not be transformed a second time
+            femoral_head_center = hip_image.transform_index_to_physical_point(femoral_head_center)
+            femoral_neck_center = hip_image.transform_index_to_physical_point(femoral_neck_center)
+            shaft_axis_low = hip_image.transform_index_to_physical_point(shaft_axis_low)
+            shaft_axis_high = hip_image.transform_index_to_physical_point(shaft_axis_high)
 
-        if side == 'right':
-            femoral_head_center[0] -= hip_mask.shape[0]  # adjust for right side
-            femoral_neck_center[0] -= hip_mask.shape[0]
-            shaft_axis_high[0] -= hip_mask.shape[0]
-            shaft_axis_low[0] -= hip_mask.shape[0]
-
-        plot.add_lines(np.array([femoral_head_center, femoral_neck_center - 2 * neck_vector]), color='r')
+        # the neck vector in the same (physical) space as the points it is drawn from
+        neck_vector_physical = femoral_neck_center - femoral_head_center
+        plot.add_lines(np.array([femoral_head_center, femoral_neck_center + 2 * neck_vector_physical]), color='r')
         plot.add_lines(np.array([shaft_axis_high, shaft_axis_low]), color='r')
 
     return ccd, ccd_projected
@@ -413,13 +404,9 @@ def calculate_acetabular_anteversion(hip_image: Segmentation, femur_label: int =
     rather than the acetabulum alone.
     :return: The acetabular anteversion for both sides.
     """
-    left_mask = hip_image.array[:hip_image.shape[0] // 2]
-    right_mask = hip_image.array[hip_image.shape[0] // 2:]
-
-    left_image = nib.Nifti1Image(left_mask, hip_image.affine, hip_image.header)
-    right_image = nib.Nifti1Image(right_mask, hip_image.affine, hip_image.header)
-    left_image = Segmentation.from_nibabel(left_image)
-    right_image = Segmentation.from_nibabel(right_image)
+    # image-side halves; the right half's geometry is translated so its physical points are correct
+    left_image, right_image = split_image_left_right(hip_image)
+    left_mask, right_mask = left_image.array, right_image.array
 
     if ct:
         # the CT femoral head centre and radius come back in physical coordinates
@@ -599,13 +586,9 @@ def calculate_center_edge_angle(hip_image: Segmentation, femur_label: int = 1, a
     rather than the acetabulum alone, otherwise the iliac wing is picked as the lateral edge.
     :return: The center edge angle for both sides.
     """
-    left_mask = hip_image.array[:hip_image.shape[0] // 2]
-    right_mask = hip_image.array[hip_image.shape[0] // 2:]
-
-    left_image = nib.Nifti1Image(left_mask, hip_image.affine, hip_image.header)
-    right_image = nib.Nifti1Image(right_mask, hip_image.affine, hip_image.header)
-    left_image = Segmentation.from_nibabel(left_image)
-    right_image = Segmentation.from_nibabel(right_image)
+    # image-side halves; the right half's geometry is translated so its physical points are correct
+    left_image, right_image = split_image_left_right(hip_image)
+    left_mask, right_mask = left_image.array, right_image.array
 
     if ct:
         r_l, left_fhc = get_femoral_head_center_ct(left_image, segmentation_label=femur_label, side='left')
@@ -1251,17 +1234,9 @@ def calculate_femoral_offset(hip_image: Image, knee_image: Optional[Image] = Non
         femur_coords = np.argwhere(hip_image.array == femur_label).astype(np.float32)
         for i, coord in enumerate(femur_coords):
             femur_coords[i] = hip_image.transform_index_to_physical_point(coord)
-            if side == 'right':
-                femur_coords[i, 0] -= hip_image.shape[0]  # adjust for right side
 
         start_world = hip_image.transform_index_to_physical_point(start)
         end_world = hip_image.transform_index_to_physical_point(end)
-
-        if side == 'right':
-            c_world[0] -= hip_image.shape[0]  # adjust for right side
-            projection_vector_world[0] -= hip_image.shape[0]
-            start_world[0] -= hip_image.shape[0]
-            end_world[0] -= hip_image.shape[0]
 
         plot.add_mesh(pv.PolyData(femur_coords), color=('g' if side == 'left' else 'y'), opacity=.1)
         plot.add_lines(np.array([start_world, end_world]), color='red', width=5)
