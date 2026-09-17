@@ -13,7 +13,6 @@ from matplotlib import pyplot as plt
 
 from morphometry.knee import get_knee_reference_line
 from morphometry.tibia import get_distal_reference_line
-from morphometry.utils import calculate_angle_between_vectors
 from morphometry import geometry as G
 
 
@@ -22,10 +21,40 @@ def _tibial_torsion_reference_points(knee_mask: np.ndarray, ankle_mask: np.ndarr
     """Resolve the proximal (knee) and distal (ankle) tibial reference points, ordered."""
     knee_bin = np.where(knee_mask == tibia_label_knee, 1, 0)
     _, knee_start, knee_end = get_knee_reference_line(knee_bin, 'tibia')
-    if knee_start[0] < knee_end[0]:  # knee_end is always lateral (left) of knee_start
+    if knee_start[0] < knee_end[0]:  # knee_start gets the larger x (medial on a left image half, lateral on a right one)
         knee_start, knee_end = knee_end, knee_start
     _, ankle_start, ankle_end = get_distal_reference_line(ankle_mask, tibia_label_ankle, fibula_label)
     return knee_start, knee_end, ankle_start, ankle_end
+
+
+def _tibial_torsion_angle(knee_start: np.ndarray, knee_end: np.ndarray,
+                          ankle_start: np.ndarray, ankle_end: np.ndarray, side: str) -> float:
+    """Compose the tibial torsion from the posterior condylar line and the tibia -> fibula line.
+
+    Sign derivation (LPI index frame: x increases towards the patient's left, y posteriorly). A left
+    image half holds a patient-right leg, so lateral is -x and posterior is +y. With ``p`` along the
+    (undirected) condylar line and ``d`` directed tibia centroid -> fibula centroid (pointing
+    laterally), external torsion turns ``d`` from lateral towards posterior relative to ``p``:
+    ``atan2(-(p_x d_y - p_y d_x), p . d)``, folded into (-90, 90]. This is the same rotation sense as
+    the femoral antetorsion, so both use :func:`morphometry.geometry.signed_axial_angle`; a right
+    image half (mirror-image leg, lateral = +x) negates the x components. The result is invariant to
+    an in-plane rotation of the whole leg and does not depend on the condylar endpoint order.
+
+    This replaces a composition that folded both lines to acute angles against the image x-axis and
+    combined them by the signs of their y-offsets. That equalled the signed angle only while the
+    fibula centroid lay posterior to the tibia centroid in the image; otherwise it returned the
+    negated torsion and, past 90 degrees, a wrong magnitude. The angle is computed from voxel indices
+    (the knee and ankle masks are assumed to share the in-plane frame and have equal x/y spacing).
+    :param knee_start: One posterior tibial condyle reference point.
+    :param knee_end: The other posterior tibial condyle reference point.
+    :param ankle_start: The tibia centroid at ankle level.
+    :param ankle_end: The fibula centroid at ankle level.
+    :param side: Image side, 'left' or 'right'.
+    :return: The tibial torsion in degrees, in (-90, 90]; negative means internal torsion.
+    """
+    condyles = np.asarray(knee_start, dtype=float) - np.asarray(knee_end, dtype=float)
+    tibia_to_fibula = np.asarray(ankle_end, dtype=float) - np.asarray(ankle_start, dtype=float)
+    return G.signed_axial_angle(condyles, tibia_to_fibula, side)
 
 
 def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibia_label_knee: int,
@@ -34,10 +63,11 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
     """
     Calculate the tibial torsion angle.
 
-    The angle between the posterior tibial condyles at knee level and the line
-    connecting the tibia and fibula centroids at the level of the tibia's largest
-    cross-section. The proximal and distal angles are each folded to [0, 90] and
-    added or subtracted depending on their anterior-posterior orientation signs.
+    The signed axial-plane angle from the posterior tibial condylar line (knee level) to the
+    line from the tibia centroid to the fibula centroid at the level of the tibia's largest
+    cross-section, positive for external torsion (the distal line turned from lateral towards
+    posterior relative to the condylar line) and negative for internal torsion, relative to
+    the landmarks. See :func:`_tibial_torsion_angle`.
     :param knee_mask: A 3D segmentation mask of the knee.
     :param ankle_mask: A 3D segmentation mask of the ankle.
     :param tibia_label_knee: The label of the tibia at knee level.
@@ -52,17 +82,7 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
     knee_start, knee_end, ankle_start, ankle_end = _tibial_torsion_reference_points(
         knee_mask, ankle_mask, tibia_label_knee, tibia_label_ankle, fibula_label)
 
-    proximal_angle = G.fold_to_acute(calculate_angle_between_vectors(knee_end - knee_start, np.array([-1, 0, 0])))
-    proximal_orientation = (knee_end[1] - knee_start[1]) if side == 'left' else (knee_start[1] - knee_end[1])
-
-    x = np.array([-1, 0, 0]) if side == 'left' else np.array([1, 0, 0])
-    distal_angle = G.fold_to_acute(calculate_angle_between_vectors(ankle_end - ankle_start, x))
-    distal_orientation = ankle_end[1] - ankle_start[1]
-
-    if np.sign(proximal_orientation) != np.sign(distal_orientation):
-        angle = distal_angle + proximal_angle
-    else:
-        angle = distal_angle - proximal_angle
+    angle = _tibial_torsion_angle(knee_start, knee_end, ankle_start, ankle_end, side)
 
     if plot is not False:
         knee_bin = np.where(knee_mask == tibia_label_knee, 1, 0)

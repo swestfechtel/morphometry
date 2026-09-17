@@ -53,3 +53,17 @@ def test_validate_side():
     G.validate_side("right")
     with pytest.raises(AssertionError):
         G.validate_side("patient_left")
+
+
+@pytest.mark.parametrize("reference,direction,side,expected", [
+    ((1, 0), (1, 0), "left", 0.0),
+    ((1, 0), (1, -1), "left", 45.0),     # medial (+x) towards anterior (-y): positive
+    ((-1, 0), (-1, 1), "left", 45.0),    # lateral (-x) towards posterior (+y): same sense
+    ((1, 0), (1, 1), "left", -45.0),
+    ((-1, 0), (1, -1), "left", 45.0),    # the reference line is undirected
+    ((1, 0), (-1, -1), "left", -45.0),   # 135 degrees folds to -45
+    ((0, 1), (1, 0), "left", 90.0),      # the +-90 seam resolves to +90
+    ((-1, 0), (-1, -1), "right", 45.0),  # mirror of ((1, 0), (1, -1), "left")
+])
+def test_signed_axial_angle(reference, direction, side, expected):
+    assert G.signed_axial_angle(np.array(reference), np.array(direction), side) == pytest.approx(expected)

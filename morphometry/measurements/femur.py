@@ -27,7 +27,15 @@ from morphometry import geometry as G
 
 
 def _order_knee_points(knee_start: np.ndarray, knee_end: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """Order the posterior-condylar endpoints so the start is lateral to the end (start[0] >= end[0])."""
+    """Order the posterior-condylar endpoints so the start has the larger x index (start[0] >= end[0]).
+
+    In LPI, x increases towards the patient's left, so the start is the MEDIAL point on a left image
+    half (a patient-right femur, medial = +x) and the lateral point on a right image half. The order
+    only fixes how the landmarks are reported; the torsion angle does not depend on it.
+    :param knee_start: One posterior-condyle reference point.
+    :param knee_end: The other posterior-condyle reference point.
+    :return: ``(start, end)`` with ``start[0] >= end[0]``.
+    """
     if knee_start[0] < knee_end[0]:
         return knee_end, knee_start
     return knee_start, knee_end
@@ -44,34 +52,46 @@ def _proximal_angle(hip_start: np.ndarray, hip_end: np.ndarray, side: str) -> fl
 
 def _femoral_torsion_angle(hip_start: np.ndarray, hip_end: np.ndarray,
                            knee_start: np.ndarray, knee_end: np.ndarray, side: str) -> float:
-    """Combine the proximal neck angle and distal condylar angle into the femoral torsion.
+    """Compose the femoral torsion from the neck axis and the posterior condylar line.
 
-    The proximal and distal angles are each folded into [0, 90]; they are added when
-    the neck and condylar lines point to opposite anterior-posterior sides and
-    subtracted otherwise. ``hip_start`` is expected to already be aligned to
-    ``hip_end`` in the axial (z) coordinate by the caller.
+    The torsion is the signed angle, in the axial (x, y) plane, from the posterior condylar line to
+    the femoral neck axis, positive for antetorsion (neck turned anteriorly relative to the
+    condyles) and negative for retrotorsion. Only the in-plane directions of the two lines enter, so
+    the result is invariant to an in-plane rotation of the whole leg in the scanner.
+
+    Sign derivation (LPI index frame: x increases towards the patient's left, y posteriorly). A left
+    image half holds a patient-right femur, so medial is +x and anterior is -y. With the neck
+    directed neck point -> head centre (``n``, pointing medially) and ``c`` along the condylar line,
+    the angle measured from medial towards anterior in the (x, anterior) plane is
+    ``atan2(c_x * (-n_y) - (-c_y) * n_x, c . n) = atan2(-(c_x n_y - c_y n_x), c . n)``
+    (:func:`morphometry.geometry.signed_axial_angle`, shared with the tibial torsion). The
+    condylar line has no direction, so the angle is folded into (-90, 90] (equivalently, ``c`` is
+    taken pointing the same way as ``n``); the endpoint order of the condylar points is irrelevant.
+    A right image half holds the mirror-image femur (medial = -x), so ``side='right'`` negates the
+    x components first.
+
+    This replaces a composition that folded both lines to acute angles against the image x-axis
+    and combined them by the signs of their y-offsets. That equalled the signed angle only while the
+    femoral head lay anterior to the neck point in the image; otherwise it returned the negated
+    torsion (a jump of ``2 * |torsion|`` as the neck crossed the image x-axis) and, past 90 degrees,
+    a wrong magnitude.
+
+    ``hip_start`` is expected to already be aligned to ``hip_end`` in the axial (z) coordinate by
+    the caller; z is ignored here. The angle is computed from voxel indices, so it assumes equal
+    in-plane x/y spacing (as did the former composition; true for the Augsburg MRI and typical CT).
     :param hip_start: Proximal reference line start (femoral head centre).
     :param hip_end: Proximal reference line end (neck axis point).
     :param knee_start: One posterior-condyle reference point.
     :param knee_end: The other posterior-condyle reference point.
-    :param side: Image side, 'left' or 'right'.
-    :return: The femoral torsion angle in degrees.
+    :param side: Image side, 'left' or 'right'. Production composes with 'left' only (a right half
+        is reflected and measured in that frame, see :func:`_mri_torsion` / :func:`_ct_torsion`);
+        'right' is the mirror of that convention, pinned by
+        ``tests/unit/test_torsion_angle_equivariance.py``.
+    :return: The femoral torsion angle in degrees, in (-90, 90]; negative means retrotorsion.
     """
-    knee_start, knee_end = _order_knee_points(knee_start, knee_end)
-
-    proximal_angle = _proximal_angle(hip_start, hip_end, side)
-    proximal_orientation = hip_end[1] - hip_start[1]  # positive if hip_end is posterior to hip_start
-
-    distal_line = knee_end - knee_start
-    distal_angle = G.fold_to_acute(calculate_angle_between_vectors(distal_line, np.array([-1, 0, 0])))
-    # production composes only with side='left' (a right half is reflected and measured in that
-    # frame, see _mri_torsion / _ct_torsion); the 'right' branch is kept because it pins the
-    # mirror-consistent convention exercised by tests/unit/test_torsion_angle_equivariance.py
-    distal_orientation = (knee_end[1] - knee_start[1]) if side == 'left' else (knee_start[1] - knee_end[1])
-
-    if np.sign(proximal_orientation) != np.sign(distal_orientation):
-        return proximal_angle + distal_angle
-    return proximal_angle - distal_angle
+    neck = np.asarray(hip_start, dtype=float) - np.asarray(hip_end, dtype=float)
+    condyles = np.asarray(knee_start, dtype=float) - np.asarray(knee_end, dtype=float)
+    return G.signed_axial_angle(condyles, neck, side)
 
 
 def _mirror_landmarks(hip_start, hip_end, knee_start, knee_end, hip_width: int, knee_width: int):
@@ -96,8 +116,8 @@ def _mri_torsion(hip_image: Image, knee_mask: np.ndarray, side: str, method: str
     are found by the left-side code on the reflected hip image and the reversed knee mask, the
     angle is composed there with the left-side conventions, and only the landmarks are mapped
     back (``x -> n - 1 - x``). The result is mirror-equivariant by construction, including the
-    knee condylar line (whose search is not itself mirror-symmetric) and ties in the condylar
-    ordering.
+    knee condylar line (whose search is not itself mirror-symmetric) and ties in the reported
+    condylar ordering (the angle itself no longer depends on that order).
     :return: ``(angle, (hip_start, hip_end, knee_start, knee_end))``.
     """
     if side == 'right':

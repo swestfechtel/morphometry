@@ -235,8 +235,10 @@ def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmenta
 
     This is the proximal half of the femoral torsion: the acute angle between the
     femoral neck axis (Murphy reference line) and the medial-lateral axis, signed
-    negative when the neck end is anterior to the femoral head centre. It shares the
-    proximal-angle computation with :func:`morphometry.measurements.femur.calculate_femoral_torsion`.
+    negative when the neck end is anterior to the femoral head centre. It uses the same
+    reference line as :func:`morphometry.measurements.femur.calculate_femoral_torsion`, but not its
+    angle composition: the torsion is a signed, rotation-invariant angle between the neck axis and
+    the posterior condylar line, whereas this is the folded neck angle against the image x-axis.
     :param segmentation_mask: An Image of the proximal-femur segmentation mask.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.

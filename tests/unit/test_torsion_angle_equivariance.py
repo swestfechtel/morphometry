@@ -46,11 +46,9 @@ def test_torsion_angle_is_invariant_under_mirroring_with_the_side_swapped(seed):
     rng = np.random.default_rng(seed)
     n_hip, n_knee = 200, 210
     hs, he, ks, ke = _random_landmarks(rng)
-    if ks[0] == ke[0]:
-        # a condylar line exactly along y is a tie for ``_order_knee_points``, which keeps the
-        # given order on either side and so is not mirror-consistent; the right-side torsion
-        # therefore composes its angle in the mirrored (left-sided) frame instead of relying on this
-        ks[0] += 1
+    # no tie-breaking needed for a condylar line exactly along y: the composition treats the
+    # condylar line as undirected and never orders its endpoints (the ordering helper is tested
+    # separately below)
     ms, me = _mirror_x(hs, n_hip), _mirror_x(he, n_hip)
     mks, mke = _mirror_x(ks, n_knee), _mirror_x(ke, n_knee)
 
