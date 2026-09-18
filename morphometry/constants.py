@@ -88,6 +88,13 @@ FEMORAL_HEAD_SEED_DEPTH_MM = 30.0
 #: at the default tolerance. Hitting the cap logs a WARNING on the ``morphometry.hip`` logger.
 FEMORAL_HEAD_CONSENSUS_MAX_ITERATIONS = 100
 
+#: Minimum distance, in mm, of Murphy's neck-base level below the femoral head centre. Adult femoral
+#: heads have radii of ~18-26 mm, so a level less than about half a radius below the centre lies inside
+#: the head: the "lesser trochanter" was mis-detected and the head-to-base axis would be a few mm long.
+#: On the Augsburg, NMDID and NaKo-sample hips the levels fall either below 5 mm (all mis-detections)
+#: or above 11 mm; 5 and 10 mm reject the same legs.
+MURPHY_NECK_BASE_MIN_HEAD_DISTANCE_MM = 10.0
+
 # --- Subchondral / cartilage -------------------------------------------------
 #: Outer radius factor of the sphere shell used to find femoral-head surface points
 #: facing the acetabulum (minimum-distance measurement).

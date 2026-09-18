@@ -9,6 +9,7 @@ from morphometry.hip import get_femoral_head_center, get_femoral_head_center_ct
 from morphometry.utils import rotate_mask_dorsal_points, find_notch, transform_point, points_on_circle, \
     get_contour, circle_fit, draw_circle, draw_line, extract_connected_components_2d
 from morphometry.image_io import Image, Segmentation, reflect_image_left_right, split_ct_image
+from morphometry import constants as C
 from typing import Tuple
 
 
@@ -236,7 +237,27 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, segm
     :param femoral_head_centre: The centre of the femoral head.
     :param segmentation_label: The label of the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
-    :return: The coordinates of the trochanter minor.
+    :return: ``(x, y, layer)``: the axial slice through the trochanter minor's centroid, and on it the
+        centroid of the bone medial of the femoral shaft's medial edge (voxel indices).
+    """
+    point, _ = _find_trochanter_minor(hip_image, femoral_head_centre, segmentation_label, isotropic)
+    return point
+
+
+def _find_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1,
+                           isotropic: bool = False) -> Tuple[np.ndarray, int]:
+    """
+    Find the trochanter minor and the axial slice of its superior extent.
+
+    The trochanter minor is the smaller component of the first sagittal slice, scanning from medial to
+    lateral, that splits the femur into two components one of which lies 40-75 mm from the femoral
+    head centre in the medial-lateral / superior-inferior plane.
+    :param hip_image: An Image object of the hip segmentation mask.
+    :param femoral_head_centre: The centre of the femoral head (voxel index).
+    :param segmentation_label: The label of the segmentation mask.
+    :param isotropic: Whether the image has isotropic voxels.
+    :return: The point returned by :func:`get_trochanter_minor`, and the most superior axial slice
+        (smallest index; LPI) holding that sagittal component.
     """
 
     def check_plausibility(trochanter_minor) -> bool | float:
@@ -328,29 +349,50 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, segm
     # axial_layer_com = center_of_mass(hip_mask[:, :, axial_layer])
     axial_layer_com = center_of_mass(femur_shaft)
 
-    return np.array([axial_layer_com[0], axial_layer_com[0], axial_layer])
+    superior_layer = int(np.min(np.nonzero(smaller_component)[1]))  # sagittal slices are (y, z)
+    return np.array([axial_layer_com[0], axial_layer_com[1], axial_layer]), superior_layer
 
 def get_femoral_neck_base(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1, isotropic: bool = False) -> np.ndarray:
     """
     Get the centre of the base of the femoral neck as described by Murphy et al.
 
-    Alternative implementation where search space is restricted to all slices inferior to torchanter major.
+    Murphy et al. (1987) take the centre of the femoral neck base "at the level just above the lesser
+    trochanter": the level is the first axial slice superior of the trochanter minor's superior extent
+    (see :func:`_find_trochanter_minor`), i.e. as close above it as the acquisition resolves -- 10 mm on
+    the Augsburg hip MRI, 3 mm on whole-leg CT, 1 mm on the isotropic NaKo hips. The centre is the femur
+    centroid on that slice, as a continuous index.
+
+    The slice through the trochanter itself, used formerly, includes the trochanter and the proximal
+    shaft and read 1-2 degrees more antetorsion on the Augsburg hips. A larger fixed offset was tried
+    and rejected: against the NaKo raters' signed manual Murphy values (1 mm data, 120 hips) a 10 mm
+    level reads +5.6 degrees high with ICC2 0.85, against 0-5 mm levels (bias -1.2 to +2.2, ICC2 up to
+    0.94) -- the raters place the point just above the trochanter, as described. The Augsburg hips cannot
+    tell offsets up to 10 mm apart, since they all select the same slice there.
     :param hip_image: An Image object of the hip segmentation mask.
-    :param femoral_head_centre: The centre of the femoral head.
+    :param femoral_head_centre: The centre of the femoral head (voxel index).
     :param segmentation_label: The label of the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
-    :return: The centre of the base of the femoral neck.
+    :return: The centre of the base of the femoral neck, ``(x, y, layer)`` with ``x`` and ``y`` continuous.
+    :raises RuntimeError: If the level is less than ``C.MURPHY_NECK_BASE_MIN_HEAD_DISTANCE_MM`` below the
+        head centre (a mis-detected trochanter), or holds no femur.
     """
-    trochanter_minor = get_trochanter_minor(hip_image=hip_image, femoral_head_centre=femoral_head_centre, segmentation_label=segmentation_label, isotropic=isotropic)
-    trochanter_minor_layer = int(trochanter_minor[2])
+    _, superior_layer = _find_trochanter_minor(hip_image=hip_image, femoral_head_centre=femoral_head_centre,
+                                               segmentation_label=segmentation_label, isotropic=isotropic)
+    slice_mm = abs(float(hip_image.spacing[2]))
+    level = superior_layer - 1
+    if (level - femoral_head_centre[2]) * slice_mm < C.MURPHY_NECK_BASE_MIN_HEAD_DISTANCE_MM:
+        # the neck base lies well distal to the head centre; a level within the head is a mis-detected
+        # trochanter minor, and the resulting axis would be a few millimetres long
+        raise RuntimeError('Trochanter minor found too close to (or above) the femoral head centre; '
+                           'no neck base below the head.')
+    if level < 0:
+        raise RuntimeError('The neck-base level lies above the image.')
+    array = np.where(hip_image.array == segmentation_label, 1, 0)
+    if not array[:, :, level].any():
+        raise RuntimeError('No femur on the neck-base slice above the trochanter minor.')
 
-    array = hip_image.array.copy()
-    array = np.where(array == segmentation_label, 1, 0)
-
-    center = np.array(center_of_mass(array[:, :, trochanter_minor_layer])).astype(np.int16)
-    center = np.array([center[0], center[1], trochanter_minor_layer])
-    # center = trochanter_minor.astype(np.int16)
-    return center
+    center = center_of_mass(array[:, :, level])
+    return np.array([center[0], center[1], float(level)])
 
 def get_trochanter_major_center(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1) -> Tuple[np.ndarray, float]:
     """
@@ -430,15 +472,18 @@ def get_proximal_reference_line(hip_image: Image, side: str = 'left',
                                                                   segmentation_label=segmentation_label,
                                                                   return_layers=True, x_ratio=x_ratio,
                                                                   isotropic=isotropic, spacing=hip_image.spacing)
-    center = center.astype(np.int16)
 
     if method == 'lee':
+        center = center.astype(np.int16)  # the Lee neck search indexes the mask with the centre
         array = hip_image.array.copy()
         array = np.where(array == segmentation_label, 1, 0)
         end = get_femoral_neck_center_lee(array, center, r_fh)
     elif method == 'murphy':
+        # continuous head centre and neck-base centroid: the axis is short (~25 mm in-plane on the
+        # Augsburg hips), so truncating either end to an index would rotate it by up to ~2 degrees
         end = get_femoral_neck_base(hip_image=hip_image, femoral_head_centre=center, segmentation_label=segmentation_label, isotropic=isotropic)
     elif method == 'tomczak':
+        center = center.astype(np.int16)
         end, r_tm = get_trochanter_major_center(hip_image, center, segmentation_label)
 
     start: np.ndarray = np.array([center[0], center[1], center[2]])

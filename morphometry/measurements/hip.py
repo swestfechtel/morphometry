@@ -260,14 +260,14 @@ def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmenta
         angle = -angle
 
     if plot is not False:
-        plot[0].imshow(segmentation_mask.array[:, :, hip_start[2]].T, cmap='gray')
-        tmp = segmentation_mask.array[:, :, fhc_layer].copy().T
+        plot[0].imshow(segmentation_mask.array[:, :, int(hip_start[2])].T, cmap='gray')
+        tmp = segmentation_mask.array[:, :, int(round(fhc_layer))].copy().T
         tmp = np.where(tmp == 0, np.nan, tmp)
         plot[0].imshow(tmp, alpha=.5)
         plot[0].plot([hip_start[0], hip_end[0]], [hip_start[1], hip_end[1]], 'r-')
         plot[0].set_aspect('equal')
 
-        plot[1].imshow(segmentation_mask.array[:, hip_end[1]].T)
+        plot[1].imshow(segmentation_mask.array[:, int(round(hip_end[1]))].T)
         plot[1].plot([hip_start[0], hip_end[0]], [fhc_layer, hip_end[2]], 'r')
         # plot[1].set_aspect(x_ratio)
 
