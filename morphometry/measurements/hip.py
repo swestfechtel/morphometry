@@ -229,7 +229,7 @@ def calculate_ccd_ct(femur_image: Segmentation, side: str = 'left', segmentation
 
     return ccd, ccd_projected
 
-def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, plot: Tuple[plt.Axes, plt.Axes] | bool = False) -> float:
+def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: Optional[float] = None, plot: Tuple[plt.Axes, plt.Axes] | bool = False) -> float:
     """
     Calculate the femoral neck anteversion (signed proximal neck angle).
 
@@ -243,15 +243,24 @@ def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmenta
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
+    :param x_ratio: Slice-thickness correction (slice spacing in in-plane voxels). ``None`` derives it
+        from the image, ``spacing_z / spacing_x``. It used to be hard-coded to 1, which is wrong on
+        anisotropic data; the value is inert on the data measured so far, because since the head
+        centre became a consensus fit in millimetres, ``x_ratio`` only bounds the femoral-head slab
+        walk, and that bound does not bite on the Augsburg (10 mm) or NaKo (isotropic) hips.
     :param plot: A pair of matplotlib Axes to draw the reference line on, or False.
     :return: The anteversion angle in degrees.
     """
     # TODO revise: the anteversion convention here is provisional.
     G.validate_side(side)
 
+    spacing = np.abs(np.asarray(segmentation_mask.spacing, dtype=float))
+    if x_ratio is None:
+        x_ratio = float(spacing[2] / spacing[0])
+
     hip_start, hip_end = get_proximal_reference_line(
         segmentation_mask, side=side, method='murphy', segmentation_label=segmentation_label,
-        isotropic=isotropic, x_ratio=1)[:2]
+        isotropic=isotropic, x_ratio=x_ratio)[:2]
     fhc_layer = hip_start[2]
     hip_start[2] = hip_end[2]  # align axial coordinate
 

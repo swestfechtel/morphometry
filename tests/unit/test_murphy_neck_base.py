@@ -126,3 +126,20 @@ def test_neck_base_level_is_the_first_slice_above_the_lesser_trochanter_at_any_s
 
     assert base[2] == lt_top_mm / slice_mm - 1
     np.testing.assert_allclose(base[:2], np.argwhere(image.array[:, :, int(base[2])] == 1).mean(axis=0), atol=1e-9)
+
+
+def test_anteversion_derives_the_slice_aspect_from_the_image():
+    """``calculate_anteversion`` passes the image's own slice aspect down, not a hard-coded 1.
+
+    ``x_ratio`` bounds the femoral-head slab walk; hard-coding 1 told that bound the slices were one
+    in-plane voxel apart, so on anisotropic data it was effectively no bound at all.
+    """
+    from unittest import mock
+
+    from morphometry.measurements import hip as hip_measurements
+
+    image = _image(proximal_femur((9,)))
+    with mock.patch.object(hip_measurements, 'get_proximal_reference_line',
+                           wraps=hip_measurements.get_proximal_reference_line) as spy:
+        hip_measurements.calculate_anteversion(image, side='left')
+    assert spy.call_args.kwargs['x_ratio'] == pytest.approx(SPACING[2] / SPACING[0])
