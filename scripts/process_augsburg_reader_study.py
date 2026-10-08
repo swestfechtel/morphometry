@@ -116,13 +116,13 @@ def process_patient(patient):
     try:
         ccd_left_actual, ccd_left_projected = calculate_ccd(left_hip, left_knee, 'left', 1, False, x_ratio, plot=p)
         ccd_left = (ccd_left_actual, ccd_left_projected)
-    except (NotImplementedError) as e:
+    except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate CCD for the left side.', e)
         ccd_left = (np.nan, np.nan)
 
     try:
-        ccd_left_actual, ccd_left_projected = calculate_ccd(right_hip, right_knee, 'right', 1, False, x_ratio, plot=p)
-        ccd_right = (ccd_left_actual, ccd_left_projected)
+        ccd_right_actual, ccd_right_projected = calculate_ccd(right_hip, right_knee, 'right', 1, False, x_ratio, plot=p)
+        ccd_right = (ccd_right_actual, ccd_right_projected)
     except (ValueError, IndexError, RuntimeError) as e:
         print(patient, f'Failed to calculate CCD for the right side.', e)
         ccd_right = (np.nan, np.nan)
