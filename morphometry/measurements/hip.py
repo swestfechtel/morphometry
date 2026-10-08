@@ -85,10 +85,15 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
     the hip and the knee are separately acquired, so equal array widths are not sufficient. Measured
     on the Augsburg cases, reflecting the two about their own centres costs a median 1.22 degrees
     (5.7 on PA000031), i.e. five times the defect being fixed. Keeping the physical positions also
-    means the ``plot`` overlays are unaffected -- they are drawn in physical space, where the
-    mirrored leg sits exactly where the leg sits, and keeps the two legs' plot colours apart (the
-    overlays colour by the reported ``side``, which the NaKo scripts rely on to tell the legs apart
-    when they draw both into one plotter).
+    means the ``plot`` overlays are unaffected: they are drawn in physical space, where the mirrored
+    leg sits exactly where the leg sits.
+
+    The overlay *colour* is a separate matter, and is kept right by confining the mirroring to
+    ``search_side`` rather than by the choice of mirror over reflection: the overlays colour by the
+    reported ``side``, which the NaKo scripts rely on to tell the legs apart when they draw both into
+    one plotter, so the mirroring must not be reached by recursing with ``side='left'``. A reflection
+    would have kept the colours equally right under this structure, and a mirror would have lost them
+    under a recursive one.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
