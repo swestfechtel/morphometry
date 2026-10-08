@@ -10,6 +10,7 @@ from morphometry.utils import rotate_mask_dorsal_points, find_notch, transform_p
     get_contour, circle_fit, draw_circle, draw_line, extract_connected_components_2d
 from morphometry.image_io import Image, Segmentation, reflect_image_left_right, split_ct_image
 from morphometry import constants as C
+from morphometry.geometry import mirror_index_x
 from typing import Tuple
 
 
@@ -418,19 +419,6 @@ def get_trochanter_major_center(hip_image: Image, femoral_head_centre: np.ndarra
     center = np.array([center[0], center[1], trochanter_major_layer]).astype(np.int16)
     return center, radius
 
-def _mirror_index_x(point: np.ndarray, width: int) -> np.ndarray:
-    """
-    Map a voxel index between an image and its left-right reflection: ``x -> width - 1 - x``.
-
-    Exact for integer and continuous indices alike, and its own inverse.
-    :param point: A length-3 index (integer or float); it is not modified.
-    :param width: The size of the image along the first index axis.
-    :return: A copy of ``point`` with the first coordinate mirrored (same dtype).
-    """
-    mirrored = np.array(point, copy=True)
-    mirrored[0] = width - 1 - mirrored[0]
-    return mirrored
-
 
 def get_proximal_reference_line(hip_image: Image, side: str = 'left',
                                 method: str = 'lee', segmentation_label: int = 1,
@@ -466,7 +454,7 @@ def get_proximal_reference_line(hip_image: Image, side: str = 'left',
         start, end, *radii = get_proximal_reference_line(reflect_image_left_right(hip_image), side='left',
                                                          method=method, segmentation_label=segmentation_label,
                                                          x_ratio=x_ratio, isotropic=isotropic)
-        return (_mirror_index_x(start, width), _mirror_index_x(end, width), *radii)
+        return (mirror_index_x(start, width), mirror_index_x(end, width), *radii)
 
     r_fh, center, layer_high, layer_low = get_femoral_head_center(hip_image.array, side=side,
                                                                   segmentation_label=segmentation_label,
@@ -511,7 +499,7 @@ def get_proximal_reference_line_ct(femur_image: Segmentation, side: str = 'left'
         width = femur_image.array.shape[0]
         start, end = get_proximal_reference_line_ct(reflect_image_left_right(femur_image), side='left',
                                                     segmentation_label=segmentation_label)
-        return _mirror_index_x(start, width), _mirror_index_x(end, width)
+        return mirror_index_x(start, width), mirror_index_x(end, width)
 
     r_fh, fhc = get_femoral_head_center_ct(femur_image, segmentation_label, side)
     tmp = fhc + np.array([r_fh, 0, 0])  # rationale: point on the surface of the femoral head in arbitrary direction

@@ -14,31 +14,14 @@ for a left image half; a right half is measured as the left-right reflection of 
 landmarks are mapped back (``x -> n - 1 - x``), so both sides are mirror-equivariant by construction
 (see :func:`_mri_torsion`).
 """
-from typing import Tuple
-
 import numpy as np
 from matplotlib import pyplot as plt
 
 from morphometry.image_io import Image, Segmentation, reflect_image_left_right
-from morphometry.femur import _mirror_index_x, get_proximal_reference_line, get_proximal_reference_line_ct
+from morphometry.femur import get_proximal_reference_line, get_proximal_reference_line_ct
 from morphometry.knee import get_knee_reference_line
 from morphometry.utils import calculate_angle_between_vectors
 from morphometry import geometry as G
-
-
-def _order_knee_points(knee_start: np.ndarray, knee_end: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """Order the posterior-condylar endpoints so the start has the larger x index (start[0] >= end[0]).
-
-    In LPI, x increases towards the patient's left, so the start is the MEDIAL point on a left image
-    half (a patient-right femur, medial = +x) and the lateral point on a right image half. The order
-    only fixes how the landmarks are reported; the torsion angle does not depend on it.
-    :param knee_start: One posterior-condyle reference point.
-    :param knee_end: The other posterior-condyle reference point.
-    :return: ``(start, end)`` with ``start[0] >= end[0]``.
-    """
-    if knee_start[0] < knee_end[0]:
-        return knee_end, knee_start
-    return knee_start, knee_end
 
 
 def _proximal_angle(hip_start: np.ndarray, hip_end: np.ndarray, side: str) -> float:
@@ -99,12 +82,12 @@ def _mirror_landmarks(hip_start, hip_end, knee_start, knee_end, hip_width: int, 
 
     ``x -> width - 1 - x`` with the hip image's width for the ``hip_*`` points and the knee image's
     width for the ``knee_*`` points; the condylar endpoints are then re-ordered with
-    :func:`_order_knee_points` in the target frame.
+    :func:`morphometry.geometry.order_condylar_points` in the target frame.
     :return: ``(hip_start, hip_end, knee_start, knee_end)`` in the mirrored frame.
     """
-    hip_start, hip_end = _mirror_index_x(hip_start, hip_width), _mirror_index_x(hip_end, hip_width)
-    knee_start, knee_end = _order_knee_points(_mirror_index_x(knee_start, knee_width),
-                                              _mirror_index_x(knee_end, knee_width))
+    hip_start, hip_end = G.mirror_index_x(hip_start, hip_width), G.mirror_index_x(hip_end, hip_width)
+    knee_start, knee_end = G.order_condylar_points(G.mirror_index_x(knee_start, knee_width),
+                                                   G.mirror_index_x(knee_end, knee_width))
     return hip_start, hip_end, knee_start, knee_end
 
 
@@ -139,7 +122,7 @@ def _mri_torsion_reference_points(hip_image: Image, knee_mask: np.ndarray, side:
 
     knee_bin = np.where(knee_mask == segmentation_label, 1, 0)
     _, knee_start, knee_end = get_knee_reference_line(knee_bin, bone='femur', segmentation_label=segmentation_label)
-    knee_start, knee_end = _order_knee_points(knee_start, knee_end)
+    knee_start, knee_end = G.order_condylar_points(knee_start, knee_end)
     return hip_start, hip_end, knee_start, knee_end
 
 
@@ -216,7 +199,7 @@ def _ct_torsion_reference_points(femur_image: Segmentation, knee_image: Segmenta
 
     knee_bin = np.where(knee_image.array == segmentation_label, 1, 0)
     _, knee_start, knee_end = get_knee_reference_line(knee_bin, bone='femur', segmentation_label=segmentation_label)
-    knee_start, knee_end = _order_knee_points(knee_start, knee_end)
+    knee_start, knee_end = G.order_condylar_points(knee_start, knee_end)
     return hip_start, hip_end, knee_start, knee_end
 
 

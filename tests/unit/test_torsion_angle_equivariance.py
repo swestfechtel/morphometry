@@ -2,7 +2,7 @@
 
 A right image half is the mirror image of a left one: the voxel at ``x`` corresponds to
 ``n - 1 - x``. The side-dependent conventions in ``_proximal_angle``,
-``_order_knee_points`` and ``_femoral_torsion_angle`` must therefore give the same angle
+``order_condylar_points`` and ``_femoral_torsion_angle`` must therefore give the same angle
 for left-side landmarks under ``side='left'`` and for their mirrored counterparts under
 ``side='right'``. If this holds, any left/right asymmetry of the femoral torsion lies in
 the landmark extraction, not in how the angle is composed.
@@ -10,7 +10,8 @@ the landmark extraction, not in how the angle is composed.
 import numpy as np
 import pytest
 
-from morphometry.measurements.femur import _femoral_torsion_angle, _order_knee_points, _proximal_angle
+from morphometry.geometry import order_condylar_points
+from morphometry.measurements.femur import _femoral_torsion_angle, _proximal_angle
 
 
 def _mirror_x(point: np.ndarray, n: int) -> np.ndarray:
@@ -68,5 +69,5 @@ def test_proximal_angle_and_knee_ordering_are_mirror_consistent(seed):
         _proximal_angle(hs, he, 'left'), abs=1e-9)
 
     ks[0] = ke[0] + 1 + rng.integers(0, 50)  # strictly lateral start, so the order is unambiguous
-    start, end = _order_knee_points(_mirror_x(ks, n), _mirror_x(ke, n))
+    start, end = order_condylar_points(_mirror_x(ks, n), _mirror_x(ke, n))
     assert np.array_equal(start, _mirror_x(ke, n)) and np.array_equal(end, _mirror_x(ks, n))
