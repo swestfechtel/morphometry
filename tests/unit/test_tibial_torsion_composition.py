@@ -10,7 +10,9 @@ former composition folded both lines to acute angles against the image x-axis an
 signs of their y-offsets, which returned ``-TT`` whenever the fibula centroid lay level with or
 anterior to the tibia centroid in the image, and a wrong magnitude past 90 degrees.
 
-The landmark search is patched out, so ``calculate_tibial_torsion`` composes the given points.
+These tests exercise the composition directly (``_tibial_torsion_angle``); production reaches the
+right side by reflecting the masks and composing with the left-side conventions
+(``_tibial_torsion_points``), so the 'right' convention here is the mirror it must be.
 """
 import itertools
 
@@ -69,16 +71,14 @@ def _mirror(points, n: int = 200):
     return mirrored
 
 
-def _compose(monkeypatch, points, side: str) -> float:
-    """Run ``calculate_tibial_torsion`` on given landmarks, bypassing the landmark search.
+def _compose(points, side: str) -> float:
+    """Compose the tibial torsion from given landmarks (the composition alone, no landmark search).
 
-    :param monkeypatch: The pytest monkeypatch fixture.
     :param points: ``(knee_start, knee_end, ankle_start, ankle_end)``.
     :param side: Image side, 'left' or 'right'.
     :return: The composed tibial torsion in degrees.
     """
-    monkeypatch.setattr(T, '_tibial_torsion_reference_points', lambda *args, **kwargs: tuple(points))
-    return T.calculate_tibial_torsion(None, None, 2, 1, 2, side=side)
+    return T._tibial_torsion_angle(*points, side)
 
 
 TORSIONS = [-20, -5, 0, 10, 25, 35, 45, 60]
@@ -86,12 +86,12 @@ ROTATIONS = [-60, -40, -20, -10, -5, 0, 5, 10, 20, 30, 40, 60]
 
 
 @pytest.mark.parametrize('torsion,rotation', list(itertools.product(TORSIONS, ROTATIONS)))
-def test_torsion_is_recovered_at_any_whole_leg_rotation(monkeypatch, torsion, rotation):
+def test_torsion_is_recovered_at_any_whole_leg_rotation(torsion, rotation):
     """The composed angle equals the true torsion for every whole-leg rotation, on both image sides."""
     points = _synthetic_landmarks(torsion, rotation)
-    assert _compose(monkeypatch, points, 'left') == pytest.approx(torsion, abs=1e-9)
+    assert _compose(points, 'left') == pytest.approx(torsion, abs=1e-9)
     # the image-right half holds the mirror-image (patient-left) leg
-    assert _compose(monkeypatch, _mirror(points), 'right') == pytest.approx(torsion, abs=1e-9)
+    assert _compose(_mirror(points), 'right') == pytest.approx(torsion, abs=1e-9)
 
 
 @pytest.mark.parametrize('torsion,rotation,description', [
@@ -100,20 +100,20 @@ def test_torsion_is_recovered_at_any_whole_leg_rotation(monkeypatch, torsion, ro
     (35, -40, 'fibula centroid anterior to the tibia centroid'),
     (45, 60, 'distal line past 90 degrees in the image'),
 ])
-def test_edge_cases(monkeypatch, torsion, rotation, description):
+def test_edge_cases(torsion, rotation, description):
     """Configurations the former fold-and-sign composition got wrong or only got right by accident."""
     points = _synthetic_landmarks(torsion, rotation)
-    assert _compose(monkeypatch, points, 'left') == pytest.approx(torsion, abs=1e-9), description
+    assert _compose(points, 'left') == pytest.approx(torsion, abs=1e-9), description
 
 
-def test_condylar_point_order_does_not_matter(monkeypatch):
+def test_condylar_point_order_does_not_matter():
     """The posterior condylar line has no direction: swapping its endpoints leaves the angle unchanged."""
     knee_start, knee_end, tibia, fibula = _synthetic_landmarks(30, 15)
-    assert _compose(monkeypatch, (knee_end, knee_start, tibia, fibula), 'left') == pytest.approx(30, abs=1e-9)
+    assert _compose((knee_end, knee_start, tibia, fibula), 'left') == pytest.approx(30, abs=1e-9)
 
 
 @pytest.mark.parametrize('seed', range(100))
-def test_rigid_in_plane_rotation_of_arbitrary_landmarks_leaves_the_angle_unchanged(monkeypatch, seed):
+def test_rigid_in_plane_rotation_of_arbitrary_landmarks_leaves_the_angle_unchanged(seed):
     """Rotating all four landmarks about any in-plane centre leaves the composed angle unchanged."""
     rng = np.random.default_rng(seed)
     points = [rng.uniform(20, 180, 3) for _ in range(4)]
@@ -126,8 +126,8 @@ def test_rigid_in_plane_rotation_of_arbitrary_landmarks_leaves_the_angle_unchang
         moved[:2] = rotation @ (point[:2] - centre) + centre
         rotated.append(moved)
     for side in ('left', 'right'):
-        before = _compose(monkeypatch, points, side)
-        after = _compose(monkeypatch, rotated, side)
+        before = _compose(points, side)
+        after = _compose(rotated, side)
         # the result lives in (-90, 90]; compare on the circle so a value at the +-90 seam cannot fail
         assert np.cos(np.radians(2 * (after - before))) == pytest.approx(1, abs=1e-9)
         assert -90 < after <= 90
