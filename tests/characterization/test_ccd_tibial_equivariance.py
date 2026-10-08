@@ -19,6 +19,20 @@ a tail into the tens of degrees on the legs whose notch search fails.
 The CCD and the tibial torsion are angles between two landmark-derived vectors, so a reflection of
 the anatomy cannot change them; only the landmark search is mirrored.
 
+What these tests can and cannot catch: because the right side is now measured by reflecting the half
+and running the left-side code, the array handed to that code is bit-identical between reference and
+probe for the tibial and the CT tests, so their *angle* assertions are tautological -- they can only
+fail if a separate right-side branch is reintroduced or ``mirror_image_left_right`` and
+``reflect_image_left_right`` are swapped. The landmark assertions are not: they compare mapped
+indices, and they do fail against the pre-change code (see below). The MRI CCD probe has real content, because
+``_reflected_about_world_x0`` gives it a different affine from the production mirror. They cannot
+catch defects in the shared left-side code, which a mirrored probe reproduces identically on both
+sides. Note also that the two assertions of the tibial test have different strength on PA000001: the
+landmark assertion is the one that fails against the pre-change code (the condylar x is off by one
+voxel, 67 vs 66), while the angle assertion passed there too, because that leg is one of the ~12%
+whose condylar *vector* survives the mirror unchanged. ``tibial_torsion_ct_right`` is the golden that
+records a right-side tibial value which actually moved.
+
 The MRI CCD spans two images (hip and knee) whose affines have different origins, so the probe has to
 reflect both about ONE common physical plane (``_reflected_about_world_x0``). Reflecting each about
 its own array centre — what ``reflect_image_left_right`` does — moves the two by different amounts
@@ -52,6 +66,20 @@ def _mirror_x(point, n: int) -> np.ndarray:
     point = np.asarray(point, dtype=float).copy()
     point[0] = n - 1 - point[0]
     return point
+
+
+def _same_pair(a, b, c, d, abs_tol: float) -> bool:
+    """Whether the unordered point pairs ``{a, b}`` and ``{c, d}`` coincide within ``abs_tol``.
+
+    :param a: First point of the first pair.
+    :param b: Second point of the first pair.
+    :param c: First point of the second pair.
+    :param d: Second point of the second pair.
+    :param abs_tol: Absolute tolerance per coordinate.
+    :return: True when they match in either order.
+    """
+    close = lambda p, q: np.allclose(np.asarray(p, float), np.asarray(q, float), rtol=0, atol=abs_tol)
+    return (close(a, c) and close(b, d)) or (close(a, d) and close(b, c))
 
 
 def _reflected_about_world_x0(image):
@@ -118,9 +146,12 @@ def test_mri_tibial_torsion_is_mirror_equivariant(mri, probe):
     probe_landmarks = get_tibial_torsion_landmarks(knee[::-1], ankle[::-1], side=OTHER[side], **kwargs)
     widths = {'knee': knee.shape[0], 'ankle': ankle.shape[0]}
     mapped = {name: _mirror_x(point, widths[name.split('_')[0]]) for name, point in probe_landmarks.items()}
-    # the condylar endpoints are ordered by x in each frame, so mirroring swaps them
-    np.testing.assert_allclose(mapped['knee_start'], np.asarray(ref_landmarks['knee_end'], dtype=float))
-    np.testing.assert_allclose(mapped['knee_end'], np.asarray(ref_landmarks['knee_start'], dtype=float))
+    # The condylar endpoints are ordered by descending x in each frame, so mirroring normally swaps
+    # them -- but the ordering uses a strict ``<``, so on a leg whose two endpoints share an x
+    # neither frame swaps and a correct implementation would report them in the same order. Compare
+    # the pair unordered so that cannot fail the test; the line is undirected anyway.
+    assert _same_pair(mapped['knee_start'], mapped['knee_end'],
+                      ref_landmarks['knee_end'], ref_landmarks['knee_start'], 1e-7)
     for name in ('ankle_start', 'ankle_end'):
         np.testing.assert_allclose(mapped[name], np.asarray(ref_landmarks[name], dtype=float))
 
