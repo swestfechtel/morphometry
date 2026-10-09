@@ -4,7 +4,11 @@ These factor out patterns that were previously copy-pasted across the region
 modules: folding an unsigned vector angle into the acute or obtuse range, the
 image-side left/right split at ``shape[0] // 2``, the sagittal-coordinate mirror
 used when processing the right image side, and wrapping a 2D slice centroid into
-a 3D point.
+a 3D point. They also hold the two helpers the mirror-equivariant measurements
+share: the index mirror ``x -> n - 1 - x`` that maps a landmark found on a
+reflected image half back into the caller's frame, and the posterior-condylar
+endpoint ordering that keeps such a landmark pair reported in the target frame's
+order.
 
 Orientation reminder (LPI): axis 0 = medial-lateral (toward patient Left),
 axis 1 = anterior-posterior (toward Posterior), axis 2 = superior-inferior
@@ -103,6 +107,41 @@ def mirror_sagittal_coordinate(coord: float, half_extent: int) -> float:
     :return: The mirrored coordinate.
     """
     return coord + (half_extent - coord) * 2
+
+
+def mirror_index_x(point: np.ndarray, width: int) -> np.ndarray:
+    """
+    Map a voxel index between an image and its left-right reflection: ``x -> width - 1 - x``.
+
+    This is the correct index mirror, and the one the equivariant torsion / CCD paths use to map
+    landmarks found on a reflected half back into the caller's frame. Exact for integer and
+    continuous indices alike, and its own inverse. Unlike
+    :func:`mirror_sagittal_coordinate`, which reproduces the legacy off-by-one arithmetic, it
+    mirrors about the array's true centre.
+    :param point: A length-3 index (integer or float); it is not modified.
+    :param width: The size of the image along the first index axis.
+    :return: A copy of ``point`` with the first coordinate mirrored (same dtype).
+    """
+    mirrored = np.array(point, copy=True)
+    mirrored[0] = width - 1 - mirrored[0]
+    return mirrored
+
+
+def order_condylar_points(start: np.ndarray, end: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Order the two endpoints of a posterior-condylar line so the start has the larger x index.
+
+    In LPI, x increases towards the patient's left, so the start is the MEDIAL point on a left
+    image half (a patient-right limb, medial = +x) and the lateral point on a right image half.
+    The condylar line is undirected -- the order only fixes how the landmarks are reported, not
+    the femoral or tibial torsion angle composed from them. Shared by both so that a line found
+    on a reflected half and mirrored back is reported in the target frame's order.
+    :param start: One posterior-condyle reference point.
+    :param end: The other posterior-condyle reference point.
+    :return: ``(start, end)`` with ``start[0] >= end[0]``.
+    """
+    if start[0] < end[0]:
+        return end, start
+    return start, end
 
 
 def slice_centroid_to_point(mask_2d: np.ndarray, layer: int) -> np.ndarray:

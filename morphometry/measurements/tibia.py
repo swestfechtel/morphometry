@@ -4,7 +4,12 @@ Combines the proximal posterior-condylar line (``get_knee_reference_line``) and 
 distal tibia-fibula line (``get_distal_reference_line``) into the tibial torsion
 angle. Landmarks are exposed separately via :func:`get_tibial_torsion_landmarks`.
 
-"left"/"right" refers to the image side, not the patient side.
+"left"/"right" refers to the image side, not the patient side. As for the femoral torsion, a right
+image half is measured as the left-right reflection of a left one: the landmark searches run on the
+reversed masks with the left-side conventions and the landmarks are mapped back (``x -> n - 1 - x``),
+so the two sides are mirror-equivariant by construction (see :func:`_tibial_torsion_points`). Do not
+reintroduce a ``side == 'right'`` branch into the landmark search -- add left-side logic and let the
+reflection handle the right.
 """
 from typing import Tuple
 
@@ -16,13 +21,62 @@ from morphometry.tibia import get_distal_reference_line
 from morphometry import geometry as G
 
 
+def _tibial_torsion_points(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibia_label_knee: int,
+                           tibia_label_ankle: int, fibula_label: int, side: str):
+    """Tibial torsion and its landmarks in the frame of the given image half.
+
+    A right image half is measured as the left-right reflection of a left half: the landmarks are
+    found by the left-side code on the reversed knee and ankle masks, the angle is composed there
+    with the left-side conventions, and only the landmarks are mapped back
+    (:func:`morphometry.geometry.mirror_index_x`, each point with its own mask's width, condylar
+    endpoints re-ordered in the target frame). The result is mirror-equivariant by construction,
+    which the landmark search is not: the knee condylar search rotates the slice about the image
+    centre and rounds, and the ``find_notch`` fallback can pick a different fallback on a half and
+    on its reflection. Measuring the two sides directly disagreed by a median 0.8-1.1 degrees on
+    the Augsburg hip/knee/ankle MRI and 1.7 degrees on the NMDID whole-leg CT, with a tail into the
+    tens of degrees on the legs whose notch search fails.
+    :param knee_mask: A 3D segmentation mask of the knee.
+    :param ankle_mask: A 3D segmentation mask of the ankle.
+    :param tibia_label_knee: The label of the tibia at knee level.
+    :param tibia_label_ankle: The label of the tibia at ankle level.
+    :param fibula_label: The label of the fibula.
+    :param side: Side of the image (not patient!), either 'left' or 'right'.
+    :return: ``(angle, (knee_start, knee_end, ankle_start, ankle_end))``, the landmarks as voxel
+    indices of the masks as given.
+    """
+    if side == 'right':
+        knee_start, knee_end, ankle_start, ankle_end = _tibial_torsion_reference_points(
+            knee_mask[::-1], ankle_mask[::-1], tibia_label_knee, tibia_label_ankle, fibula_label)
+        angle = _tibial_torsion_angle(knee_start, knee_end, ankle_start, ankle_end, 'left')
+        knee_width, ankle_width = knee_mask.shape[0], ankle_mask.shape[0]
+        # the condylar line is undirected, so only its reported order has to be restored; the
+        # ankle points are labelled (tibia centroid, fibula centroid) and keep their roles
+        knee_start, knee_end = G.order_condylar_points(G.mirror_index_x(knee_start, knee_width),
+                                                       G.mirror_index_x(knee_end, knee_width))
+        return angle, (knee_start, knee_end,
+                       G.mirror_index_x(ankle_start, ankle_width), G.mirror_index_x(ankle_end, ankle_width))
+
+    points = _tibial_torsion_reference_points(knee_mask, ankle_mask, tibia_label_knee, tibia_label_ankle, fibula_label)
+    return _tibial_torsion_angle(*points, side), points
+
+
 def _tibial_torsion_reference_points(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibia_label_knee: int,
                                      tibia_label_ankle: int, fibula_label: int):
-    """Resolve the proximal (knee) and distal (ankle) tibial reference points, ordered."""
+    """Resolve the proximal (knee) and distal (ankle) tibial reference points, ordered.
+
+    Written for a left image half; a right half reaches it through the reflection in
+    :func:`_tibial_torsion_points`.
+    :param knee_mask: A 3D segmentation mask of the knee.
+    :param ankle_mask: A 3D segmentation mask of the ankle.
+    :param tibia_label_knee: The label of the tibia at knee level.
+    :param tibia_label_ankle: The label of the tibia at ankle level.
+    :param fibula_label: The label of the fibula.
+    :return: ``(knee_start, knee_end, ankle_start, ankle_end)``; the condylar endpoints ordered by
+    descending x, the ankle points as ``(tibia centroid, fibula centroid)``.
+    """
     knee_bin = np.where(knee_mask == tibia_label_knee, 1, 0)
     _, knee_start, knee_end = get_knee_reference_line(knee_bin, 'tibia')
-    if knee_start[0] < knee_end[0]:  # knee_start gets the larger x (medial on a left image half, lateral on a right one)
-        knee_start, knee_end = knee_end, knee_start
+    knee_start, knee_end = G.order_condylar_points(knee_start, knee_end)
     _, ankle_start, ankle_end = get_distal_reference_line(ankle_mask, tibia_label_ankle, fibula_label)
     return knee_start, knee_end, ankle_start, ankle_end
 
@@ -79,10 +133,8 @@ def calculate_tibial_torsion(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibi
     """
     G.validate_side(side)
 
-    knee_start, knee_end, ankle_start, ankle_end = _tibial_torsion_reference_points(
-        knee_mask, ankle_mask, tibia_label_knee, tibia_label_ankle, fibula_label)
-
-    angle = _tibial_torsion_angle(knee_start, knee_end, ankle_start, ankle_end, side)
+    angle, (knee_start, knee_end, ankle_start, ankle_end) = _tibial_torsion_points(
+        knee_mask, ankle_mask, tibia_label_knee, tibia_label_ankle, fibula_label, side)
 
     if plot is not False:
         knee_bin = np.where(knee_mask == tibia_label_knee, 1, 0)
@@ -99,11 +151,20 @@ def get_tibial_torsion_landmarks(knee_mask: np.ndarray, ankle_mask: np.ndarray, 
     Return the tibial-torsion reference landmarks as a dict.
 
     Provided separately from :func:`calculate_tibial_torsion` so the calculation keeps
-    a single return type. ``side`` is accepted for call-site symmetry; the landmark
-    points themselves do not depend on it.
-    :return: ``{'knee_start', 'knee_end', 'ankle_start', 'ankle_end'}`` as numpy arrays.
+    a single return type. The points are voxel indices of the given masks, found as in
+    :func:`calculate_tibial_torsion` -- for a right image half on the reflection, mapped back --
+    so unlike before they DO depend on ``side``: a right half's condylar line is now the mirror of
+    what the left-side search finds on the reflected mask.
+    :param knee_mask: A 3D segmentation mask of the knee.
+    :param ankle_mask: A 3D segmentation mask of the ankle.
+    :param tibia_label_knee: The label of the tibia at knee level.
+    :param tibia_label_ankle: The label of the tibia at ankle level.
+    :param fibula_label: The label of the fibula.
+    :param side: Side of the image (not patient!), either 'left' or 'right'.
+    :return: ``{'knee_start', 'knee_end', 'ankle_start', 'ankle_end'}`` as numpy arrays (voxel
+    indices of the masks as given).
     """
     G.validate_side(side)
-    knee_start, knee_end, ankle_start, ankle_end = _tibial_torsion_reference_points(
-        knee_mask, ankle_mask, tibia_label_knee, tibia_label_ankle, fibula_label)
+    _, (knee_start, knee_end, ankle_start, ankle_end) = _tibial_torsion_points(
+        knee_mask, ankle_mask, tibia_label_knee, tibia_label_ankle, fibula_label, side)
     return {'knee_start': knee_start, 'knee_end': knee_end, 'ankle_start': ankle_start, 'ankle_end': ankle_end}

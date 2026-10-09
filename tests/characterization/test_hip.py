@@ -39,6 +39,18 @@ def test_ccd_left(nako_sample):
     assert_golden("ccd_left", H.calculate_ccd(left, side="left", isotropic=True))
 
 
+def test_ccd_right(nako_sample):
+    """Pin the CCD of the image-right half, which no golden covered before.
+
+    The right half is measured as the mirror of a left one (see
+    ``measurements/hip.py::calculate_ccd``), so this is the only golden on any dataset
+    that records the right-side CCD, and the only one exercising the isotropic
+    hip-only path (``knee_image=None``) that ``scripts/process_nako*.py`` runs.
+    """
+    _, right = split_left_right(nako_sample)
+    assert_golden("ccd_right", H.calculate_ccd(right, side="right", isotropic=True))
+
+
 def test_anteversion_left(nako_sample):
     left, _ = split_left_right(nako_sample)
     assert_golden("anteversion_left", H.calculate_anteversion(left, side="left", isotropic=True))

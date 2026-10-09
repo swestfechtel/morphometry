@@ -18,7 +18,8 @@ from morphometry.utils import sphere_fit, get_contour_points, calculate_angle_be
     get_minimum_distance_between_line_and_point, num_connected_components, \
     extract_connected_components_2d, circumference_points, intersect_ndarrays, \
     sort_points_clockwise, sort_points_by_x, fit_circle_to_points
-from morphometry.image_io import Image, Segmentation, split_image_left_right
+from morphometry.image_io import (Image, Segmentation, mirror_image_left_right, reflect_image_left_right,
+                                  split_image_left_right)
 from morphometry.bresenham import bresenhamline
 from morphometry import constants as C
 from morphometry import geometry as G
@@ -63,12 +64,47 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
     :param debug: Whether to display debug messages.
     :param plot: Whether to plot the results.
     :return: The actual and projected CCD angle.
+
+    A right image half is measured as the left-right mirror of a left one: the landmark searches run
+    on the mirrored images with the left-side conventions, so the two sides are mirror-equivariant by
+    construction. Without it, measuring a half directly and measuring its mirror disagreed by a
+    median 0.16-0.23 degrees (p90 0.4-0.5, max 0.7) over 50 Augsburg hips, and 0.21-0.32 degrees
+    (max 1.0) over 60 NaKo hips on the isotropic ``knee_image=None`` path. The cause is the femoral
+    *neck* centre, not the head centre (mirror-exact to 0.05 voxels) and not the shaft axis: the neck
+    shell is sampled from a ``pv.SolidSphere`` tessellation cut by a half-space in x and clustered,
+    which is not symmetric about the head centre, and its centroid moved by a median 0.14 voxels
+    (median 0.156 degrees of CCD, the whole effect). The ``int()`` truncation of the shaft-axis
+    centroids is not mirror-consistent either (floor of ``n - 1 - x`` is not ``n - 1 - floor(x)``) and
+    shifts each endpoint by one voxel in x, but by the same voxel at both ends, so it cancels in the
+    shaft *vector* -- 0.22 degrees from either endpoint alone, nothing from the two together.
+
+    The searches are index-space, so a mirror is enough here, and unlike a reflection it keeps every
+    voxel's physical position. That matters because the shaft vector spans the hip and the knee
+    image: a reflection mirrors each about its own array centre, and those are two different world
+    planes whenever the two series' index-to-world x maps differ -- which they generally do, since
+    the hip and the knee are separately acquired, so equal array widths are not sufficient. Measured
+    on the Augsburg cases, reflecting the two about their own centres costs a median 1.22 degrees
+    (5.7 on PA000031), i.e. five times the defect being fixed. Keeping the physical positions also
+    means the ``plot`` overlays are unaffected: they are drawn in physical space, where the mirrored
+    leg sits exactly where the leg sits.
+
+    The overlay *colour* is a separate matter, and is kept right by confining the mirroring to
+    ``search_side`` rather than by the choice of mirror over reflection: the overlays colour by the
+    reported ``side``, which the NaKo scripts rely on to tell the legs apart when they draw both into
+    one plotter, so the mirroring must not be reached by recursing with ``side='left'``. A reflection
+    would have kept the colours equally right under this structure, and a mirror would have lost them
+    under a recursive one.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
+    if side == 'right':  # measure the mirror of a left half with the left-side code (see below)
+        hip_image = mirror_image_left_right(hip_image)
+        knee_image = mirror_image_left_right(knee_image) if knee_image is not None else None
+    search_side = 'left'  # the landmark searches only ever see a left half
+
     hip_mask = hip_image.array
-    r, femoral_head_center = get_femoral_head_center(hip_mask, side=side, segmentation_label=segmentation_label, x_ratio=x_ratio, isotropic=isotropic)
-    femoral_neck_points, femoral_neck_center = get_femoral_neck_center(hip_mask, (r, femoral_head_center), side=side, segmentation_label=segmentation_label, x_ratio=x_ratio)
+    r, femoral_head_center = get_femoral_head_center(hip_mask, side=search_side, segmentation_label=segmentation_label, x_ratio=x_ratio, isotropic=isotropic, spacing=hip_image.spacing)
+    femoral_neck_points, femoral_neck_center = get_femoral_neck_center(hip_mask, (r, femoral_head_center), side=search_side, segmentation_label=segmentation_label, x_ratio=x_ratio)
 
     knee_mask = knee_image.array if knee_image else None
 
@@ -189,13 +225,30 @@ def calculate_ccd_ct(femur_image: Segmentation, side: str = 'left', segmentation
     :param femur_image: A segmentation mask of the whole leg.
     :param side: The side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
-    :param plot: Whether to plot the results.
+    :param plot: Whether to plot the results (on a right image half, of the reflected leg -- see below).
     :return: The actual and projected CCD angle.
+
+    As in :func:`calculate_ccd`, a right image half is measured through the left-side code, which
+    makes the two sides mirror-equivariant by construction. Here it must be a *reflection*, not a
+    mirror: the CT landmark code reads physical directions (which physical x is lateral, via
+    ``get_femoral_head_center_ct`` and the neck half-space), so it needs the mirror-twin leg, not a
+    relabelled one. A reflection is an isometry, so the angle it returns is the leg's own angle; only
+    the ``plot`` overlays land at the mirrored physical position (still coloured by the reported
+    ``side``).
+
+    Without this, measuring a half directly and measuring its mirror disagreed by a median
+    0.85-1.02 degrees (p90 1.6, max 3.1) over the 46 NMDID verification-sample legs, i.e. larger
+    than on the MRI path. The reported right-side CCD rose by a median 0.80 degrees (range -0.88 to
+    +3.14), so the CT right side had been reading systematically low.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
-    r, femoral_head_center = get_femoral_head_center_ct(femur_image, segmentation_label, side)
-    femoral_neck_points, femoral_neck_center = get_femoral_neck_center_ct(femur_image, (r, femoral_head_center), segmentation_label, side)
+    if side == 'right':  # measure the reflection of a left leg with the left-side code (see below)
+        femur_image = reflect_image_left_right(femur_image)
+    search_side = 'left'  # the landmark searches only ever see a left leg
+
+    r, femoral_head_center = get_femoral_head_center_ct(femur_image, segmentation_label, search_side)
+    femoral_neck_points, femoral_neck_center = get_femoral_neck_center_ct(femur_image, (r, femoral_head_center), segmentation_label, search_side)
     shaft_axis_low, shaft_axis_high = get_femoral_shaft_axis_ct(femur_image, segmentation_label=segmentation_label)
 
     neck_vector = femoral_neck_center - femoral_head_center
@@ -229,7 +282,7 @@ def calculate_ccd_ct(femur_image: Segmentation, side: str = 'left', segmentation
 
     return ccd, ccd_projected
 
-def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, plot: Tuple[plt.Axes, plt.Axes] | bool = False) -> float:
+def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: Optional[float] = None, plot: Tuple[plt.Axes, plt.Axes] | bool = False) -> float:
     """
     Calculate the femoral neck anteversion (signed proximal neck angle).
 
@@ -243,15 +296,24 @@ def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmenta
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
+    :param x_ratio: Slice-thickness correction (slice spacing in in-plane voxels). ``None`` derives it
+        from the image, ``spacing_z / spacing_x``. It used to be hard-coded to 1, which is wrong on
+        anisotropic data; the value is inert on the data measured so far, because since the head
+        centre became a consensus fit in millimetres, ``x_ratio`` only bounds the femoral-head slab
+        walk, and that bound does not bite on the Augsburg (10 mm) or NaKo (isotropic) hips.
     :param plot: A pair of matplotlib Axes to draw the reference line on, or False.
     :return: The anteversion angle in degrees.
     """
     # TODO revise: the anteversion convention here is provisional.
     G.validate_side(side)
 
+    spacing = np.abs(np.asarray(segmentation_mask.spacing, dtype=float))
+    if x_ratio is None:
+        x_ratio = float(spacing[2] / spacing[0])
+
     hip_start, hip_end = get_proximal_reference_line(
         segmentation_mask, side=side, method='murphy', segmentation_label=segmentation_label,
-        isotropic=isotropic, x_ratio=1)[:2]
+        isotropic=isotropic, x_ratio=x_ratio)[:2]
     fhc_layer = hip_start[2]
     hip_start[2] = hip_end[2]  # align axial coordinate
 
@@ -260,14 +322,14 @@ def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmenta
         angle = -angle
 
     if plot is not False:
-        plot[0].imshow(segmentation_mask.array[:, :, hip_start[2]].T, cmap='gray')
-        tmp = segmentation_mask.array[:, :, fhc_layer].copy().T
+        plot[0].imshow(segmentation_mask.array[:, :, int(hip_start[2])].T, cmap='gray')
+        tmp = segmentation_mask.array[:, :, int(round(fhc_layer))].copy().T
         tmp = np.where(tmp == 0, np.nan, tmp)
         plot[0].imshow(tmp, alpha=.5)
         plot[0].plot([hip_start[0], hip_end[0]], [hip_start[1], hip_end[1]], 'r-')
         plot[0].set_aspect('equal')
 
-        plot[1].imshow(segmentation_mask.array[:, hip_end[1]].T)
+        plot[1].imshow(segmentation_mask.array[:, int(round(hip_end[1]))].T)
         plot[1].plot([hip_start[0], hip_end[0]], [fhc_layer, hip_end[2]], 'r')
         # plot[1].set_aspect(x_ratio)
 
@@ -419,9 +481,9 @@ def calculate_acetabular_anteversion(hip_image: Segmentation, femur_label: int =
         right_fhc = right_image.transform_physical_point_to_index(right_fhc)
     else:
         r_left_mm, left_fhc = get_femoral_head_center(left_image.array, side='left', segmentation_label=femur_label,
-                                              isotropic=isotropic)
+                                              isotropic=isotropic, spacing=left_image.spacing)
         r_right_mm, right_fhc = get_femoral_head_center(right_image.array, side='right', segmentation_label=femur_label,
-                                               isotropic=isotropic)
+                                               isotropic=isotropic, spacing=right_image.spacing)
         # the MRI radius is in (isotropic) voxels; the surface extraction works in millimetres
         in_plane = _voxel_spacing(hip_image)[0]
         r_left_mm, r_right_mm = r_left_mm * in_plane, r_right_mm * in_plane
@@ -609,9 +671,9 @@ def calculate_center_edge_angle(hip_image: Segmentation, femur_label: int = 1, a
         r_r = np.linalg.norm(right_fhc - tmp)
     else:
         r_l, left_fhc = get_femoral_head_center(left_image.array, side='left', segmentation_label=femur_label,
-                                              isotropic=isotropic)
+                                              isotropic=isotropic, spacing=left_image.spacing)
         r_r, right_fhc = get_femoral_head_center(right_image.array, side='right', segmentation_label=femur_label,
-                                               isotropic=isotropic)
+                                               isotropic=isotropic, spacing=right_image.spacing)
         # the MRI radius is in (isotropic) voxels; the surface extraction works in millimetres
         in_plane = _voxel_spacing(hip_image)[0]
         r_l_mm, r_r_mm = r_l * in_plane, r_r * in_plane
@@ -1099,7 +1161,8 @@ def calculate_subchondral_distance_ray_tracing(image: Segmentation, side: str = 
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
-    r_idx, fhc_idx = get_femoral_head_center(image.array, side=side, segmentation_label=femur_label, isotropic=isotropic)
+    r_idx, fhc_idx = get_femoral_head_center(image.array, side=side, segmentation_label=femur_label, isotropic=isotropic,
+                                             spacing=image.spacing)
     femur_mask = np.where(image.array == femur_label, 1, 0)
     acetabulum_mask = np.where(image.array == acetabulum_label, 1, 0)
 
@@ -1223,7 +1286,8 @@ def calculate_femoral_offset(hip_image: Image, knee_image: Optional[Image] = Non
     :param plot: pv.Plotter: A PyVista plotter to visualize the femoral offset (optional).
     :return: The femoral offset in mm.
     """
-    r, c = get_femoral_head_center(hip_image.array, side=side, segmentation_label=femur_label, isotropic=isotropic)
+    r, c = get_femoral_head_center(hip_image.array, side=side, segmentation_label=femur_label, isotropic=isotropic,
+                                   spacing=hip_image.spacing)
     start, end = get_femoral_shaft_axis(hip_image.array, knee_mask=(knee_image.array if knee_image is not None else None), femur_label=femur_label, isotropic=isotropic)
 
     _, projection_vector = get_vector_through_point_perpendicular_to_line(start, (end - start), c)
@@ -1262,7 +1326,8 @@ def calculate_femoral_offset_projected(hip_image: Segmentation, knee_image: Opti
         r, c = get_femoral_head_center_ct(hip_image, segmentation_label=femur_label, side=side)
         start, end = get_femoral_shaft_axis_ct(hip_image, segmentation_label=femur_label)
     else:
-        r, c = get_femoral_head_center(hip_image.array, side=side, segmentation_label=femur_label, isotropic=isotropic)
+        r, c = get_femoral_head_center(hip_image.array, side=side, segmentation_label=femur_label, isotropic=isotropic,
+                                   spacing=hip_image.spacing)
         start, end = get_femoral_shaft_axis(hip_image.array,
                                             knee_mask=(knee_image.array if knee_image is not None else None),
                                             femur_label=femur_label, isotropic=isotropic)
