@@ -73,10 +73,8 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
     *neck* centre, not the head centre (mirror-exact to 0.05 voxels) and not the shaft axis: the neck
     shell is sampled from a ``pv.SolidSphere`` tessellation cut by a half-space in x and clustered,
     which is not symmetric about the head centre, and its centroid moved by a median 0.14 voxels
-    (median 0.156 degrees of CCD, the whole effect). The ``int()`` truncation of the shaft-axis
-    centroids is not mirror-consistent either (floor of ``n - 1 - x`` is not ``n - 1 - floor(x)``) and
-    shifts each endpoint by one voxel in x, but by the same voxel at both ends, so it cancels in the
-    shaft *vector* -- 0.22 degrees from either endpoint alone, nothing from the two together.
+    (median 0.156 degrees of CCD, the whole effect). The shaft-axis endpoints are unrounded slice
+    centroids (see ``get_femoral_shaft_axis``), so they are mirror-consistent as well.
 
     The searches are index-space, so a mirror is enough here, and unlike a reflection it keeps every
     voxel's physical position. That matters because the shaft vector spans the hip and the knee

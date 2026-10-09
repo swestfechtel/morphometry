@@ -456,11 +456,18 @@ def get_femoral_neck_center_ct(femur_image: Segmentation, femoral_head_center: T
 def get_femoral_shaft_axis(hip_mask: np.ndarray, knee_mask: np.ndarray = None, femur_label: int = 1, isotropic: bool = False) -> Tuple[np.ndarray, np.ndarray]:
     """
     Get the femoral shaft axis from a segmentation mask.
+
+    Both endpoints are slice centroids and are returned unrounded (continuous voxel indices; only
+    the slice index is an integer). They index no array, and the former ``int()`` truncation did
+    not commute with the left/right mirror ``x -> n-1-x``: the axis of a reflected hip sat one voxel
+    from the mirror of the original's, so the femoral offset read a hip ~1 mm differently
+    depending on its image side.
     :param hip_mask: A segmentation mask of the hip.
     :param knee_mask: A segmentation mask of the knee.
     :param femur_label: The label of the femur in the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
-    :return: Start and end point of the vector representing the femoral shaft axis.
+    :return: Start and end point of the vector representing the femoral shaft axis (float voxel indices; the
+        start lies in the knee mask's index space when ``knee_mask`` is given, otherwise both lie in the hip's).
     """
     hip_mask = np.where(hip_mask == femur_label, 1, 0)
 
@@ -470,7 +477,7 @@ def get_femoral_shaft_axis(hip_mask: np.ndarray, knee_mask: np.ndarray = None, f
     layer_low_hip = np.max(point_cloud_hip[:, 2]) - (offset if isotropic else 1)  # get the most distal layer with a mask point
 
     com_low_hip = center_of_mass(hip_mask[:, :, layer_low_hip])
-    com_low_hip = (int(com_low_hip[0]), int(com_low_hip[1]), layer_low_hip)
+    com_low_hip = (com_low_hip[0], com_low_hip[1], layer_low_hip)
 
     if knee_mask is not None:
         knee_mask = np.where(knee_mask == femur_label, 1, 0)
@@ -478,7 +485,7 @@ def get_femoral_shaft_axis(hip_mask: np.ndarray, knee_mask: np.ndarray = None, f
         layer_high_knee = np.min(point_cloud_knee[:, 2]) + (
             offset if isotropic else 1)  # get the most proximal layer with a mask point
         com_high_knee = center_of_mass(knee_mask[:, :, layer_high_knee])
-        com_high_knee = (int(com_high_knee[0]), int(com_high_knee[1]), layer_high_knee)
+        com_high_knee = (com_high_knee[0], com_high_knee[1], layer_high_knee)
 
         return np.array(com_high_knee), np.array(com_low_hip)
 
@@ -511,7 +518,7 @@ def get_femoral_shaft_axis(hip_mask: np.ndarray, knee_mask: np.ndarray = None, f
     smaller_component = min(connected_components, key=lambda x: np.count_nonzero(x))
     com_high_hip = center_of_mass(smaller_component)
 
-    com_high_hip = (int(com_high_hip[0]), int(com_high_hip[1]), layer_high_hip)
+    com_high_hip = (com_high_hip[0], com_high_hip[1], layer_high_hip)
 
     return np.array(com_low_hip), np.array(com_high_hip)  # return the two points as the femoral shaft axis
 
