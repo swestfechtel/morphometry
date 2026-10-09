@@ -214,7 +214,14 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     alone, i.e. voxels of ``(1, 1, x_ratio)`` with the in-plane voxel taken as 1 mm (exact for 1 mm
     in-plane voxels; otherwise only the inlier band is scaled). This replaced a lateral cutoff at
     ``0.9`` times an absolute voxel index, which made the centre depend on where the hip sat in the
-    image and let femoral-neck surface into the fit. The isotropic path is unchanged.
+    image and let femoral-neck surface into the fit.
+
+    The isotropic path keeps the lateral cutoff (one "medial radius" from the top-slice centroid
+    on the lateral side), built from the unrounded centroid, and walks down the nearest column
+    (half-voxel ties broken towards medial). It used to floor the centroid for both, which does
+    not commute with the left/right mirror, so the image-left half came out ~0.4 voxel more
+    lateral than the mirror of the image-right one (and its centre-edge angle ~1.1 degrees lower
+    on the same hip).
     :param segmentation_mask: A segmentation mask of the proximal femur where the femur is 1 and everything else 0.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
@@ -249,8 +256,16 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
         largest_component = np.argmax(sizes) + 1
         segmentation_mask[:, :, layer_high] = np.where(label_mask == largest_component, 1, 0)
 
-    com_high = center_of_mass(segmentation_mask[:, :, layer_high])
-    com_high = (int(com_high[0]), int(com_high[1]))
+    centroid = center_of_mass(segmentation_mask[:, :, layer_high])
+    com_high = (int(centroid[0]), int(centroid[1]))
+    if isotropic:
+        # the column walk indexes the mask, so it needs an integer x. Floor does not commute with
+        # the mirror x -> n-1-x; rounding to nearest with ties broken towards medial (+x on the
+        # left half, -x on the right) does, so a reflected hip walks the mirrored column. The
+        # lateral cutoff below uses the unrounded centroid. The consensus path keeps the
+        # truncation it was validated with.
+        com_high = (int(np.floor(centroid[0] + .5)) if side == 'left' else int(np.ceil(centroid[0] - .5)),
+                    com_high[1])
     # the walk works in index space, so the length unit is the in-plane voxel and the
     # slice spacing in that unit is exactly the slice-thickness correction x_ratio
     layer_max = _femoral_head_slab_bound(segmentation_mask, com_high, layer_high, (1., 1., x_ratio))
@@ -275,13 +290,13 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     # then exclude everything that is farther away than this distance in the lateral direction
     if side == 'left':
         max_s = np.max(point_cloud[:, 0])
-        radius = max_s - com_high[0]
-        min_s = com_high[0] - radius  # the most lateral point of the femoral head
+        radius = max_s - centroid[0]
+        min_s = centroid[0] - radius  # the most lateral point of the femoral head
         point_cloud = point_cloud[point_cloud[:, 0] >= min_s]
     else:
         min_s = np.min(point_cloud[:, 0])
-        radius = com_high[0] - min_s
-        max_s = com_high[0] + radius  # the most lateral point of the femoral head
+        radius = centroid[0] - min_s
+        max_s = centroid[0] + radius  # the most lateral point of the femoral head
         point_cloud = point_cloud[point_cloud[:, 0] <= max_s]
 
     min_c = np.min(point_cloud[:, 1])

@@ -724,13 +724,13 @@ def calculate_center_edge_angle(hip_image: Segmentation, femur_label: int = 1, a
     d_perp_index = d_perp / scale
     s_right = right_fhc_adj + d_perp_index  # s is a point from the femoral head center with direction d_perp, just for visualisation
     lat_right = _lateral_acetabular_edge_point(right_acetabulum, right_fhc, r_r, 'right',
-                                               project=project, upper_margin_factor=C.CEA_UPPER_MARGIN_FACTOR_RIGHT)
+                                               project=project, upper_margin_factor=C.CEA_UPPER_MARGIN_FACTOR)
     s2_right = (lat_right - right_fhc) * scale
     cea_right = calculate_angle_between_vectors(d_perp, s2_right)
 
     s_left = left_fhc + d_perp_index
     lat_left = _lateral_acetabular_edge_point(left_acetabulum, left_fhc, r_l, 'left',
-                                              project=project, upper_margin_factor=C.CEA_UPPER_MARGIN_FACTOR_LEFT)
+                                              project=project, upper_margin_factor=C.CEA_UPPER_MARGIN_FACTOR)
     s2_left = (lat_left - left_fhc) * scale
     cea_left = calculate_angle_between_vectors(d_perp, s2_left)
 

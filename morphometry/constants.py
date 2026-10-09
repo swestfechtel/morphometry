@@ -118,7 +118,9 @@ TROCHANTER_MINOR_FH_DIST_MM = (40.0, 75.0)
 
 # --- Center-edge angle -------------------------------------------------------
 #: Superior margin factor (x femoral-head radius) defining the search band for the
-#: lateral acetabular edge, per image side. The left/right asymmetry is inherited
-#: from the original implementation and is flagged for review.
-CEA_UPPER_MARGIN_FACTOR_LEFT = 1.5
-CEA_UPPER_MARGIN_FACTOR_RIGHT = 1.1
+#: lateral acetabular edge. One value for both image sides: the two halves hold mirror-image
+#: anatomy, so a per-side value measures the same hip differently depending on which side it
+#: is on. The former 1.5 left / 1.1 right accounted for ~1.9 degrees of the NaKo cohort's
+#: patient-left > patient-right CEA (+2.4 degrees overall, the rest from the head centre).
+#: Applies to every modality, including the whole-leg CT path.
+CEA_UPPER_MARGIN_FACTOR = 1.5
