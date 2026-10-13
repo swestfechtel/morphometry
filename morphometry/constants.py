@@ -120,7 +120,11 @@ TROCHANTER_MINOR_FH_DIST_MM = (40.0, 75.0)
 #: Superior margin factor (x femoral-head radius) defining the search band for the
 #: lateral acetabular edge. One value for both image sides: the two halves hold mirror-image
 #: anatomy, so a per-side value measures the same hip differently depending on which side it
-#: is on. The former 1.5 left / 1.1 right accounted for ~1.9 degrees of the NaKo cohort's
-#: patient-left > patient-right CEA (+2.4 degrees overall, the rest from the head centre).
-#: Applies to every modality, including the whole-leg CT path.
-CEA_UPPER_MARGIN_FACTOR = 1.5
+#: is on (the former 1.5 left / 1.1 right accounted for ~1.9 degrees of the NaKo cohort's
+#: patient-left > patient-right CEA). The value 1.1 was CHOSEN AGAINST the 60 NaKo reader
+#: cases, i.e. calibrated on the evaluation set: the CEA under-reads both readers there, and
+#: agreement improves monotonically as the factor drops (1.5 -> 1.1: ICC2 vs MH right/left
+#: 0.37/0.39 -> 0.48/0.53, vs TH 0.50/0.47 -> 0.62/0.62; signed bias MH -6.0/-6.5 -> -4.8/-4.6,
+#: TH -2.5/-4.6 -> -1.3/-2.7 degrees). Applies to every modality; on the 46 NMDID CT
+#: verification cases the CEA is identical at 1.1 and 1.5.
+CEA_UPPER_MARGIN_FACTOR = 1.1

@@ -270,7 +270,7 @@ centre and the line to the lateral edge of the acetabular roof.
    pelvic reference). The **vertical reference** is the line through the femoral
    head centre **perpendicular to G**, directed proximally (superiorly).
 3. **Lateral acetabular edge point** — the **most lateral** bony point of the
-   acetabular roof situated **above** the femoral head (the search starts 1.5
+   acetabular roof situated **above** the femoral head (the search starts 1.1
    head-radii above the head centre on both sides and takes the most lateral,
    then most superior, acetabular voxel).
 
