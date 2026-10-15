@@ -1340,32 +1340,53 @@ def get_superior_and_inferior_surface_points(cartilage: np.ndarray) -> Tuple[np.
     return superior_points.to_numpy(), inferior_points.to_numpy()
 
 
-def calculate_ellipse(points: np.ndarray, center: float) -> float:
+def calculate_ellipse(points: np.ndarray, center: np.ndarray, fraction: float = 0.2) -> float:
     """
-    Calculate an ellipse around a center point that covers ~20% of the points.
+    Calculate the radius of the central tibial subregion (cLT / cRT) of one plate.
 
-    :param points: A point cloud.
-    :param center: The center of mass of the point cloud.
-    :return: The radius of the ellipse.
+    The central subregion is meant to hold ~20% of the plate (after Wirth & Eckstein
+    2008). The radius returned is the ``fraction`` quantile of the point-to-centre
+    distances, so that ~``fraction`` of ``points`` lie *strictly* inside it — matching the
+    ``np.linalg.norm(point - center) < radius`` test in :meth:`Tibia.classify_point`
+    (exactly ``int(len(points) * fraction)`` points, fewer only when several points tie
+    at the returned distance).
+
+    Caveats, kept deliberately for now (the subdivision will later be reworked to follow
+    the paper):
+
+    - Despite the historical name this is not an ellipse but a **sphere**, in 3D
+      **voxel-index space** (anisotropic voxels are not converted to mm).
+    - The 20% is a share of **cartilage voxels** (i.e. of cartilage volume), not of the
+      subchondral bone area as in Wirth & Eckstein.
+
+    This replaced an iterative search that started at a radius of 20 voxels, grew it in
+    0.5-voxel steps and halved it on the step that first reached 20%, so it returned half
+    the radius it meant to; since 20 voxels already covers 20% on the knees measured, it returned
+    a constant 10 voxels and the central subregion held only ~6-9% of the plate.
+
+    :param points: An ``(N, 3)`` point cloud of one tibial plate (voxel indices).
+    :param center: The centre of the plate, a length-3 point in the same space.
+    :param fraction: The share of ``points`` that should fall strictly inside the radius,
+        in ``[0, 1]``. Defaults to 0.2.
+    :return: The radius (voxel-index units). ``0.0`` for an empty point cloud or
+        ``fraction <= 0`` (no point is strictly inside a zero radius); for
+        ``fraction >= 1`` a radius just above the largest distance, so every point is
+        inside.
     """
-    r = 20.  # initial guess
-    max_iter = 100  # stop condition
-    num_points = len(points)
-    quintile = int(num_points * 0.2)
+    points = np.asarray(points, dtype=float)
+    if len(points) == 0:
+        return 0.0
+    distances = np.linalg.norm(points - np.asarray(center, dtype=float), axis=1)
 
-    points_in_ellipse = np.array([])
-    i = 0
-    while (len(points_in_ellipse) < quintile) and (i < max_iter):
-        points_in_ellipse = points[np.linalg.norm(points - center, axis=1) < r]
-
-        if len(points_in_ellipse) < quintile:
-            r += .5
-        else:
-            r /= 2.
-
-        i += 1
-
-    return r
+    # The k-th smallest distance (0-based) has exactly k distances strictly below it
+    # (barring ties), so it is the radius that puts k = int(N * fraction) points inside.
+    k = int(len(distances) * fraction)
+    if k <= 0:
+        return 0.0
+    if k >= len(distances):
+        # Every point must be strictly inside: step just past the farthest one.
+        return float(np.nextafter(distances.max(), np.inf))
+    return float(np.partition(distances, k)[k])
 
 
 def get_plate_corners(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
