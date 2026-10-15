@@ -1,4 +1,5 @@
 import itertools
+import logging
 
 import pandas as pd
 import pyvista as pv
@@ -6,21 +7,75 @@ import numpy as np
 from typing import Optional, Tuple
 from scipy.spatial import KDTree
 from scipy.ndimage import label, generic_filter
-from sklearn.cluster import KMeans
 from morphometry.image_io import Image
+from morphometry.cartilage.surface import array_indices_to_world
+from morphometry.cartilage.tibia_regions import (
+    subdivide_tibia, anatomical_tibia_names, tibia_display_label, transfer_qc, TIBIA_REGION_KEYS,
+    TRANSFER_FAR_MM, TRANSFER_MAX_FAR_FRACTION,
+)
+
+logger = logging.getLogger(__name__)
+
+# Display label per tibial region code ('cLT', ..., 'pRT'; patient side).
+_TIBIA_DISPLAY_LABELS = tuple(tibia_display_label(key) for key in TIBIA_REGION_KEYS)
 
 
 class Tibia:
-    def __init__(self, image: Image, cartilage_label: int, outlier_ratio: float = 0.1):
+    """
+    Tibial cartilage of one knee: subregions (Wirth & Eckstein 2008) and thickness.
+
+    The subregions are defined on the tibial subchondral bone area (tAB) by
+    :func:`morphometry.cartilage.tibia_regions.subdivide_tibia` and transferred to the
+    cartilage voxels by nearest tAB triangle. Regions are keyed by **patient side**
+    (``clt`` ... ``plt`` = patient-left plate, ``crt`` ... ``prt`` = patient-right plate);
+    with a known ``laterality`` :attr:`anatomical_names` maps them to the paper's
+    medial/lateral names.
+    """
+
+    def __init__(self, image: Image, cartilage_label: int, outlier_ratio: float = 0.1,
+                 bone_label: int = 2, laterality: Optional[str] = None,
+                 central_fraction: float = 0.2):
+        """
+        :param image: The (LPI-oriented) knee ``Segmentation``.
+        :param cartilage_label: Label of the tibial cartilage (``dfg_knees``: 4).
+        :param outlier_ratio: Cartilage components smaller than this fraction of the total
+            cartilage volume are dropped from the point cloud (see
+            :func:`_remove_mask_outliers`); ``0`` disables it.
+        :param bone_label: Label of the tibial bone (``dfg_knees``: 2), on whose surface the
+            subregions are defined.
+        :param laterality: ``'left'`` / ``'right'`` knee or ``None``; only adds the
+            medial/lateral names (:attr:`anatomical_names`).
+        :param central_fraction: Share of each plate's tAB in its central region (0.2).
+        """
+        anatomical_tibia_names(laterality)  # validate early
         self.image = image
         self.cartilage_label = cartilage_label
+        self.bone_label = bone_label
+        self.laterality = laterality
+        self.central_fraction = central_fraction
         self.outlier_ratio = outlier_ratio
+        self.subdivision = None
+        # PlateFrame of the patient-left / patient-right plate once calculate_landmarks ran.
         self.left_landmarks, self.right_landmarks = None, None
-        self.center = None
         self.point_cloud = None
+        # Display label ('cLT', ...) of every point_cloud row, raw (before fragment removal).
+        self.point_labels = None
+        # Distance QC of the region transfer (see calculate_landmarks), None until then.
+        self.transfer_qc = None
         self.superior_surface, self.inferior_surface = None, None
         self.clt, self.ilt, self.elt, self.alt, self.plt = None, None, None, None, None
         self.crt, self.irt, self.prt, self.ert, self.art = None, None, None, None, None
+
+    @property
+    def anatomical_names(self) -> Optional[dict]:
+        """
+        The paper's medial/lateral names of the patient-side region keys.
+
+        :return: ``{'clt': 'cMT', ...}`` for a right knee, ``{'clt': 'cLT', ...}`` for a
+            left knee, ``None`` without a laterality (see
+            :func:`morphometry.cartilage.tibia_regions.anatomical_tibia_names`).
+        """
+        return anatomical_tibia_names(self.laterality)
 
     def get_surface_points(self):
         """
@@ -35,172 +90,68 @@ class Tibia:
 
     def calculate_landmarks(self):
         """
-        Calculate the landmarks that define the different regions of the tibia.
+        Subdivide the tibial subchondral bone and label every cartilage voxel.
+
+        Runs :func:`morphometry.cartilage.tibia_regions.subdivide_tibia` (stored as
+        :attr:`subdivision`; the two plates' frames also as :attr:`left_landmarks` /
+        :attr:`right_landmarks`, patient side) and gives each ``point_cloud`` voxel the
+        region of its nearest tAB triangle (world mm), stored as display labels in
+        :attr:`point_labels`. The voxel-to-triangle distances are summarised in
+        :attr:`transfer_qc` (:func:`~morphometry.cartilage.tibia_regions.transfer_qc`); a
+        WARNING is logged on the ``morphometry`` logger when more than
+        ``TRANSFER_MAX_FAR_FRACTION`` (1%) of the voxels are farther than
+        ``TRANSFER_FAR_MM`` (6 mm), which flags broken segmentations.
         """
-        # --- Connected Component Analysis to split into two parts ---
-        kdtree = KDTree(self.point_cloud)
-        n_points = self.point_cloud.shape[0]
-        visited = np.zeros(n_points, dtype=bool)
-        labels = np.full(n_points, -1, dtype=int)
-        component_id = 0
-        neighbor_radius = 2.5  # adjust as needed for your data's scale
-
-        for idx in range(n_points):
-            if not visited[idx]:
-                queue = [idx]
-                visited[idx] = True
-                labels[idx] = component_id
-                while queue:
-                    current = queue.pop(0)
-                    neighbors = kdtree.query_ball_point(self.point_cloud[current], r=neighbor_radius)
-                    for nb in neighbors:
-                        if not visited[nb]:
-                            visited[nb] = True
-                            labels[nb] = component_id
-                            queue.append(nb)
-                component_id += 1
-
-        # Find sizes of all components
-        unique, counts = np.unique(labels, return_counts=True)
-        if len(unique) < 2:
-            raise ValueError(f"Expected at least 2 connected components, found {len(unique)}")
-        # Keep only the two largest components
-        largest_two = unique[np.argsort(counts)[-2:]]
-        mask = np.isin(labels, largest_two)
-        filtered_points = self.point_cloud[mask]
-        filtered_labels = labels[mask]
-        # Remap labels to 0 and 1
-        new_label_map = {old: new for new, old in enumerate(largest_two)}
-        filtered_labels = np.vectorize(new_label_map.get)(filtered_labels)
-
-        left_plate = filtered_points[filtered_labels == 0]
-        right_plate = filtered_points[filtered_labels == 1]
-
-        # Ensure left/right assignment is consistent with image orientation
-        if left_plate[:, 0].mean() < right_plate[:, 0].mean():
-            left_plate, right_plate = right_plate, left_plate
-
-        left_plate_center = KMeans(n_clusters=1).fit(left_plate).cluster_centers_[0]
-        right_plate_center = KMeans(n_clusters=1).fit(right_plate).cluster_centers_[0]
-
-        left_ellipse = calculate_ellipse(left_plate, left_plate_center)
-        right_ellipse = calculate_ellipse(right_plate, right_plate_center)
-
-        left_plate_corners = get_plate_corners(left_plate)
-        left_plate_corners = {'upper_right': left_plate_corners[0], 'lower_right': left_plate_corners[1], 'upper_left': left_plate_corners[2], 'lower_left': left_plate_corners[3]}
-        right_plate_corners = get_plate_corners(right_plate)
-        right_plate_corners = {'upper_right': right_plate_corners[0], 'lower_right': right_plate_corners[1], 'upper_left': right_plate_corners[2], 'lower_left': right_plate_corners[3]}
-
-        self.left_landmarks = {'center': left_plate_center, 'ellipse': left_ellipse, 'corners': left_plate_corners}
-        self.right_landmarks = {'center': right_plate_center, 'ellipse': right_ellipse, 'corners': right_plate_corners}
-        self.center = (left_plate_center + right_plate_center) / 2
+        if self.point_cloud is None:
+            self.get_surface_points()
+        self.subdivision = subdivide_tibia(self.image, bone_label=self.bone_label,
+                                           cartilage_label=self.cartilage_label,
+                                           central_fraction=self.central_fraction,
+                                           laterality=self.laterality)
+        self.left_landmarks = self.subdivision.plates['left']
+        self.right_landmarks = self.subdivision.plates['right']
+        codes, distances = self.subdivision.nearest_regions(
+            array_indices_to_world(self.image, self.point_cloud))
+        self.point_labels = np.asarray(_TIBIA_DISPLAY_LABELS, dtype=object)[codes]
+        # QC: cartilage far from every tAB triangle is not explained by the subdivision
+        # (broken segmentation, plate missing from the bone coverage). Warn, do not fail.
+        self.transfer_qc = transfer_qc(distances)
+        if self.transfer_qc['far_fraction'] > TRANSFER_MAX_FAR_FRACTION:
+            logger.warning(
+                'Tibia: %.1f%% of the tibial cartilage voxels are more than %.0f mm from the '
+                'subchondral bone area they were assigned to (max %.1f mm); the segmentation '
+                'is probably broken and the tibial subregions unreliable.',
+                100 * self.transfer_qc['far_fraction'], TRANSFER_FAR_MM, self.transfer_qc['max_mm'])
 
     def classify_point(self, point: np.ndarray) -> str:
         """
         Classify a point as belonging to a specific region of the tibia.
-        :param point: A 1x3 point.
-        :return: The label of the region the point belongs to.
+
+        The point gets the region of the nearest tAB triangle (see
+        :meth:`TibiaSubdivision.region_codes_at`). For the cartilage voxels themselves use
+        the precomputed :attr:`point_labels` instead of calling this per point.
+
+        :param point: A length-3 index into ``image.array``.
+        :return: The display label of the region (``'cLT'`` ... ``'pRT'``, patient side).
         """
-        if point[0] < self.center[0]:  # left side of the image, i.e. right patient side
-            if np.linalg.norm(point - self.right_landmarks['center']) < self.right_landmarks['ellipse']:
-                return 'cRT'
-
-            upper_right = self.right_landmarks['corners']['upper_right']
-            lower_right = self.right_landmarks['corners']['lower_right']
-            upper_left = self.right_landmarks['corners']['upper_left']
-            lower_left = self.right_landmarks['corners']['lower_left']
-
-            ll_ur = upper_right - lower_left  # ac
-            ul_lr = lower_right - upper_left  # db
-            p_ur = upper_right - np.hstack((point[0], point[1]))  # xc
-            p_lr = lower_right - np.hstack((point[0], point[1]))  # xb
-
-            p_cross_ll_ur = np.cross(p_ur, ll_ur)  # xac
-            p_cross_ul_lr = np.cross(p_lr, ul_lr)  # xdb
-
-            if p_cross_ll_ur > 0:
-                if p_cross_ul_lr > 0:
-                    return 'pRT'
-                else:
-                    return 'eRT'
-            else:
-                if p_cross_ul_lr > 0:
-                    return 'iRT'
-                else:
-                    return 'aRT'
-
-        else:  # right side of the image, i.e. left patient side
-            if np.linalg.norm(point - self.left_landmarks['center']) < self.left_landmarks['ellipse']:
-                return 'cLT'
-
-            upper_right = self.left_landmarks['corners']['upper_right']
-            lower_right = self.left_landmarks['corners']['lower_right']
-            upper_left = self.left_landmarks['corners']['upper_left']
-            lower_left = self.left_landmarks['corners']['lower_left']
-
-            ll_ur = upper_right - lower_left  # ac
-            ul_lr = lower_right - upper_left  # db
-            p_ur = upper_right - np.hstack((point[0], point[1]))  # xc
-            p_lr = lower_right - np.hstack((point[0], point[1]))  # xb
-
-            p_cross_ll_ur = np.cross(p_ur, ll_ur)  # xac
-            p_cross_ul_lr = np.cross(p_lr, ul_lr)  # xdb
-
-            if p_cross_ll_ur > 0:
-                if p_cross_ul_lr > 0:
-                    return 'pLT'
-                else:
-                    return 'iLT'
-            else:
-                if p_cross_ul_lr > 0:
-                    return 'eLT'
-                else:
-                    return 'aLT'
+        if self.subdivision is None:
+            self.calculate_landmarks()
+        code = self.subdivision.region_codes_at(array_indices_to_world(self.image, point))[0]
+        return _TIBIA_DISPLAY_LABELS[code]
 
     def extract_subregions(self):
         """
-        Extract the subregions of the tibia.
+        Extract the subregions of the tibia as voxel point clouds (``self.clt`` etc.).
         """
-        clt, ilt, elt, alt, plt = list(), list(), list(), list(), list()
-        crt, irt, ert, art, prt = list(), list(), list(), list(), list()
+        if self.point_labels is None:
+            self.calculate_landmarks()
+        for key in TIBIA_REGION_KEYS:
+            setattr(self, key, self.point_cloud[self.point_labels == tibia_display_label(key)])
 
-        for point in self.point_cloud:
-            label = self.classify_point(point)
-            if label == 'cLT':
-                clt.append(point)
-            elif label == 'iLT':
-                ilt.append(point)
-            elif label == 'eLT':
-                elt.append(point)
-            elif label == 'aLT':
-                alt.append(point)
-            elif label == 'pLT':
-                plt.append(point)
-            elif label == 'cRT':
-                crt.append(point)
-            elif label == 'iRT':
-                irt.append(point)
-            elif label == 'eRT':
-                ert.append(point)
-            elif label == 'aRT':
-                art.append(point)
-            elif label == 'pRT':
-                prt.append(point)
-
-        self.clt = np.array(clt)
-        self.ilt = np.array(ilt)
-        self.elt = np.array(elt)
-        self.alt = np.array(alt)
-        self.plt = np.array(plt)
-        self.crt = np.array(crt)
-        self.irt = np.array(irt)
-        self.ert = np.array(ert)
-        self.art = np.array(art)
-        self.prt = np.array(prt)
-
-        # A subregion is one anatomical patch: drop small disconnected fragments that the
-        # (x, y) classification can bucket in from the plateau edges / midline.
-        for attr in ('clt', 'ilt', 'elt', 'alt', 'plt', 'crt', 'irt', 'ert', 'art', 'prt'):
+        # Safety net kept from the voxel-based scheme: a subregion is one anatomical patch,
+        # so drop small disconnected fragments (a no-op when the nearest-triangle transfer
+        # gives contiguous regions, which it does on clean scans).
+        for attr in TIBIA_REGION_KEYS:
             setattr(self, attr, _remove_subregion_fragments(getattr(self, attr)))
 
     def mesh_method(self, superior_surface: np.ndarray, inferior_surface: np.ndarray) -> dict:
@@ -329,6 +280,49 @@ class Tibia:
             plotter.show()
         return plotter
 
+    def plot_regions(self, plotter: pv.Plotter = None, show: bool = None,
+                     show_bone: bool = True, show_frames: bool = True) -> pv.Plotter:
+        """
+        Render the subdivided tibial subchondral bone area (tAB), one colour per region.
+
+        This shows the subdivision itself (on the bone surface, triangles cut exactly),
+        unlike :meth:`plot_segments`, which shows the cartilage voxels it was transferred to.
+
+        :param plotter: An existing PyVista ``Plotter`` to draw into (new one if ``None``).
+        :param show: Whether to call ``plotter.show()`` (see :meth:`plot_segments`).
+        :param show_bone: Also draw the rest of the tibial bone surface, translucent grey.
+        :param show_frames: Mark each plate's centre of gravity S and draw its internal
+            (towards the other plate, black) and anterior (white) directions.
+        :return: The ``Plotter`` the regions were drawn into.
+        """
+        created = plotter is None
+        if plotter is None:
+            plotter = pv.Plotter()
+        if self.subdivision is None:
+            self.calculate_landmarks()
+        sub = self.subdivision
+        if show_bone and sub.bone_mesh is not None:
+            plotter.add_mesh(sub.bone_mesh, color='lightgrey', opacity=0.25)
+        codes = np.asarray(sub.mesh.cell_data['region'])
+        colors = {attr: color for attr, _, color in TIBIA_SUBREGIONS}
+        names = sub.anatomical_names
+        for code, key in enumerate(TIBIA_REGION_KEYS):
+            if not (codes == code).any():
+                continue
+            label = tibia_display_label(key) + (f' ({names[key]})' if names else '')
+            part = sub.mesh.extract_cells(np.flatnonzero(codes == code))
+            plotter.add_mesh(part, color=colors[key], label=label)
+        if show_frames:
+            for frame in sub.plates.values():
+                length = 2.0 * float(frame.semi_axes.max())
+                plotter.add_mesh(pv.Sphere(radius=0.8, center=frame.centroid), color='black')
+                plotter.add_mesh(pv.Arrow(frame.centroid, frame.ml_direction, scale=length), color='black')
+                plotter.add_mesh(pv.Arrow(frame.centroid, frame.anterior_direction, scale=length), color='white')
+        plotter.add_legend(bcolor='white')
+        if show or (show is None and created):
+            plotter.show()
+        return plotter
+
     def plot_thickness(self, thicknesses: dict, plotter: pv.Plotter = None, show: bool = None,
                        cmap: str = 'viridis', clim: Tuple[float, float] = None,
                        show_scalar_bar: bool = True) -> pv.Plotter:
@@ -420,17 +414,13 @@ class Femur:
         :param tibia: A Tibia object.
         :param side: The side of the tibia (patient side) to extract the central weight-bearing zone from. Can be either 'left' or 'right'.
         """
-        central_tibia = list()
-        internal_external_tibia = list()
-        for point in tibia.point_cloud:
-            label = tibia.classify_point(point)
-            if label in (['iLT', 'eLT'] if side == 'left' else ['iRT', 'eRT']):
-                internal_external_tibia.append(point)
-            if label == ('cLT' if side == 'left' else 'cRT'):
-                central_tibia.append(point)
-
-        central_tibia = np.array(central_tibia)
-        internal_external_tibia = np.array(internal_external_tibia)
+        if tibia.point_labels is None:
+            tibia.calculate_landmarks()
+        # The tibial voxels' precomputed region labels (patient side).
+        plate = 'LT' if side == 'left' else 'RT'
+        labels = tibia.point_labels
+        central_tibia = tibia.point_cloud[labels == 'c' + plate]
+        internal_external_tibia = tibia.point_cloud[(labels == 'i' + plate) | (labels == 'e' + plate)]
         max_anterior = central_tibia[:, 1].min()  # min because anterior - posterior is low to high
         max_posterior = central_tibia[:, 1].max()
         max_left = internal_external_tibia[:, 0].min()  # refers to image side
@@ -743,7 +733,7 @@ class Femur:
             )
         if tibia.point_cloud is None:
             tibia.get_surface_points()
-        if tibia.left_landmarks is None:
+        if tibia.point_labels is None:
             tibia.calculate_landmarks()
         self.extract_central_weightbearing_zone(tibia, side='left')
         self.extract_central_weightbearing_zone(tibia, side='right')
@@ -1108,12 +1098,13 @@ def split_tibia_thickness_by_compartment(tibia_thickness: dict) -> dict:
     The compartment is identified by the subregion key suffix, matched case-insensitively
     so both attribute names (``clt``) and display labels (``cLT``) work: ``*LT`` subregions
     (cLT, iLT, eLT, aLT, pLT) belong to the patient-**left** plateau and ``*RT`` subregions
-    (cRT, iRT, eRT, aRT, pRT) to the patient-**right** plateau. This follows
-    :meth:`Tibia.classify_point` in LPI orientation, where increasing index ``x`` points
-    toward patient left (verified against the image affine on a real knee scan: the ``*LT``
-    voxels lie ~40 mm further toward patient left in world coordinates). Which of the two
-    is medial or lateral depends on whether the knee is a left or a right knee and is left
-    to the caller.
+    (cRT, iRT, eRT, aRT, pRT) to the patient-**right** plateau, as named by
+    :func:`morphometry.cartilage.tibia_regions.find_plates` (the plate with the smaller RAS
+    world x, i.e. towards the patient's left). Which of the two is medial or lateral depends
+    on whether the knee is a left or a right knee; :attr:`Tibia.anatomical_names` gives that
+    mapping, but a dict re-keyed with it (``cMT`` ... ``pLT``, where ``LT`` means *lateral*)
+    must not be passed here: it is refused (any ``*MT`` key raises), because its ``*LT``
+    keys would otherwise be read as patient-left.
 
     :param tibia_thickness: ``{subregion: {(x, y): thickness}}`` as returned by
         :meth:`Tibia.calculate_thickness`.
@@ -1123,6 +1114,11 @@ def split_tibia_thickness_by_compartment(tibia_thickness: dict) -> dict:
     :raises ValueError: If a key belongs to neither compartment (it would otherwise be
         silently dropped from both searches).
     """
+    anatomical = [key for key in tibia_thickness if key.lower().endswith('mt')]
+    if anatomical:
+        raise ValueError(f'Tibial subregion keys {anatomical} are medial/lateral names; '
+                         'split_tibia_thickness_by_compartment needs the patient-side keys '
+                         '(*LT = patient left, *RT = patient right).')
     split = {'left': {}, 'right': {}}
     for key, subregion_map in tibia_thickness.items():
         suffix = key.lower()[-2:]
@@ -1338,76 +1334,6 @@ def get_superior_and_inferior_surface_points(cartilage: np.ndarray) -> Tuple[np.
     superior_points = df.groupby(['x', 'y']).min().reset_index()
 
     return superior_points.to_numpy(), inferior_points.to_numpy()
-
-
-def calculate_ellipse(points: np.ndarray, center: np.ndarray, fraction: float = 0.2) -> float:
-    """
-    Calculate the radius of the central tibial subregion (cLT / cRT) of one plate.
-
-    The central subregion is meant to hold ~20% of the plate (after Wirth & Eckstein
-    2008). The radius returned is the ``fraction`` quantile of the point-to-centre
-    distances, so that ~``fraction`` of ``points`` lie *strictly* inside it — matching the
-    ``np.linalg.norm(point - center) < radius`` test in :meth:`Tibia.classify_point`
-    (exactly ``int(len(points) * fraction)`` points, fewer only when several points tie
-    at the returned distance).
-
-    Caveats, kept deliberately for now (the subdivision will later be reworked to follow
-    the paper):
-
-    - Despite the historical name this is not an ellipse but a **sphere**, in 3D
-      **voxel-index space** (anisotropic voxels are not converted to mm).
-    - The 20% is a share of **cartilage voxels** (i.e. of cartilage volume), not of the
-      subchondral bone area as in Wirth & Eckstein.
-
-    This replaced an iterative search that started at a radius of 20 voxels, grew it in
-    0.5-voxel steps and halved it on the step that first reached 20%, so it returned half
-    the radius it meant to; since 20 voxels already covers 20% on the knees measured, it returned
-    a constant 10 voxels and the central subregion held only ~6-9% of the plate.
-
-    :param points: An ``(N, 3)`` point cloud of one tibial plate (voxel indices).
-    :param center: The centre of the plate, a length-3 point in the same space.
-    :param fraction: The share of ``points`` that should fall strictly inside the radius,
-        in ``[0, 1]``. Defaults to 0.2.
-    :return: The radius (voxel-index units). ``0.0`` for an empty point cloud or
-        ``fraction <= 0`` (no point is strictly inside a zero radius); for
-        ``fraction >= 1`` a radius just above the largest distance, so every point is
-        inside.
-    """
-    points = np.asarray(points, dtype=float)
-    if len(points) == 0:
-        return 0.0
-    distances = np.linalg.norm(points - np.asarray(center, dtype=float), axis=1)
-
-    # The k-th smallest distance (0-based) has exactly k distances strictly below it
-    # (barring ties), so it is the radius that puts k = int(N * fraction) points inside.
-    k = int(len(distances) * fraction)
-    if k <= 0:
-        return 0.0
-    if k >= len(distances):
-        # Every point must be strictly inside: step just past the farthest one.
-        return float(np.nextafter(distances.max(), np.inf))
-    return float(np.partition(distances, k)[k])
-
-
-def get_plate_corners(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Get the corners (2D) of a plate defined by a point cloud.
-
-    :param points: A point cloud.
-    :return: The corners (image orientation: axial view; left image side = right patient side,
-    upper image half = posterior) of the plate.
-    """
-    left_image_boundary = points[:, 0].min()  # right patient side
-    right_image_boundary = points[:, 0].max()  # left patient side
-    upper_image_boundary = points[:, 1].max()  # posterior
-    lower_image_boundary = points[:, 1].min()  # anterior
-
-    upper_right = np.array([right_image_boundary, upper_image_boundary])
-    lower_right = np.array([right_image_boundary, lower_image_boundary])
-    upper_left = np.array([left_image_boundary, upper_image_boundary])
-    lower_left = np.array([left_image_boundary, lower_image_boundary])
-
-    return upper_right, lower_right, upper_left, lower_left
 
 
 # --- Visualisation ---------------------------------------------------------

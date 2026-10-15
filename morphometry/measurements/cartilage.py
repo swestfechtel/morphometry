@@ -38,7 +38,8 @@ __all__ = [
 
 
 def calculate_tibial_cartilage_thickness(image, cartilage_label: int, method: str = 'knn',
-                                         plot: bool | pv.Plotter = False) -> dict:
+                                         plot: bool | pv.Plotter = False,
+                                         tibia_bone_label: int = 2) -> dict:
     """
     Calculate tibial cartilage thickness per subregion.
     :param image: An Image of the knee cartilage segmentation.
@@ -46,9 +47,11 @@ def calculate_tibial_cartilage_thickness(image, cartilage_label: int, method: st
     :param method: Thickness method, 'knn' or 'mesh'.
     :param plot: Pass a PyVista ``Plotter`` to draw the tibial thickness heatmap into it
         (the articular surface coloured by thickness). ``False`` disables plotting.
+    :param tibia_bone_label: The label of the tibial bone. The tibial subregions (Wirth &
+        Eckstein 2008) are defined on its subchondral surface, so it must be present.
     :return: A dict mapping each subregion to its per-point thickness map.
     """
-    tibia = Tibia(image, cartilage_label)
+    tibia = Tibia(image, cartilage_label, bone_label=tibia_bone_label)
     result = tibia.calculate_thickness(method)
     if isinstance(plot, pv.Plotter):
         tibia.plot_thickness(result, plotter=plot, show=False)
@@ -79,7 +82,8 @@ def calculate_femoral_cartilage_thickness(image, tibia: Tibia, cartilage_label: 
 
 
 def calculate_knee_cartilage_thickness(image, femur_label: int, tibia_label: int, method: str = 'knn',
-                                       plot: bool | pv.Plotter = False) -> dict:
+                                       plot: bool | pv.Plotter = False,
+                                       tibia_bone_label: int = 2) -> dict:
     """
     Calculate both tibial and femoral cartilage thickness in one call.
 
@@ -90,9 +94,11 @@ def calculate_knee_cartilage_thickness(image, femur_label: int, tibia_label: int
     :param method: Thickness method, 'knn' or 'mesh'.
     :param plot: Pass a PyVista ``Plotter`` to draw a combined tibia+femur thickness
         heatmap (both articular surfaces, shared colour scale). ``False`` disables plotting.
+    :param tibia_bone_label: The label of the tibial bone, on whose subchondral surface the
+        tibial subregions are defined (must be present).
     :return: ``{'tibia': <tibia subregions>, 'femur': <femur subregions>}``.
     """
-    tibia = Tibia(image, tibia_label)
+    tibia = Tibia(image, tibia_label, bone_label=tibia_bone_label)
     tibia_results = tibia.calculate_thickness(method)
     femur = Femur(image, femur_label)
     femur_results = femur.calculate_thickness(tibia, method)
@@ -105,7 +111,8 @@ def calculate_thinnest_cartilage_area(image, femur_label: int, tibia_label: int,
                                       method: str = 'knn', neighbourhood_mm: float = 3.0,
                                       radius_mm: Optional[float] = None,
                                       plot: bool | pv.Plotter = False,
-                                      by_compartment: bool = False) -> dict:
+                                      by_compartment: bool = False,
+                                      tibia_bone_label: int = 2) -> dict:
     """
     Find the thinnest area of the tibiofemoral cartilage in one call.
 
@@ -127,11 +134,13 @@ def calculate_thinnest_cartilage_area(image, femur_label: int, tibia_label: int,
     :param by_compartment: ``False`` (default) searches the whole knee and returns a single
         result. ``True`` searches the patient-left and patient-right tibiofemoral
         compartments separately.
+    :param tibia_bone_label: The label of the tibial bone, on whose subchondral surface the
+        tibial subregions are defined (must be present).
     :return: With ``by_compartment=False``, the result dict from :func:`find_thinnest_area`.
         With ``by_compartment=True``, ``{'left': result, 'right': result}`` keyed by
         **patient** side, from :func:`find_thinnest_area_by_compartment`.
     """
-    tibia = Tibia(image, tibia_label)
+    tibia = Tibia(image, tibia_label, bone_label=tibia_bone_label)
     tibia_results = tibia.calculate_thickness(method)
     femur = Femur(image, femur_label)
     femur_results = femur.calculate_thickness(tibia, method)

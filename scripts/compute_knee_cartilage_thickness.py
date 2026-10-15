@@ -32,7 +32,11 @@ Examples
         -o results/ --dump-json results/ --screenshot results/viz --html results/viz
 
 The segmentation is expected to label the femoral and tibial cartilage with distinct
-integer labels (defaults 3 and 4, matching the Duesseldorf/T1rho convention).
+integer labels (defaults 3 and 4, matching the Duesseldorf/T1rho convention), and the tibial
+bone (``--tibia-bone-label``, default 2): the tibial subregions (Wirth & Eckstein 2008) are
+defined on the tibial subchondral bone surface. Tibial subregion keys are patient-side
+(``clt`` = central patient-left plate); ``--laterality-table`` (CSV ``subject,laterality``)
+adds the paper's medial/lateral names (``cMT`` ... ``pLT``) in an extra CSV column.
 """
 import argparse
 import csv
@@ -51,10 +55,15 @@ import numpy as np
 
 from morphometry.image_io import Segmentation
 from morphometry.cartilage.knee import Tibia, Femur, plot_knee_segments, plot_knee_thickness
+from morphometry.cartilage.tibia_regions import anatomical_tibia_names
 
 # Column order for the summary CSV. The stdout table omits the leading ``subject``
 # column (it is printed as a per-subject header instead).
-SUMMARY_COLUMNS = ['subject', 'bone', 'subregion', 'mean_mm', 'std_mm', 'min_mm', 'max_mm', 'n_points']
+# 'anatomical_subregion' is the paper's medial/lateral name of a tibial subregion (e.g. cMT),
+# filled only when the knee's laterality is known (--laterality-table); 'subregion' keeps the
+# patient-side key (clt = central patient-LEFT plate) in every row.
+SUMMARY_COLUMNS = ['subject', 'bone', 'subregion', 'mean_mm', 'std_mm', 'min_mm', 'max_mm', 'n_points',
+                   'anatomical_subregion']
 
 # Default filenames used when an output path is given as a directory.
 DEFAULT_CSV_NAME = 'summary.csv'
@@ -80,7 +89,8 @@ def load_segmentation(input_path: str, remove_outliers: bool = False) -> Segment
 
 
 def compute_thickness(seg: Segmentation, femur_label: int, tibia_label: int,
-                      method: str) -> Tuple[Optional[Tibia], Optional[Femur], dict, dict]:
+                      method: str, tibia_bone_label: int = 2,
+                      laterality: Optional[str] = None) -> Tuple[Optional[Tibia], Optional[Femur], dict, dict]:
     """
     Compute tibial and femoral cartilage thickness for a segmentation.
 
@@ -92,6 +102,10 @@ def compute_thickness(seg: Segmentation, femur_label: int, tibia_label: int,
     :param femur_label: The label of the femoral cartilage.
     :param tibia_label: The label of the tibial cartilage.
     :param method: Thickness method, ``'knn'`` or ``'mesh'``.
+    :param tibia_bone_label: The label of the tibial bone (the tibial subregions are
+        defined on its subchondral surface).
+    :param laterality: ``'left'`` / ``'right'`` knee or ``None``; passed to ``Tibia`` (adds
+        the medial/lateral region names, the subdivision itself does not depend on it).
     :return: ``(tibia, femur, tibia_results, femur_results)``. ``tibia`` / ``femur`` are
         the computed objects (``None`` if that bone failed), and the results are the
         per-subregion thickness dicts (empty ``{}`` on failure).
@@ -102,7 +116,8 @@ def compute_thickness(seg: Segmentation, femur_label: int, tibia_label: int,
     femur_results: dict = {}
 
     try:
-        tibia = Tibia(seg, cartilage_label=tibia_label)
+        tibia = Tibia(seg, cartilage_label=tibia_label, bone_label=tibia_bone_label,
+                      laterality=laterality)
         tibia_results = tibia.calculate_thickness(method)
     except (RuntimeError, AssertionError, ValueError) as exc:
         print(f'[warning] tibial cartilage thickness failed: {exc}', file=sys.stderr)
@@ -135,28 +150,64 @@ def _finite_values(thickness_map: dict) -> np.ndarray:
     )
 
 
-def summarize(results_by_bone: Dict[str, dict], subject: str) -> List[list]:
+def summarize(results_by_bone: Dict[str, dict], subject: str,
+              laterality: Optional[str] = None) -> List[list]:
     """
     Build per-subregion summary statistics for one subject's bones.
 
     :param results_by_bone: ``{bone_name: {subregion: {(x, y): thickness}}}``.
     :param subject: Identifier of the scan the results belong to (first CSV column).
-    :return: A list of rows ``[subject, bone, subregion, mean, std, min, max, n_points]``,
-        with ``NaN`` statistics for subregions that have no finite values.
+    :param laterality: ``'left'`` / ``'right'`` knee or ``None``; with a value, tibial rows
+        get the paper's medial/lateral name in the last column.
+    :return: A list of rows ``[subject, bone, subregion, mean, std, min, max, n_points,
+        anatomical_subregion]``, with ``NaN`` statistics for subregions that have no finite
+        values and an empty ``anatomical_subregion`` where it is unknown.
     """
+    names = anatomical_tibia_names(laterality) or {}
     rows: List[list] = []
     for bone, results in results_by_bone.items():
         for subregion, thickness_map in results.items():
+            anatomical = names.get(subregion, '') if bone == 'tibia' else ''
             values = _finite_values(thickness_map)
             if len(values) == 0:
-                rows.append([subject, bone, subregion, np.nan, np.nan, np.nan, np.nan, 0])
+                rows.append([subject, bone, subregion, np.nan, np.nan, np.nan, np.nan, 0, anatomical])
             else:
                 rows.append([
                     subject, bone, subregion,
                     float(values.mean()), float(values.std()),
-                    float(values.min()), float(values.max()), int(len(values)),
+                    float(values.min()), float(values.max()), int(len(values)), anatomical,
                 ])
     return rows
+
+
+def load_laterality_table(path: Optional[str]) -> Dict[str, str]:
+    """
+    Read a per-subject knee laterality table.
+
+    The CSV needs a header with the columns ``subject`` and ``laterality``; ``laterality``
+    is ``left`` or ``right`` (case-insensitive; an empty cell means unknown). ``subject``
+    is matched against the scan's subject id (its filename stem, see
+    :func:`assign_subject_ids`), so a table keyed ``K1_0_belastet`` addresses that file.
+
+    :param path: Path to the CSV, or ``None``.
+    :return: ``{subject: 'left' | 'right'}`` (empty without a path).
+    :raises ValueError: On a missing column or an invalid laterality value.
+    """
+    if path is None:
+        return {}
+    table: Dict[str, str] = {}
+    with open(path, newline='') as f:
+        reader = csv.DictReader(f)
+        if not {'subject', 'laterality'} <= set(reader.fieldnames or ()):
+            raise ValueError(f'{path}: needs the columns subject,laterality')
+        for row in reader:
+            value = (row['laterality'] or '').strip().lower()
+            if not value:
+                continue
+            if value not in ('left', 'right'):
+                raise ValueError(f"{path}: laterality of {row['subject']!r} must be left or right, got {value!r}")
+            table[row['subject'].strip()] = value
+    return table
 
 
 def print_summary(rows: List[list]):
@@ -172,7 +223,8 @@ def print_summary(rows: List[list]):
     header = f"{'bone':<6} {'subregion':<10} {'mean':>8} {'std':>8} {'min':>8} {'max':>8} {'n':>7}"
     print(header)
     print('-' * len(header))
-    for _subject, bone, subregion, mean, std, mn, mx, n in rows:
+    for row in rows:
+        _subject, bone, subregion, mean, std, mn, mx, n = row[:8]
         print(f'{bone:<6} {subregion:<10} {mean:>8.3f} {std:>8.3f} {mn:>8.3f} {mx:>8.3f} {n:>7d}')
 
 
@@ -432,11 +484,13 @@ def process_one(path: str, subject: str, args: argparse.Namespace) -> Tuple[List
     :return: ``(summary_rows, json_payload)`` for this subject.
     """
     seg = load_segmentation(path, remove_outliers=args.remove_outliers)
+    laterality = args.laterality_by_subject.get(subject)
     tibia, femur, tibia_results, femur_results = compute_thickness(
         seg, femur_label=args.femur_label, tibia_label=args.tibia_label, method=args.method,
+        tibia_bone_label=args.tibia_bone_label, laterality=laterality,
     )
 
-    rows = summarize({'tibia': tibia_results, 'femur': femur_results}, subject)
+    rows = summarize({'tibia': tibia_results, 'femur': femur_results}, subject, laterality)
     print_summary(rows)
 
     # Passing --screenshot/--html signals intent to render; if the user did not also pick
@@ -462,6 +516,12 @@ def main(args: argparse.Namespace):
     """
     paths = resolve_inputs(args.input)
     subject_ids = assign_subject_ids(paths)
+    args.laterality_by_subject = load_laterality_table(getattr(args, 'laterality_table', None))
+    if args.laterality_by_subject:
+        unknown = [s for s in subject_ids.values() if s not in args.laterality_by_subject]
+        if unknown:
+            print(f'[info] no laterality for {len(unknown)} scan(s), e.g. {unknown[0]}; their '
+                  'tibial rows keep patient-side names only.', file=sys.stderr)
     if len(paths) > 1:
         print(f'[info] batch mode: {len(paths)} segmentations.', file=sys.stderr)
     if (args.screenshot is not None or args.html is not None) and args.visualize == 'none':
@@ -498,6 +558,14 @@ if __name__ == '__main__':
                         help='Label of the femoral cartilage in the segmentation (default: 3).')
     parser.add_argument('--tibia-label', type=int, default=4,
                         help='Label of the tibial cartilage in the segmentation (default: 4).')
+    parser.add_argument('--tibia-bone-label', type=int, default=2,
+                        help='Label of the tibial bone; the tibial subregions are defined on '
+                             'its subchondral surface (default: 2).')
+    parser.add_argument('--laterality-table', default=None,
+                        help='Optional CSV with columns subject,laterality (left/right knee). '
+                             'Adds the medial/lateral tibial subregion names (cMT ... pLT) in '
+                             'the anatomical_subregion CSV column; subregion keeps the '
+                             'patient-side key.')
     parser.add_argument('--method', choices=['knn', 'mesh'], default='knn',
                         help='Thickness computation method (default: knn).')
     parser.add_argument('-o', '--output', default=None,

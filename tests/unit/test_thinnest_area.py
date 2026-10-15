@@ -226,14 +226,18 @@ def test_real_tibia_high_x_plateau_is_patient_left():
 
     In LPI orientation increasing index x points toward patient left, so the plateau at
     higher x must come back under ``'left'`` (``*LT`` subregions). A flip in
-    ``Tibia.calculate_landmarks`` (plate swap) or ``classify_point`` would break this.
-    Elliptical slabs are used because box-shaped ones leave subregions empty.
+    ``Tibia.calculate_landmarks`` / ``tibia_regions.find_plates`` (plate swap) would break
+    this. The plates are named from the world (RAS) position, so the phantom carries an LPI
+    affine (``-I``, as after ``transform_coordinate_system``) and a tibial bone block
+    (label 2) under the cartilage, on whose surface the subregions are defined (index z
+    grows inferiorly, so the bone is at higher z than the cartilage).
     """
-    array = np.zeros((80, 40, 20), np.uint8)
+    array = np.zeros((80, 40, 24), np.uint8)
+    array[1:79, 1:39, 12:22] = 2
     X, Y = np.mgrid[:80, :40]
     for cx in (18, 58):
         array[((X - cx) / 14.0) ** 2 + ((Y - 20) / 16.0) ** 2 <= 1, 9:12] = 4
-    seg = Segmentation.from_nibabel(nib.Nifti1Image(array, np.eye(4)))
+    seg = Segmentation.from_nibabel(nib.Nifti1Image(array, np.diag([-1.0, -1.0, -1.0, 1.0])))
 
     split = split_tibia_thickness_by_compartment(Tibia(seg, 4).calculate_thickness('knn'))
 

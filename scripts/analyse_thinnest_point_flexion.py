@@ -190,7 +190,7 @@ def compartment_row(femur: Optional[Femur], thinnest: Optional[dict], spacing) -
 
 
 def process_file(path: str, femur_label: int, tibia_label: int, method: str,
-                 want_objects: bool = False, label: str = '') -> dict:
+                 want_objects: bool = False, label: str = '', tibia_bone_label: int = 2) -> dict:
     """
     Compute the per-compartment thinnest points and their A-P fractions for one scan.
 
@@ -201,6 +201,8 @@ def process_file(path: str, femur_label: int, tibia_label: int, method: str,
     :param want_objects: If ``True``, also return the ``Tibia``/``Femur`` objects and
         thickness maps (needed for visualisation).
     :param label: Scan identifier used in per-compartment failure warnings.
+    :param tibia_bone_label: Label of the tibial bone; the tibial subregions (and hence the
+        patient-side compartments) are defined on its subchondral surface.
     :return: A dict with ``compartments``: ``{compartment: row}`` for every entry of
         :data:`COMPARTMENTS`, each row as returned by :func:`compartment_row` (all ``NaN``
         for a failed compartment). If requested, also ``tibia``/``femur``/
@@ -213,7 +215,7 @@ def process_file(path: str, femur_label: int, tibia_label: int, method: str,
     seg.read_image(path)
     seg.transform_coordinate_system()
 
-    tibia = Tibia(seg, tibia_label)
+    tibia = Tibia(seg, tibia_label, bone_label=tibia_bone_label)
     tibia_thickness = tibia.calculate_thickness(method)
     femur = Femur(seg, femur_label)
     femur_thickness = femur.calculate_thickness(tibia, method)
@@ -438,7 +440,8 @@ def main(args: argparse.Namespace):
             label = f'{subject} {angle} {load}'
             try:
                 case = process_file(path, args.femur_label, args.tibia_label, args.method,
-                                    want_objects=want_objects, label=label)
+                                    want_objects=want_objects, label=label,
+                                    tibia_bone_label=args.tibia_bone_label)
                 want_render = want_objects
             # Deliberately broad: a cohort run should survive any single pathological scan
             # (segmentation defects surface as varied exceptions from the thickness pipeline).
@@ -506,6 +509,9 @@ if __name__ == '__main__':
                         help='Label of the femoral cartilage (default: 3).')
     parser.add_argument('--tibia-label', type=int, default=4,
                         help='Label of the tibial cartilage (default: 4).')
+    parser.add_argument('--tibia-bone-label', type=int, default=2,
+                        help='Label of the tibial bone; the tibial subregions are defined on '
+                             'its subchondral surface (default: 2).')
     parser.add_argument('--method', choices=['knn', 'mesh'], default='knn',
                         help='Thickness computation method (default: knn).')
     parser.add_argument('-o', '--output', default=None,

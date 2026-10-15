@@ -16,6 +16,9 @@ This module provides that shared geometry and nothing knee-specific:
 - :func:`total_subchondral_area` -- tAB = cAB plus the enclosed denuded holes.
 - :func:`triangle_areas`, :func:`split_mesh_by_scalar`, :func:`split_mesh_by_plane` --
   exact area bookkeeping, with triangles split along a plane or a scalar level set.
+- :func:`face_components`, :func:`extract_faces`, :func:`merge_meshes` -- edge-connected
+  patches, sub-meshes and concatenation (used to split the tibial cAB into plates).
+- :func:`array_indices_to_world` -- world mm of indices into ``Image.array`` (either backend).
 
 All coordinates are physical (world) mm obtained through the image's full index-to-world
 transform (direction cosines, spacing and origin), so results do not depend on where or how
@@ -102,6 +105,25 @@ def indices_to_world(affine: np.ndarray, indices: np.ndarray) -> np.ndarray:
     """
     indices = np.asarray(indices, dtype=float).reshape(-1, 3)
     return indices @ affine[:3, :3].T + affine[:3, 3]
+
+
+def array_indices_to_world(image: Image, indices: np.ndarray) -> np.ndarray:
+    """
+    Map indices into ``image.array`` to RAS world mm, for either backend.
+
+    ``Image.array`` is ``(i, j, k)``-ordered for nibabel but ``(k, j, i)`` for SimpleITK
+    (``GetArrayFromImage``), so the columns are reversed for SimpleITK before applying
+    :func:`index_to_world_affine`. Use this for point clouds built with
+    ``np.argwhere(image.array == label)``.
+
+    :param image: The ``Image`` / ``Segmentation`` the indices refer to.
+    :param indices: ``(N, 3)`` indices into ``image.array``.
+    :return: ``(N, 3)`` world coordinates in mm (RAS).
+    """
+    indices = np.asarray(indices, dtype=float).reshape(-1, 3)
+    if image.type != 'nibabel':
+        indices = indices[:, ::-1]
+    return indices_to_world(index_to_world_affine(image), indices)
 
 
 # ----------------------------------------------------------------------------------------
@@ -360,6 +382,39 @@ def cartilage_coverage(bone_mesh: pv.PolyData, image: Image, cartilage_label: in
 # 3. Total subchondral bone area (tAB)
 # ----------------------------------------------------------------------------------------
 
+def face_components(mesh: pv.PolyData, selected: np.ndarray):
+    """
+    Edge-connected components of a subset of a mesh's triangles.
+
+    Two selected triangles belong to the same component when a chain of selected triangles,
+    each sharing an edge with the next, joins them (sharing only a vertex is not enough).
+
+    :param mesh: All-triangle mesh.
+    :param selected: ``(n_cells,)`` bool array, True for the triangles to group.
+    :return: ``(labels, touches_boundary, areas)``: ``labels`` is an ``(n_cells,)`` int array
+        (component id ``0..K-1`` per selected face, ``-1`` for unselected faces);
+        ``touches_boundary[c]`` is True if component ``c`` has a face on the mesh's open
+        (e.g. FOV-cut) boundary; ``areas[c]`` is the component's area.
+    """
+    selected = np.asarray(selected, dtype=bool)
+    faces = _faces_array(mesh)
+    m = len(faces)
+    labels = np.full(m, -1)
+    if not selected.any():
+        return labels, np.zeros(0, dtype=bool), np.zeros(0)
+    pairs, on_boundary = _face_adjacency(faces)
+    keep = selected[pairs[:, 0]] & selected[pairs[:, 1]]
+    p = pairs[keep]
+    graph = sparse.coo_matrix((np.ones(len(p)), (p[:, 0], p[:, 1])), shape=(m, m))
+    _, comp = connected_components(graph, directed=False)
+    # Renumber the components of the selected faces 0..K-1.
+    _, labels[selected] = np.unique(comp[selected], return_inverse=True)
+    n = labels.max() + 1
+    areas = np.bincount(labels[selected], weights=triangle_areas(mesh)[selected], minlength=n)
+    touches = np.bincount(labels[selected], weights=on_boundary[selected], minlength=n) > 0
+    return labels, touches, areas
+
+
 def uncovered_components(bone_mesh: pv.PolyData, covered: np.ndarray):
     """
     Edge-connected components of the uncovered triangles.
@@ -371,22 +426,7 @@ def uncovered_components(bone_mesh: pv.PolyData, covered: np.ndarray):
         is True if component ``c`` has a face on the mesh's open (FOV-cut) boundary;
         ``areas[c]`` is the component's area.
     """
-    covered = np.asarray(covered, dtype=bool)
-    faces = _faces_array(bone_mesh)
-    pairs, on_boundary = _face_adjacency(faces)
-    free = ~covered
-    keep = free[pairs[:, 0]] & free[pairs[:, 1]]
-    p = pairs[keep]
-    m = len(faces)
-    graph = sparse.coo_matrix((np.ones(len(p)), (p[:, 0], p[:, 1])), shape=(m, m))
-    _, comp = connected_components(graph, directed=False)
-    labels = np.full(m, -1)
-    # Renumber the components of the uncovered faces 0..K-1.
-    _, labels[free] = np.unique(comp[free], return_inverse=True)
-    n = labels.max() + 1
-    areas = np.bincount(labels[free], weights=triangle_areas(bone_mesh)[free], minlength=n)
-    touches = np.bincount(labels[free], weights=on_boundary[free], minlength=n) > 0
-    return labels, touches, areas
+    return face_components(bone_mesh, ~np.asarray(covered, dtype=bool))
 
 
 def total_subchondral_area(bone_mesh: pv.PolyData, covered: np.ndarray,
@@ -415,8 +455,9 @@ def total_subchondral_area(bone_mesh: pv.PolyData, covered: np.ndarray,
     The rule knows nothing about plates or condyles: any uncovered region ringed by cartilage
     is filled. If the medial and lateral tibial cartilage touched both anteriorly and
     posteriorly, the intercondylar area between them would be enclosed and (being well below
-    half the cAB) filled into tAB. Per-plate hole filling or an absolute hole-size cap is the
-    remedy (plan, step 2); it is not applied here.
+    half the cAB) filled into tAB. The tibial subdivision therefore calls this once *per
+    plate*, with only that plate's cAB as ``covered``
+    (:func:`morphometry.cartilage.tibia_regions.subdivide_tibia`).
 
     :param bone_mesh: All-triangle bone mesh from :func:`bone_surface_mesh`.
     :param covered: ``(n_cells,)`` bool cAB flags from :func:`cartilage_coverage`.
@@ -547,6 +588,54 @@ def _submesh(mesh: pv.PolyData, points: np.ndarray, point_data: dict, tris: np.n
         out.point_data[name] = values[used]
     for name in mesh.cell_data.keys():
         out.cell_data[name] = np.asarray(mesh.cell_data[name])[source_faces]
+    return out
+
+
+def extract_faces(mesh: pv.PolyData, selected) -> pv.PolyData:
+    """
+    Compact sub-mesh of the selected triangles (cell and point data carried over).
+
+    Unlike VTK's ``extract_cells`` this returns ``PolyData`` and keeps the selected triangles
+    in their original order.
+
+    :param mesh: All-triangle ``pv.PolyData``.
+    :param selected: ``(n_cells,)`` bool mask or an integer index array of the faces to keep.
+    :return: A ``pv.PolyData`` holding only the selected triangles and the points they use
+        (empty if nothing is selected).
+    """
+    index = np.asarray(selected)
+    index = np.flatnonzero(index) if index.dtype == bool else index.astype(int)
+    point_data = {name: np.asarray(mesh.point_data[name]) for name in mesh.point_data.keys()}
+    return _submesh(mesh, np.asarray(mesh.points, dtype=float), point_data,
+                    _faces_array(mesh)[index], index)
+
+
+def merge_meshes(meshes) -> pv.PolyData:
+    """
+    Concatenate triangle meshes without merging points, keeping their common cell data.
+
+    The cells of the result are the cells of ``meshes[0]``, then of ``meshes[1]``, etc., in
+    order; points are not deduplicated, so the parts stay disjoint. Only cell-data arrays
+    present in every non-empty input are kept.
+
+    :param meshes: An iterable of all-triangle ``pv.PolyData`` (empty ones are skipped).
+    :return: The concatenated ``pv.PolyData`` (empty if every input is empty).
+    """
+    meshes = [m for m in meshes if m.n_cells > 0]
+    if not meshes:
+        return pv.PolyData()
+    points, faces, offset = [], [], 0
+    for m in meshes:
+        points.append(np.asarray(m.points, dtype=float))
+        faces.append(_faces_array(m) + offset)
+        offset += m.n_points
+    faces = np.concatenate(faces)
+    out = pv.PolyData(np.concatenate(points), np.hstack([np.full((len(faces), 1), 3), faces]).ravel())
+    names = set(meshes[0].cell_data.keys())
+    for m in meshes[1:]:
+        names &= set(m.cell_data.keys())
+    for name in sorted(names):
+        out.cell_data[name] = np.concatenate([np.asarray(m.cell_data[name]) for m in meshes])
     return out
 
 

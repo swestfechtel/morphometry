@@ -4,9 +4,10 @@ Reference: W. Wirth and F. Eckstein, "A Technique for Regional Analysis of Femor
 Cartilage Thickness Based on Quantitative Magnetic Resonance Imaging", *IEEE TMI* 27(6),
 737–744, 2008 (`Wirth_Eckstein_2008.pdf`, repo root, untracked).
 
-Status (2026-10-15): analysis, step 0 and step 1 done. The `calculate_ellipse` bug is fixed
-(60425aa). Step 1 (shared bone-surface geometry) is `morphometry/cartilage/surface.py`; the
-tibia/femur rewrite (steps 2-4) has not started. Code: `morphometry/cartilage/knee.py`.
+Status (2026-10-15): analysis, steps 0, 1 and 2 done. Step 1 (shared bone-surface geometry)
+is `morphometry/cartilage/surface.py`; step 2 (tibia) is `morphometry/cartilage/tibia_regions.py`,
+wired into `Tibia` (`morphometry/cartilage/knee.py`). The femur (step 3) and the area-based
+thickness (step 4) have not started.
 
 ## 1. Where the current code departs from the paper
 
@@ -111,6 +112,54 @@ geometry helpers `index_to_world_affine`, `label_array_xyz`, `voxel_spacing`,
   plate plane. Internal = the wedge facing the other plate, external opposite,
   anterior/posterior from the image A-P axis.
 - Central share is a parameter (the paper's Table IV uses 10–50%).
+
+*Implemented* (`morphometry/cartilage/tibia_regions.py::subdivide_tibia`, wired into `Tibia`;
+tests `tests/unit/test_tibia_regions.py`). Decisions and deviations:
+- Plates: the two largest edge-connected cAB components (`find_plates`), the smaller at least
+  0.2 x the larger; otherwise a fallback area-weighted 2-means split of the largest component
+  (cuts any cartilage bridge at the 2-means boundary). On the 96 `dfg_knees` the fallback never
+  fired (smallest plate ratio 0.61). Patient left = the plate with the smaller RAS world x.
+  Other covered islands are treated as uncovered: enclosed by a plate they come back through
+  its hole fill, otherwise they are dropped (median 0.15 mm², max 0.66 mm² per knee on the 94
+  usable knees; 15 mm² on the broken K7_90_belastet).
+- Hole filling per plate: `total_subchondral_area` with only that plate's cAB as covered. The
+  other plate is then uncovered bone joined to the open non-articular remainder, so the
+  intercondylar area is never enclosed; no absolute size cap was needed. Filled area per plate:
+  median 0.4 / 2.3 mm² (patient left / right), max 26 mm².
+- Moments: exact area-weighted triangle second moments (`area_moments`), not the paper's
+  vertex moments (which weight by vertex density). b3 = least-spread axis, oriented superior;
+  b1 towards the other plate; b2 = b3 x b1. (Inertia-tensor and covariance eigenvectors
+  coincide; only the ranking convention differs.)
+- Ellipse aspect: semi-axes in the ratio of the in-plane standard deviations
+  sqrt(var1) : sqrt(var2) -- exact diameter ratio for a uniform elliptical plate. The paper does
+  not say how its lambda1/lambda2 come from the tensor; squaring (variances) or swapping
+  (moments of inertia about b1/b2) are the other readings and were not used.
+- The 20% is not an area-weighted quantile (rho is interpolated linearly along edges by the
+  splitter); it is found by bisection on the actually cut mesh, to 1e-5 of the plate tAB (the
+  paper: ~1e-3).
+- Anterior/posterior from world +y projected into the plate plane (no fibula); raises if the
+  perpendicular to tc is more than 60 deg off A-P (min |cos| on dfg_knees 0.81, i.e. <= 36 deg).
+- Names: keys stay patient-side (`clt` ... `prt`); laterality only adds the medial/lateral
+  mapping (`anatomical_tibia_names`, `rename_tibia_regions`, `Tibia.anatomical_names`,
+  script `--laterality-table`), and `split_tibia_thickness_by_compartment` refuses `*MT` keys.
+- Transfer to the cartilage voxels by nearest tAB triangle *centroid* (world mm). The voxel
+  maps and the `(x, y)`-keyed thickness dicts are unchanged (step 4 replaces them). QC:
+  `Tibia.transfer_qc` holds the voxel-to-tAB distance statistics; more than 1% of the voxels
+  beyond 6 mm logs a WARNING (clean knees: max 4.8 mm; K7_90_belastet: 49%, max 45 mm, the
+  only one flagged).
+- Real data (94 usable knees; K11_90_belastet fails -- broken segmentation, 1 mm voxels with
+  the tibia label filling the volume; K7_90_belastet is excluded -- its tibial cartilage is a
+  quarter of the unloaded scan's): shares of plate tAB, patient left / right, mean (SD):
+  c 20.0/20.0, e 16.9 (0.8)/15.9 (0.7), i 15.6 (1.4)/14.1 (1.2), a 23.8 (1.1)/25.0 (0.9),
+  p 23.8 (1.0)/25.0 (0.9) (paper Table I, MT/LT: e 16.0/17.7, i 15.6/17.5, a 24.2/22.6,
+  p 24.1/22.2). Loaded vs unloaded (46 pairs): median |delta share| 0.14 pp, max 1.3; within a
+  subject/load across flexion angles (24 series): median SD 0.21 pp.
+
+Open issues for steps 3-4: the femoral CWBZ still takes its A-P window from cLT/cRT's voxel
+extent (so it moved with the new central region); the thickness is still the voxel-column
+method per region; the laterality of the `dfg_knees` knees is not recorded anywhere yet (the
+patient-right plate is the larger in 79/94, which would make them mostly left knees if the
+medial plate is the larger one -- to be confirmed, not assumed).
 
 **3. Femur.**
 - A femoral frame from the bone: distal shaft axis (as far as the FOV allows) and the
