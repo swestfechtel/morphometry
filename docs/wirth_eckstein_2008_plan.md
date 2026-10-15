@@ -4,8 +4,9 @@ Reference: W. Wirth and F. Eckstein, "A Technique for Regional Analysis of Femor
 Cartilage Thickness Based on Quantitative Magnetic Resonance Imaging", *IEEE TMI* 27(6),
 737–744, 2008 (`Wirth_Eckstein_2008.pdf`, repo root, untracked).
 
-Status (2026-10-15): analysis and step 0 done. The `calculate_ellipse` bug is fixed (60425aa); the
-rewrite itself has not started. Code: `morphometry/cartilage/knee.py`.
+Status (2026-10-15): analysis, step 0 and step 1 done. The `calculate_ellipse` bug is fixed
+(60425aa). Step 1 (shared bone-surface geometry) is `morphometry/cartilage/surface.py`; the
+tibia/femur rewrite (steps 2-4) has not started. Code: `morphometry/cartilage/knee.py`.
 
 ## 1. Where the current code departs from the paper
 
@@ -70,9 +71,38 @@ rewrite itself has not started. Code: `morphometry/cartilage/knee.py`.
 - All area bookkeeping by triangle area; a cut-mesh helper that splits triangles along a
   plane or an implicit surface.
 
+*Implemented* (`morphometry/cartilage/surface.py`, tests `tests/unit/test_cartilage_surface.py`):
+`bone_surface_mesh`, `cartilage_coverage`, `total_subchondral_area` (+ `uncovered_components`),
+`triangle_areas` / `triangle_centroids`, `split_mesh_by_scalar` / `split_mesh_by_plane`, and the
+geometry helpers `index_to_world_affine`, `label_array_xyz`, `voxel_spacing`,
+`indices_to_world`. Deviations from the plan above:
+- No decimation: a knee bone mesh is 240-360k triangles and the whole chain (mesh, cAB, tAB)
+  takes ~1 s per bone, so there is no need to trade area accuracy for size.
+- FOV cuts: the shafts are extended past the array border by replicated slices and the
+  smoothed mesh is then cut exactly at the border, leaving it open there (no cap). The hole
+  rule uses that open boundary, plus a size bound (`max_hole_fraction` 0.5 of cAB) for bones
+  the FOV does not cut (the femur of `K5_90_belastet` is closed).
+- The splitter is numpy, not VTK `clip_scalar`: VTK interpolates the cut in float32 (area
+  error ~1e-8 relative); the numpy version conserves area to double precision.
+- Coverage tolerance 0.6 x voxel diagonal (0.52 mm), an empirical knee point (see the
+  `cartilage_coverage` docstring); the distance rule gives ~1-1.6% more tAB than a normal
+  probe would. On the five knees checked (K1_0_unbelastet, K1_0_belastet, K5_90_belastet,
+  K3_60_unbelastet, K8_30_belastet) every enclosed hole was a coverage pinhole (<= 0.4 mm²,
+  37-364 per bone, <= 20 mm² in total); other knees have more (K10_90_unbelastet femur 552
+  uncovered components, K12_60_belastet femur 688, one of them 4 mm²).
+- World coordinates are RAS for both image backends (SimpleITK's LPS is converted).
+  Tibial tAB 1876-2370 mm² (both plates), femoral tAB (whole femoral cartilage incl.
+  trochlea) 4472-6051 mm².
+- Small covered islands away from the articular surface are kept (0.1 mm² specks on
+  K1_0_belastet); assigning patches to plates/condyles is left to steps 2-3.
+
 **2. Tibia.**
 - Split the tAB into two plates (connected components / the gap at the intercondylar
   eminence).
+- Hole filling is not plate-aware (step 1's `total_subchondral_area`): if the medial and
+  lateral cartilage touched anteriorly and posteriorly, the intercondylar area would be
+  enclosed and filled into tAB. Fill holes per plate (split cAB first, then fill each plate's
+  holes) and/or cap the absolute hole size.
 - Per plate: area-weighted centre S and principal axes. Central region: normalised
   elliptical radius ρ = √((x/a)² + (y/b)²) in the plate plane, with a : b from the plate's
   in-plane principal spreads; the cutoff ρ* is the area-weighted 20% quantile (exact, no
