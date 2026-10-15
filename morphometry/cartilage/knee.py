@@ -807,6 +807,41 @@ class Femur:
         return plotter
 
 
+def scan_qc_flags(image: Image, tibia: Optional['Tibia'] = None) -> str:
+    """
+    Describe the known bad-scan signals of one knee scan as a QC flag string.
+
+    Flagged scans are still measured; the flags only say that their results should not be
+    trusted without looking at the scan. The format follows ``scripts/process_nmdid.py``'s
+    ``qc_flags`` column: ``name:value`` items joined by ``;``, empty when nothing is wrong.
+    Flags, in this order:
+
+    * ``non_lpi_orientation:<codes>`` -- the image did not land in the orientation it was
+      transformed to (:attr:`~morphometry.image_io.Image.orientation_ok` is ``False``);
+      ``<codes>`` are the achieved axis codes, e.g. ``LSP``. Every knee measurement
+      assumes LPI (patient sides, superior-inferior surfaces), so such a scan's
+      subregions and patient-side compartments may be mislabelled.
+    * ``tibia_transfer_far:<fraction>`` -- more than ``TRANSFER_MAX_FAR_FRACTION`` of the
+      tibial cartilage voxels lie farther than ``TRANSFER_FAR_MM`` from the subchondral
+      bone area they were assigned to (:attr:`Tibia.transfer_qc`, the same condition that
+      logs the WARNING in :meth:`Tibia.calculate_landmarks`); ``<fraction>`` is that share
+      (0-1, three decimals).
+
+    :param image: The loaded (and reoriented) knee ``Segmentation``.
+    :param tibia: The scan's ``Tibia`` after its thickness was computed, or ``None`` when
+        the tibia failed or was not computed (the transfer flag is then skipped).
+    :return: The ``;``-separated flag string (``''`` for a clean scan).
+    """
+    flags = []
+    # orientation_ok is None when no orientation was requested; only a definite False flags.
+    if image.orientation_ok is False:
+        flags.append(f"non_lpi_orientation:{''.join(image.achieved_axcodes)}")
+    qc = getattr(tibia, 'transfer_qc', None)
+    if qc is not None and qc['far_fraction'] > TRANSFER_MAX_FAR_FRACTION:
+        flags.append(f"tibia_transfer_far:{qc['far_fraction']:.3f}")
+    return ';'.join(flags)
+
+
 def _remove_mask_outliers(mask: np.ndarray, threshold_ratio: float = 0.1) -> np.ndarray:
     """
     Remove small connected components from a binary cartilage mask.

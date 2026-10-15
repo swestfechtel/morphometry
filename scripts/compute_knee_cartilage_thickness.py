@@ -37,6 +37,16 @@ bone (``--tibia-bone-label``, default 2): the tibial subregions (Wirth & Eckstei
 defined on the tibial subchondral bone surface. Tibial subregion keys are patient-side
 (``clt`` = central patient-left plate); ``--laterality-table`` (CSV ``subject,laterality``)
 adds the paper's medial/lateral names (``cMT`` ... ``pLT``) in an extra CSV column.
+
+Known bad-scan signals are flagged, not fixed or dropped: the last CSV column ``qc_flags``
+(and a per-subject ``qc_flags`` entry in the JSON) holds ``;``-separated ``name:value`` flags
+from :func:`morphometry.cartilage.knee.scan_qc_flags` -- ``non_lpi_orientation:<codes>`` when
+the scan did not land in LPI after reorientation, ``tibia_transfer_far:<fraction>`` when the
+tibial region transfer left too much cartilage far from its subchondral bone area. Empty for
+a clean scan; the measurements are written as usual either way. A scan for which neither
+bone yields a result keeps one placeholder CSV row (empty ``bone`` / ``subregion``, NaN
+statistics) so that it, and its flags, stay visible; so does a scan whose processing raises
+(unreadable file, uncaught error, rendering failure), with its orientation flag if it loaded.
 """
 import argparse
 import csv
@@ -54,7 +64,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 
 from morphometry.image_io import Segmentation
-from morphometry.cartilage.knee import Tibia, Femur, plot_knee_segments, plot_knee_thickness
+from morphometry.cartilage.knee import (
+    Tibia, Femur, plot_knee_segments, plot_knee_thickness, scan_qc_flags,
+)
 from morphometry.cartilage.tibia_regions import anatomical_tibia_names
 
 # Column order for the summary CSV. The stdout table omits the leading ``subject``
@@ -62,8 +74,10 @@ from morphometry.cartilage.tibia_regions import anatomical_tibia_names
 # 'anatomical_subregion' is the paper's medial/lateral name of a tibial subregion (e.g. cMT),
 # filled only when the knee's laterality is known (--laterality-table); 'subregion' keeps the
 # patient-side key (clt = central patient-LEFT plate) in every row.
+# 'qc_flags' is the scan's QC flag string (see scan_qc_flags), repeated on each of its rows;
+# appended last so the earlier columns keep their positions.
 SUMMARY_COLUMNS = ['subject', 'bone', 'subregion', 'mean_mm', 'std_mm', 'min_mm', 'max_mm', 'n_points',
-                   'anatomical_subregion']
+                   'anatomical_subregion', 'qc_flags']
 
 # Default filenames used when an output path is given as a directory.
 DEFAULT_CSV_NAME = 'summary.csv'
@@ -151,17 +165,19 @@ def _finite_values(thickness_map: dict) -> np.ndarray:
 
 
 def summarize(results_by_bone: Dict[str, dict], subject: str,
-              laterality: Optional[str] = None) -> List[list]:
+              laterality: Optional[str] = None, qc_flags: str = '') -> List[list]:
     """
     Build per-subregion summary statistics for one subject's bones.
 
     :param results_by_bone: ``{bone_name: {subregion: {(x, y): thickness}}}``.
     :param subject: Identifier of the scan the results belong to (first CSV column).
     :param laterality: ``'left'`` / ``'right'`` knee or ``None``; with a value, tibial rows
-        get the paper's medial/lateral name in the last column.
+        get the paper's medial/lateral name in the ``anatomical_subregion`` column.
+    :param qc_flags: The scan's QC flag string (:func:`scan_qc_flags`), written into the
+        ``qc_flags`` column of every row of this subject (``''`` = no flags).
     :return: A list of rows ``[subject, bone, subregion, mean, std, min, max, n_points,
-        anatomical_subregion]``, with ``NaN`` statistics for subregions that have no finite
-        values and an empty ``anatomical_subregion`` where it is unknown.
+        anatomical_subregion, qc_flags]``, with ``NaN`` statistics for subregions that have
+        no finite values and an empty ``anatomical_subregion`` where it is unknown.
     """
     names = anatomical_tibia_names(laterality) or {}
     rows: List[list] = []
@@ -170,14 +186,28 @@ def summarize(results_by_bone: Dict[str, dict], subject: str,
             anatomical = names.get(subregion, '') if bone == 'tibia' else ''
             values = _finite_values(thickness_map)
             if len(values) == 0:
-                rows.append([subject, bone, subregion, np.nan, np.nan, np.nan, np.nan, 0, anatomical])
+                rows.append([subject, bone, subregion, np.nan, np.nan, np.nan, np.nan, 0, anatomical,
+                             qc_flags])
             else:
                 rows.append([
                     subject, bone, subregion,
                     float(values.mean()), float(values.std()),
                     float(values.min()), float(values.max()), int(len(values)), anatomical,
+                    qc_flags,
                 ])
     return rows
+
+
+def failed_row(subject: str, qc_flags: str = '') -> list:
+    """
+    The summary row of a scan for which neither bone produced any thickness result.
+
+    :param subject: Identifier of the scan.
+    :param qc_flags: The scan's QC flag string (``''`` = no flags).
+    :return: ``[subject, '', '', NaN, NaN, NaN, NaN, 0, '', qc_flags]`` (empty ``bone`` and
+        ``subregion`` mark the failure), matching :data:`SUMMARY_COLUMNS`.
+    """
+    return [subject, '', '', np.nan, np.nan, np.nan, np.nan, 0, '', qc_flags]
 
 
 def load_laterality_table(path: Optional[str]) -> Dict[str, str]:
@@ -285,17 +315,19 @@ def _results_to_serializable(results: dict) -> dict:
     return serialisable
 
 
-def subject_payload(tibia_results: dict, femur_results: dict) -> dict:
+def subject_payload(tibia_results: dict, femur_results: dict, qc_flags: str = '') -> dict:
     """
     Build the JSON-serialisable payload of full per-point thickness maps for one subject.
 
     :param tibia_results: The tibial per-subregion thickness dict.
     :param femur_results: The femoral per-subregion thickness dict.
-    :return: ``{'tibia': ..., 'femur': ...}`` with serialisable point lists.
+    :param qc_flags: The scan's QC flag string (:func:`scan_qc_flags`, ``''`` = no flags).
+    :return: ``{'tibia': ..., 'femur': ..., 'qc_flags': ...}`` with serialisable point lists.
     """
     return {
         'tibia': _results_to_serializable(tibia_results),
         'femur': _results_to_serializable(femur_results),
+        'qc_flags': qc_flags,
     }
 
 
@@ -303,7 +335,7 @@ def write_json(payload_by_subject: dict, output_path: str):
     """
     Write the full per-point thickness maps, keyed by subject, to a single JSON file.
 
-    :param payload_by_subject: ``{subject: {'tibia': ..., 'femur': ...}}``.
+    :param payload_by_subject: ``{subject: {'tibia': ..., 'femur': ..., 'qc_flags': ...}}``.
     :param output_path: Destination JSON path, or a directory to write ``thickness.json``
         into.
     """
@@ -470,7 +502,8 @@ def assign_subject_ids(paths: List[str]) -> Dict[str, str]:
     return ids
 
 
-def process_one(path: str, subject: str, args: argparse.Namespace) -> Tuple[List[list], dict]:
+def process_one(path: str, subject: str, args: argparse.Namespace,
+                seg: Optional[Segmentation] = None) -> Tuple[List[list], dict]:
     """
     Run the full pipeline for one segmentation and emit its summary + visualisation.
 
@@ -481,16 +514,30 @@ def process_one(path: str, subject: str, args: argparse.Namespace) -> Tuple[List
     :param path: Path to the segmentation NIfTI.
     :param subject: The subject id for this scan.
     :param args: Parsed command-line arguments (labels, method, visualise mode, ...).
+    :param seg: The scan already loaded by :func:`load_segmentation` (``main`` loads it
+        first so a scan that fails later still reports its orientation flag); ``None``
+        loads ``path`` here.
     :return: ``(summary_rows, json_payload)`` for this subject.
     """
-    seg = load_segmentation(path, remove_outliers=args.remove_outliers)
+    if seg is None:
+        seg = load_segmentation(path, remove_outliers=args.remove_outliers)
     laterality = args.laterality_by_subject.get(subject)
     tibia, femur, tibia_results, femur_results = compute_thickness(
         seg, femur_label=args.femur_label, tibia_label=args.tibia_label, method=args.method,
         tibia_bone_label=args.tibia_bone_label, laterality=laterality,
     )
 
-    rows = summarize({'tibia': tibia_results, 'femur': femur_results}, subject, laterality)
+    # Flag (do not fix or drop) the known bad-scan signals; the measurements stand as computed.
+    qc_flags = scan_qc_flags(seg, tibia)
+    if qc_flags:
+        print(f'[qc] {subject}: {qc_flags}', file=sys.stderr)
+
+    rows = summarize({'tibia': tibia_results, 'femur': femur_results}, subject, laterality,
+                     qc_flags)
+    if not rows:
+        # Both bones failed: keep the scan visible (and its QC flags in the CSV) as one
+        # placeholder row instead of letting it vanish from the summary.
+        rows = [failed_row(subject, qc_flags)]
     print_summary(rows)
 
     # Passing --screenshot/--html signals intent to render; if the user did not also pick
@@ -501,7 +548,7 @@ def process_one(path: str, subject: str, args: argparse.Namespace) -> Tuple[List
     visualize(tibia, femur, tibia_results, femur_results, mode=mode, name_prefix=subject,
               screenshot_dir=args.screenshot, html_dir=args.html)
 
-    return rows, subject_payload(tibia_results, femur_results)
+    return rows, subject_payload(tibia_results, femur_results, qc_flags)
 
 
 def main(args: argparse.Namespace):
@@ -532,10 +579,15 @@ def main(args: argparse.Namespace):
     payloads: dict = {}
     for path in paths:
         subject = subject_ids[path]
+        seg = None
         try:
-            rows, payload = process_one(path, subject, args)
+            seg = load_segmentation(path, remove_outliers=args.remove_outliers)
+            rows, payload = process_one(path, subject, args, seg=seg)
         except Exception as exc:  # keep the batch going if one scan is unreadable/degenerate
             print(f'[error] {subject}: {type(exc).__name__}: {exc}', file=sys.stderr)
+            # Keep the scan visible as one placeholder row; a scan that loaded still
+            # reports its orientation flag (the tibial flag needs a finished Tibia).
+            all_rows.append(failed_row(subject, scan_qc_flags(seg) if seg is not None else ''))
             continue
         all_rows.extend(rows)
         payloads[subject] = payload

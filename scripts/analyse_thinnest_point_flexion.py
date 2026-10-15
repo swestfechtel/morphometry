@@ -31,7 +31,16 @@ These per-compartment sign tests are separate, uncorrected tests, and the two lo
 of one subject are not independent.
 
 Outputs (``-o <dir>``): ``detail.csv`` in long format, one row per (scan, compartment);
-``summary.csv``, one row per (subject, load, compartment). Visualisations show one scene
+``summary.csv``, one row per (subject, load, compartment).
+
+Known bad-scan signals are flagged, not fixed or dropped: ``detail.csv``'s last column
+``qc_flags`` holds the scan's ``;``-separated ``name:value`` flags from
+:func:`morphometry.cartilage.knee.scan_qc_flags` (``non_lpi_orientation:<codes>`` when the scan
+did not land in LPI after reorientation, ``tibia_transfer_far:<fraction>`` when the tibial
+region transfer left too much cartilage far from its subchondral bone area; empty for a clean
+scan), and ``summary.csv``'s last column ``qc_flagged_angles`` lists the flexion angles of the
+series' flagged scans (``;``-separated), so a trend resting on a flagged scan stays visible.
+Flagged scans are measured and enter the statistics as usual. Visualisations show one scene
 per scan with an arrow per compartment (``left`` red, ``right`` blue, ``both`` black).
 
 Example
@@ -59,6 +68,7 @@ from scipy.stats import spearmanr
 from morphometry.image_io import Segmentation
 from morphometry.cartilage.knee import (
     Tibia, Femur, find_thinnest_area, split_tibia_thickness_by_compartment, plot_thinnest_point,
+    scan_qc_flags,
 )
 
 # ``K<subject>_<flexion>_<load>`` with a .nii / .nii.gz extension.
@@ -70,9 +80,12 @@ COMPARTMENTS = ('both', 'left', 'right')
 # Per-compartment measurement fields, in detail.csv column order.
 MEASUREMENT_FIELDS = ['thin_x', 'thin_y', 'ap_fraction', 'combined_thickness',
                       'center_thickness']
-DETAIL_COLUMNS = ['subject', 'load', 'angle', 'compartment'] + MEASUREMENT_FIELDS
+# The QC columns are appended last so the earlier columns keep their positions: 'qc_flags'
+# is the scan's flag string (scan_qc_flags), 'qc_flagged_angles' the angles of a series'
+# flagged scans.
+DETAIL_COLUMNS = ['subject', 'load', 'angle', 'compartment'] + MEASUREMENT_FIELDS + ['qc_flags']
 SUMMARY_COLUMNS = ['subject', 'load', 'compartment', 'n_angles', 'spearman_rho',
-                   'spearman_p', 'slope_per_deg', 'supports_hypothesis']
+                   'spearman_p', 'slope_per_deg', 'supports_hypothesis', 'qc_flagged_angles']
 
 
 def parse_filename(name: str) -> Optional[tuple]:
@@ -189,8 +202,25 @@ def compartment_row(femur: Optional[Femur], thinnest: Optional[dict], spacing) -
     }
 
 
+def load_scan(path: str) -> Segmentation:
+    """
+    Load one knee segmentation and reorient it to LPI.
+
+    Kept separate from :func:`process_file` so that the orientation QC flag of a scan whose
+    thickness pipeline later fails can still be reported (see :func:`main`).
+
+    :param path: Path to the segmentation NIfTI.
+    :return: The reoriented ``Segmentation`` (check ``orientation_ok`` for whether it is LPI).
+    """
+    seg = Segmentation('nibabel')
+    seg.read_image(path)
+    seg.transform_coordinate_system()
+    return seg
+
+
 def process_file(path: str, femur_label: int, tibia_label: int, method: str,
-                 want_objects: bool = False, label: str = '', tibia_bone_label: int = 2) -> dict:
+                 want_objects: bool = False, label: str = '', tibia_bone_label: int = 2,
+                 seg: Optional[Segmentation] = None) -> dict:
     """
     Compute the per-compartment thinnest points and their A-P fractions for one scan.
 
@@ -203,17 +233,18 @@ def process_file(path: str, femur_label: int, tibia_label: int, method: str,
     :param label: Scan identifier used in per-compartment failure warnings.
     :param tibia_bone_label: Label of the tibial bone; the tibial subregions (and hence the
         patient-side compartments) are defined on its subchondral surface.
+    :param seg: The scan already loaded by :func:`load_scan`; ``None`` loads ``path``.
     :return: A dict with ``compartments``: ``{compartment: row}`` for every entry of
         :data:`COMPARTMENTS`, each row as returned by :func:`compartment_row` (all ``NaN``
-        for a failed compartment). If requested, also ``tibia``/``femur``/
+        for a failed compartment), and ``qc_flags``, the scan's :func:`scan_qc_flags`
+        string (``''`` = clean). If requested, also ``tibia``/``femur``/
         ``tibia_thickness``/``femur_thickness`` and ``thinnest`` (``{compartment: result}``
         for the compartments that succeeded).
     :raises Exception: Failures of the thickness pipeline itself (which affect every
         compartment) propagate to the caller.
     """
-    seg = Segmentation('nibabel')
-    seg.read_image(path)
-    seg.transform_coordinate_system()
+    if seg is None:
+        seg = load_scan(path)
 
     tibia = Tibia(seg, tibia_label, bone_label=tibia_bone_label)
     tibia_thickness = tibia.calculate_thickness(method)
@@ -222,7 +253,9 @@ def process_file(path: str, femur_label: int, tibia_label: int, method: str,
     thinnest = locate_thinnest_points(tibia_thickness, femur_thickness, seg, label=label)
 
     result = {'compartments': {c: compartment_row(femur, thinnest[c], seg.spacing)
-                               for c in COMPARTMENTS}}
+                               for c in COMPARTMENTS},
+              # flagged, not fixed: the measurements above stand as computed
+              'qc_flags': scan_qc_flags(seg, tibia)}
     if want_objects:
         result.update(tibia=tibia, femur=femur, tibia_thickness=tibia_thickness,
                       femur_thickness=femur_thickness,
@@ -230,16 +263,19 @@ def process_file(path: str, femur_label: int, tibia_label: int, method: str,
     return result
 
 
-def failed_case() -> dict:
+def failed_case(qc_flags: str = '') -> dict:
     """
     A placeholder :func:`process_file` result for a scan whose thickness pipeline failed.
 
     Written out so that a failed scan stays visible in ``detail.csv`` (one all-NaN row per
     compartment) instead of silently vanishing; :func:`analyse_series` drops the NaNs.
 
-    :return: ``{'compartments': {compartment: all-NaN row}}`` for every compartment.
+    :param qc_flags: QC flags still known for the scan (e.g. its orientation flag when it
+        loaded but the thickness pipeline failed); ``''`` if none or unknown.
+    :return: ``{'compartments': {compartment: all-NaN row}, 'qc_flags': qc_flags}``.
     """
-    return {'compartments': {c: compartment_row(None, None, None) for c in COMPARTMENTS}}
+    return {'compartments': {c: compartment_row(None, None, None) for c in COMPARTMENTS},
+            'qc_flags': qc_flags}
 
 
 def detail_rows(subject: str, load: str, angle: int, case: dict) -> list:
@@ -249,12 +285,15 @@ def detail_rows(subject: str, load: str, angle: int, case: dict) -> list:
     :param subject: Subject id.
     :param load: Load configuration.
     :param angle: Flexion angle (degrees).
-    :param case: A :func:`process_file` result.
+    :param case: A :func:`process_file` result (its ``qc_flags``, a per-scan value, is
+        repeated on every compartment row; missing counts as ``''``).
     :return: A list of rows (in :data:`COMPARTMENTS` order), each matching
         :data:`DETAIL_COLUMNS`.
     """
+    qc_flags = case.get('qc_flags', '')
     return [[subject, load, angle, compartment]
             + [case['compartments'][compartment][field] for field in MEASUREMENT_FIELDS]
+            + [qc_flags]
             for compartment in COMPARTMENTS]
 
 
@@ -434,14 +473,17 @@ def main(args: argparse.Namespace):
         subject, load = key
         # One (angles, fractions) series per compartment, over this (subject, load).
         angles: list = []
+        flagged_angles: list = []
         fractions: dict = {c: [] for c in COMPARTMENTS}
         for angle in sorted(series[key]):
             path = series[key][angle]
             label = f'{subject} {angle} {load}'
+            seg = None
             try:
+                seg = load_scan(path)
                 case = process_file(path, args.femur_label, args.tibia_label, args.method,
                                     want_objects=want_objects, label=label,
-                                    tibia_bone_label=args.tibia_bone_label)
+                                    tibia_bone_label=args.tibia_bone_label, seg=seg)
                 want_render = want_objects
             # Deliberately broad: a cohort run should survive any single pathological scan
             # (segmentation defects surface as varied exceptions from the thickness pipeline).
@@ -449,7 +491,12 @@ def main(args: argparse.Namespace):
             except Exception as exc:
                 print(f'[warning] {label}: {type(exc).__name__}: {exc} '
                       f'(all compartments written as NaN)', file=sys.stderr)
-                case, want_render = failed_case(), False
+                # a scan that loaded still reports its orientation flag
+                case = failed_case(scan_qc_flags(seg) if seg is not None else '')
+                want_render = False
+            if case['qc_flags']:
+                print(f"[qc] {label}: {case['qc_flags']}", file=sys.stderr)
+                flagged_angles.append(angle)
             all_detail_rows.extend(detail_rows(subject, load, angle, case))
             angles.append(angle)
             for compartment in COMPARTMENTS:
@@ -459,8 +506,10 @@ def main(args: argparse.Namespace):
                                args.visualize)
 
         for compartment in COMPARTMENTS:
-            summaries.append((subject, load, compartment,
-                              analyse_series(angles, fractions[compartment])))
+            stats = analyse_series(angles, fractions[compartment])
+            # QC bookkeeping, not a statistic: which of this series' scans carry a QC flag
+            stats['qc_flagged_angles'] = ';'.join(str(a) for a in flagged_angles)
+            summaries.append((subject, load, compartment, stats))
 
     print_summary(summaries)
 
@@ -478,11 +527,13 @@ def summary_rows(summaries: list) -> list:
     Series with too few finite angles are kept (NaN statistics, ``supports_hypothesis``
     ``None``) so that they remain visible in the output.
 
-    :param summaries: List of ``(subject, load, compartment, analysis)`` tuples.
+    :param summaries: List of ``(subject, load, compartment, analysis)`` tuples; ``analysis``
+        may carry ``qc_flagged_angles`` (the ``;``-joined angles of the series' QC-flagged
+        scans, set by :func:`main`; missing counts as ``''``).
     :return: A list of rows matching :data:`SUMMARY_COLUMNS`.
     """
     return [[s, l, c, st['n_angles'], st['spearman_rho'], st['spearman_p'],
-             st['slope_per_deg'], st['supports_hypothesis']]
+             st['slope_per_deg'], st['supports_hypothesis'], st.get('qc_flagged_angles', '')]
             for s, l, c, st in summaries]
 
 

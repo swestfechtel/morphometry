@@ -113,8 +113,8 @@ def test_detail_rows_one_per_compartment():
     assert [r[:4] for r in rows] == [['K1', 'belastet', 30, 'both'],
                                      ['K1', 'belastet', 30, 'left'],
                                      ['K1', 'belastet', 30, 'right']]
-    assert rows[0][4:] == [1.0, 2.0, 0.3, 1.1, 1.2]
-    assert all(math.isnan(v) for v in rows[1][4:])
+    assert rows[0][4:9] == [1.0, 2.0, 0.3, 1.1, 1.2]
+    assert all(math.isnan(v) for v in rows[1][4:9])
     assert len(rows[0]) == len(mod.DETAIL_COLUMNS)
 
 
@@ -124,7 +124,7 @@ def test_failed_case_yields_three_nan_detail_rows():
     assert [r[3] for r in rows] == list(mod.COMPARTMENTS)
     for row in rows:
         assert row[:3] == ['K2', 'unbelastet', 60]
-        assert all(math.isnan(v) for v in row[4:])
+        assert all(math.isnan(v) for v in row[4:4 + len(mod.MEASUREMENT_FIELDS)])
 
 
 def test_summary_rows_keep_insufficient_series():
@@ -132,7 +132,7 @@ def test_summary_rows_keep_insufficient_series():
     insufficient = mod.analyse_series([0, 30, 60], [0.1, np.nan, 0.5])
     rows = mod.summary_rows([('K1', 'belastet', 'left', insufficient)])
     assert len(rows) == 1 and rows[0][:4] == ['K1', 'belastet', 'left', 2]
-    assert rows[0][-1] is None
+    assert rows[0][mod.SUMMARY_COLUMNS.index('supports_hypothesis')] is None
     assert len(rows[0]) == len(mod.SUMMARY_COLUMNS)
 
 
@@ -159,3 +159,66 @@ def test_sign_test_by_compartment_counts_each_compartment_separately():
     assert tests['right'][:2] == (0, 2)
     assert tests['both'][2] == pytest.approx(0.25)
     assert tests['right'][2] == pytest.approx(1.0)
+
+
+# --- QC flags ------------------------------------------------------------------------
+
+def test_qc_columns_are_appended_last():
+    """The QC columns follow the existing ones, which keep their positions."""
+    assert mod.DETAIL_COLUMNS == (['subject', 'load', 'angle', 'compartment']
+                                  + mod.MEASUREMENT_FIELDS + ['qc_flags'])
+    assert mod.SUMMARY_COLUMNS[:8] == ['subject', 'load', 'compartment', 'n_angles',
+                                       'spearman_rho', 'spearman_p', 'slope_per_deg',
+                                       'supports_hypothesis']
+    assert mod.SUMMARY_COLUMNS[-1] == 'qc_flagged_angles'
+
+
+def test_detail_rows_repeat_scan_qc_flags():
+    """A scan's flags appear on each compartment row; a failed scan keeps its flags."""
+    rows = mod.detail_rows('K7', 'belastet', 90, mod.failed_case('non_lpi_orientation:LSP'))
+    assert [r[-1] for r in rows] == ['non_lpi_orientation:LSP'] * 3
+    assert [r[-1] for r in mod.detail_rows('K1', 'belastet', 0, mod.failed_case())] == [''] * 3
+
+
+def test_main_flags_scans_and_series(monkeypatch, tmp_path):
+    """End to end through main: flagged scans are measured, flagged in detail.csv, and their
+    angles listed in summary.csv; a scan whose pipeline fails keeps its orientation flag."""
+    import csv
+    from types import SimpleNamespace
+
+    for angle in (0, 30, 60, 90):
+        (tmp_path / f'K7_{angle}_belastet.nii.gz').write_bytes(b'')
+    oblique = SimpleNamespace(orientation_ok=False, achieved_axcodes=('L', 'S', 'P'))
+    clean = SimpleNamespace(orientation_ok=True, achieved_axcodes=('L', 'P', 'I'))
+    monkeypatch.setattr(mod, 'load_scan',
+                        lambda path: oblique if ('_90_' in path or '_60_' in path) else clean)
+
+    def fake_process(path, *a, seg=None, **kw):
+        if '_60_' in path:
+            raise RuntimeError('broken scan')
+        angle = int(pathlib.Path(path).name.split('_')[1])
+        row = {'thin_x': 1.0, 'thin_y': 2.0, 'ap_fraction': angle / 100,
+               'combined_thickness': 1.0, 'center_thickness': 1.0}
+        return {'compartments': {c: dict(row) for c in mod.COMPARTMENTS},
+                'qc_flags': mod.scan_qc_flags(seg)}
+
+    monkeypatch.setattr(mod, 'process_file', fake_process)
+    args = SimpleNamespace(input=str(tmp_path), femur_label=3, tibia_label=4,
+                           tibia_bone_label=2, method='knn', output=str(tmp_path / 'out'),
+                           visualize=False, screenshot=None, html=None)
+    mod.main(args)
+
+    with open(tmp_path / 'out' / 'detail.csv') as fh:
+        detail = list(csv.DictReader(fh))
+    flags = {(row['angle'], row['compartment']): row['qc_flags'] for row in detail}
+    assert len(detail) == 12
+    assert {flags[('0', c)] for c in mod.COMPARTMENTS} == {''}
+    assert {flags[('60', c)] for c in mod.COMPARTMENTS} == {'non_lpi_orientation:LSP'}
+    assert {flags[('90', c)] for c in mod.COMPARTMENTS} == {'non_lpi_orientation:LSP'}
+    # the flagged 90 deg scan is still measured
+    assert all(row['ap_fraction'] == '0.9' for row in detail if row['angle'] == '90')
+
+    with open(tmp_path / 'out' / 'summary.csv') as fh:
+        summary = list(csv.DictReader(fh))
+    assert [row['qc_flagged_angles'] for row in summary] == ['60;90'] * 3
+    assert all(row['n_angles'] == '3' for row in summary)      # 60 failed -> NaN, dropped

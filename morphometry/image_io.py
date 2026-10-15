@@ -12,6 +12,10 @@ import numpy as np
 import pydicom
 from scipy.ndimage import label
 
+# Module logger (a child of the package logger 'morphometry'); attach a handler to
+# logging.getLogger('morphometry') to collect its warnings. A library must not configure logging.
+logger = logging.getLogger(__name__)
+
 
 class Image(object):
     """
@@ -139,6 +143,60 @@ class Image(object):
             raise NotImplementedError('SimpleITK not implemented yet.')
 
         self.axcodes = axcodes
+
+        # The reorientation is only a permutation/flip of the voxel axes, so it cannot make
+        # an oblique acquisition axis-aligned. When two voxel axes are both ~45 deg between
+        # two anatomical axes, nibabel's axis labelling (io_orientation: a greedy assignment
+        # in voxel-axis order) is a near tie and resolves differently once the axes are
+        # permuted, so the result is labelled e.g. 'LSP' instead of 'LPI'. The behaviour is
+        # deliberately left as is; the mismatch is recorded (see ``orientation_ok``) so
+        # callers can flag such scans in their results.
+        if not self.orientation_ok:
+            logger.warning(
+                'Reorientation to %s gave %s: the image axes are too oblique to the anatomical '
+                'axes to be labelled unambiguously; measurements that assume %s may be wrong.',
+                ''.join(axcodes), ''.join(self.achieved_axcodes), ''.join(axcodes))
+
+    @property
+    def achieved_axcodes(self) -> Union[Tuple[str, ...], None]:
+        """
+        The orientation the image's current affine actually has, as nibabel axis codes.
+
+        Computed live from the affine with ``nib.aff2axcodes`` (closest anatomical axis per
+        voxel axis), so it stays correct after crops / splits that carry the geometry along.
+        Note that :func:`mirror_image_left_right` negates the affine's first column but
+        copies :attr:`axcodes`, so a mirrored LPI image reports ``('R', 'P', 'I')`` here.
+
+        :return: A tuple of three axis codes, e.g. ``('L', 'P', 'I')``; ``None`` for a
+            SimpleITK image or an image without data.
+        """
+        if self.type != 'nibabel' or self.image is None:
+            return None
+        return tuple(nib.aff2axcodes(self.image.affine))
+
+    @property
+    def orientation_ok(self) -> Union[bool, None]:
+        """
+        Whether the image really is in the orientation it was transformed to.
+
+        After :meth:`transform_coordinate_system` the image is *meant* to be in
+        :attr:`axcodes` (default LPI), but a strongly oblique acquisition can end up
+        labelled otherwise (see the comment in :meth:`transform_coordinate_system`).
+        Measurements still run on such an image; this flag lets callers report it.
+        Only meaningful on the image as reoriented (or crops / splits /
+        :func:`reflect_image_left_right` of it, which keep the axis directions): a
+        :func:`mirror_image_left_right` copy keeps the requested :attr:`axcodes` but has a
+        flipped first axis, so a mirrored LPI image reads ``False`` (achieved RPI) although
+        nothing is wrong with it. Check the flag before mirroring.
+
+        :return: ``True`` if :attr:`achieved_axcodes` equals the requested :attr:`axcodes`,
+            ``False`` if not, ``None`` when it cannot be decided (no orientation was
+            requested yet, or a SimpleITK image).
+        """
+        achieved = self.achieved_axcodes
+        if self.axcodes is None or achieved is None:
+            return None
+        return achieved == tuple(self.axcodes)
 
     def save_image(self, filepath: str):
         """

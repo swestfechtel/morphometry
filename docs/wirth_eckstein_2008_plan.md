@@ -161,6 +161,29 @@ method per region; the laterality of the `dfg_knees` knees is not recorded anywh
 patient-right plate is the larger in 79/94, which would make them mostly left knees if the
 medial plate is the larger one -- to be confirmed, not assumed).
 
+K7/K8/K11 orientation (flagged, not fixed): three of the 96 `dfg_knees` scans do not land
+in LPI after `transform_coordinate_system` -- K7_90_belastet (raw IAR -> LSP), K8_90_belastet
+and K11_90_belastet (raw SPR -> LIA); the other 93 (raw PIR/LIP) do. A tilt of the slice
+axes against the scanner frame is not the problem: it comes from the knee flexion and is
+harmless (index axis 2 vs world S-I, median 4.6/11.1/24.1/38.7 deg at 0/30/60/90 deg flexion;
+9 healthy scans exceed 40 deg, K10_90_belastet 57.5 deg on one axis, all land in LPI and
+measure fine). What is wrong in the flagged scans is that the *anatomy* is rotated in the
+index frame: the tibial plate normal is within 17.0 deg of index axis 2 in all 93 LPI scans
+but 25.7 deg (K11), 75.5 deg (K7) and 83.0 deg (K8) off it, and the femoral-minus-tibial
+cartilage centroid along axis 2 is -28 to -12.2 mm in the 93 vs -2.6 (K7), +1.6 (K8) and
++35.3 mm (K11). The non-LPI label is how that shows up: with two voxel axes near a tie
+between two anatomical axes (K7's first axis: 0.706 S-I vs 0.703 A-P), nibabel's greedy,
+voxel-axis-ordered `io_orientation` resolves the tie differently once the axes are
+permuted. The reorientation is left unchanged (the user attributes these scans to a scanner
+misconfiguration); `Image.orientation_ok` / `achieved_axcodes` record it, and both knee
+scripts write `non_lpi_orientation:<codes>` (plus `tibia_transfer_far:<fraction>`, K7: 0.494)
+into a `qc_flags` column. K11_90_belastet is a separate defect that the orientation flag
+catches only by coincidence: 1 mm isotropic with 344 slices and a 512 mm FOV (every other
+scan is 0.31 x 0.31 x 0.75 mm, 172 slices), its tibial cartilage is 9.4k voxels scattered
+over a 258 x 318 x 213 mm box, and the tibia subdivision fails ('plates overlap'). Until
+resolved, results of these three scans (patient sides, superior/inferior surfaces,
+subregions) are not trustworthy.
+
 **3. Femur.**
 - A femoral frame from the bone: distal shaft axis (as far as the FOV allows) and the
   posterior condylar line, so flexed knees need no contact-cluster patch.
