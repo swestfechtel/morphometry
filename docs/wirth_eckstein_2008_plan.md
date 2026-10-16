@@ -4,10 +4,10 @@ Reference: W. Wirth and F. Eckstein, "A Technique for Regional Analysis of Femor
 Cartilage Thickness Based on Quantitative Magnetic Resonance Imaging", *IEEE TMI* 27(6),
 737–744, 2008 (`Wirth_Eckstein_2008.pdf`, repo root, untracked).
 
-Status (2026-10-15): analysis, steps 0, 1 and 2 done. Step 1 (shared bone-surface geometry)
-is `morphometry/cartilage/surface.py`; step 2 (tibia) is `morphometry/cartilage/tibia_regions.py`,
-wired into `Tibia` (`morphometry/cartilage/knee.py`). The femur (step 3) and the area-based
-thickness (step 4) have not started.
+Status (2026-10-16): analysis, steps 0, 1, 2 and 3 done. Step 1 (shared bone-surface geometry)
+is `morphometry/cartilage/surface.py`; step 2 (tibia) is `morphometry/cartilage/tibia_regions.py`
+and step 3 (femur) `morphometry/cartilage/femur_regions.py`, both wired into `Tibia` / `Femur`
+(`morphometry/cartilage/knee.py`). The area-based thickness (step 4) has not started.
 
 ## 1. Where the current code departs from the paper
 
@@ -32,8 +32,8 @@ thickness (step 4) have not started.
 ### Femur
 | | Paper | Code |
 |---|---|---|
-| A-P extent of the weight-bearing condyle (cMF/cLF) | Bony landmarks, independent of the tibia (refs [9]–[12]). In the Chondrometrics convention: from the trochlear notch (a line parallel to the femoral shaft through its most posterior point) to 60% of the distance to the posterior end of the condyles (some later studies use 75%) | The A-P extent of the tibial central region, i.e. tibia- and flexion-dependent; `_restrict_to_contact_cluster` exists only to patch the flexion effect |
-| Internal / central / external | Per coronal slice (triangle strip), points at ⅓ and ⅔ of the **arc length** along the strip's anterior and posterior edge sequences; cut planes with normal d × e through them; ≈33% of tAB **area** each; i/e from distance to the other condyle | Two straight cuts at fixed image-x positions, adjusted in 1-voxel steps until each third holds 33 ± 2% of the **voxels** (max 30 steps) |
+| A-P extent of the weight-bearing condyle (cMF/cLF) | Bony landmarks, independent of the tibia (refs [9]–[12]). In the Chondrometrics convention: from the trochlear notch (a line parallel to the femoral shaft through its most posterior point) to 60% of the distance to the posterior end of the condyles (some later studies use 75%) | *(before step 3)* The A-P extent of the tibial central region, i.e. tibia- and flexion-dependent; `_restrict_to_contact_cluster` existed only to patch the flexion effect |
+| Internal / central / external | Per coronal slice (triangle strip), points at ⅓ and ⅔ of the **arc length** along the strip's anterior and posterior edge sequences; cut planes with normal d × e through them; ≈33% of tAB **area** each; i/e from distance to the other condyle | *(before step 3)* Two straight cuts at fixed image-x positions, adjusted in 1-voxel steps until each third held 33 ± 2% of the **voxels** (max 30 steps) |
 | Trochlea / posterior condyle (`alf/arf/plf/prf`) | Not in the paper | An in-house extension |
 
 ### Thickness (defined in the paper too)
@@ -155,11 +155,25 @@ tests `tests/unit/test_tibia_regions.py`). Decisions and deviations:
   p 24.1/22.2). Loaded vs unloaded (46 pairs): median |delta share| 0.14 pp, max 1.3; within a
   subject/load across flexion angles (24 series): median SD 0.21 pp.
 
-Open issues for steps 3-4: the femoral CWBZ still takes its A-P window from cLT/cRT's voxel
-extent (so it moved with the new central region); the thickness is still the voxel-column
-method per region; the laterality of the `dfg_knees` knees is not recorded anywhere yet (the
-patient-right plate is the larger in 79/94, which would make them mostly left knees if the
-medial plate is the larger one -- to be confirmed, not assumed).
+Open issues for step 4, in order of importance:
+
+1. **The thickness-map keys do not follow the measurement axis.** `mesh_method` / `knn_method`
+   key every point by array axes 0 and 1 whatever axis its subregion was measured along, so a
+   zone measured along axis 1 (the posterior condyles at low flexion) is keyed by `(x, depth)`:
+   its columns collide and `find_thinnest_area` / `_thickness_surface` place its values at the
+   wrong in-plane position. The defect predates step 3, but it used to apply uniformly and now
+   applies only below ~45° of flexion, i.e. it varies within one flexion series. **The
+   thinnest-point results at 60/90° rest on this**, since that is where the posterior zones
+   dominate the overlap. The fix is not a better key: the two bones need one common in-plane
+   frame, which is what the area-weighted thickness brings.
+2. The thickness is still the voxel-column method per region (see the step-3 note on its column
+   axis, and the trochlea zone, whose surface faces no single image axis -- K10_90_unbelastet's
+   `left_anterior_zone` still has a 14.5 mm column); the laterality of the
+`dfg_knees` knees is not recorded anywhere yet (the patient-right plate is the larger in 79/94,
+which would make them mostly left knees if the medial plate is the larger one -- to be
+confirmed, not assumed); and `Femur.extract_subregions` still runs `_remove_subregion_fragments`
+on the transferred voxels, a safety net inherited from the voxel scheme that silently drops
+cartilage and should not be needed once the regions are area-based.
 
 K7/K8/K11 orientation (flagged, not fixed): three of the 96 `dfg_knees` scans do not land
 in LPI after `transform_coordinate_system` -- K7_90_belastet (raw IAR -> LSP), K8_90_belastet
@@ -195,6 +209,100 @@ subregions) are not trustworthy.
   other condyle.
 - Keep the trochlea and posterior condyle as a documented extension (trochlea = anterior
   of the notch; posterior = beyond the 60% mark).
+
+*Implemented* (`morphometry/cartilage/femur_regions.py::subdivide_femur`, wired into `Femur`;
+tests `tests/unit/test_femur_regions.py`). Decisions and deviations:
+- Frame: shaft axis = principal direction of the centroids of 3 mm cross-sections of the femur
+  in a band −5 to +25 mm around the top of the articular surface (`estimate_shaft_axis`),
+  seeded by bone-centroid − cartilage-centroid, 3 refit passes, proximal bins dropped while
+  they hold < 0.75 of the next bin's voxels (a cross-section cut by the FOV has a biased
+  centroid). The band is deliberately *metaphyseal* — it starts 5 mm inside the condylar flare,
+  not in the shaft: a knee FOV holds only 25–40 mm of femur above the cartilage and its
+  proximal end is cut differently in different acquisitions of the same knee. Expect a few
+  degrees of difference from an axis fitted to a whole femur; what matters here is that it is
+  the same few degrees in every scan of one knee.
+  **Calibration caveat.** The band was *selected* by flexion reproducibility on these same 96
+  scans, so the invariance figures below are not an unbiased estimate of it, and it is not even
+  the argmax of that objective. Over the 24 series (cF-area CV averaged over the two condyles, median/p90/max;
+  A-P-extent CV median/max): (−5,25) 2.41/4.40/6.66 and 1.47/2.86; (−5,35) 2.54/3.45/4.48 and 0.14/2.22;
+  (0,30) 2.77/3.80/4.16 and 1.63/3.75; (5,35) 2.53/3.90/5.25 and 1.61/8.57 plus one scan it
+  cannot fit at all. (−5,35) is at least as defensible; the default only wins the cF-CV median.
+  The band barely moves the thirds' *shares* (max difference between any two of those four
+  bands, per scan: median 0.24 pp, max 1.58) but does move the shaft axis (median 1.9°, max
+  7.5° between (−5,25) and (−5,35)) and the cF area / A-P extent (median 0.3%, max 4.2%) — the
+  very quantities the reproducibility figures are about. It is a parameter of
+  `subdivide_femur` (`shaft_band_mm`, `shaft_bin_mm`, `shaft_min_bin_ratio`), not a hidden
+  module default.
+- M-L axis = the posterior condylar line (`posterior_condylar_axis`, iterated from world +x);
+  A-P = `cross(proximal, ml)`. No world direction is consulted for anterior — it follows from
+  the right-handed frame, which is why a 90°-flexed knee needs no special case. A consequence
+  of the M-L axis *being* the posterior condylar line: both condyles' posterior ends share one
+  A-P coordinate, so the two 60% borders coincide.
+- Trochlear notch from the **bone**, not the cartilage (`notch_depth_profile`,
+  `find_trochlear_notch`): per 1 mm coronal slice, the most distal bone coordinate per 1 mm M-L
+  bin; the valley depth is the drop from the lower flanking maximum to a bin between them, an
+  empty bin (the open fossa) counting as infinitely deep; walk anteriorly from the deepest
+  slice until the valley is shallower than 8 mm. The fossa is 20–30 mm deep, the trochlear
+  groove 3–6, and the profile falls ~1.5 mm per mm of A-P travel there, so ±2 mm of threshold
+  move the border by ~1 mm. The cartilage-gap version of the same walk was tried first and
+  dropped: how far the trochlear cartilage is labelled across the groove is not reproducible
+  between acquisitions of one knee (on K11_unbelastet it put the notch 13 mm apart at 0° and
+  90°, where the bone profile agrees to 1 mm).
+- Thirds as a continuous arc-length field (`arc_length_coordinate`) rather than the paper's
+  per-triangle-strip construction: cross-sections 0.5 mm apart, each contour parametrised by
+  arc length from its internal end, interpolated onto the vertices, cut exactly at 1/3 and 2/3.
+  The triangulation then does not have to be strip-ordered, and a cylindrical condyle gives
+  exactly a third of the area per third.
+- The articular surface wraps proximally round the posterior condyle, so a coronal plane in the
+  posterior part of the window cuts it twice. Inside the window the two sheets are separate
+  patches; cF is the largest and the rest is counted with the posterior condyle zone. Measured
+  by disabling `_largest_patch` with everything else fixed: without it 9 of the 93 clean scans
+  have a third more than 1.2 pp off 33.3%, worst 40.5% (K7_90_unbelastet). The discarded patch
+  is a sliver in a healthy subdivision (per condyle median 0.00%, p90 0.21%, max 14.90% of the
+  A-P window on K4_90_belastet's right condyle); above `MAX_WRAP_FRACTION` (25%) it warns.
+- Extension zones kept: trochlea (`alf`/`arf`) anterior of the notch plane, posterior condyle
+  (`plf`/`prf`) behind the 60% plane, split by the same plane that separates the condyles (the
+  MAD-filtered line of intercondylar-fossa centres, |slope| clamped to 0.5).
+- Transfer to the cartilage voxels by nearest tAB triangle centroid, with the tibia's QC
+  (`Femur.transfer_qc`, WARNING over 1% of voxels beyond 6 mm, `femur_transfer_far` flag).
+- Names: keys stay patient-side (`iclf` … `prf`); `anatomical_femur_names` /
+  `rename_femur_regions` add the paper's `icMF` … `ecLF`, plus `aMF`/`pMF`/`aLF`/`pLF` for the
+  two extension zones (**our names**, the paper has none).
+- Real data (96 `dfg_knees`, all subdivide; K7/K8/K11_90 stay flagged and are excluded from the
+  statistics, n = 93): shares of cF tAB, patient-left / patient-right condyle, mean (SD):
+  i 33.4 (0.30)/33.5 (0.29), c 33.2 (0.14)/33.2 (0.13), e 33.4 (0.21)/33.3 (0.20) (paper
+  Table II, cMF/cLF: ic 33.5/33.4, cc 33.2/33.2, ec 33.3/33.4). cF tAB 548 ± 101 / 542 ± 82 mm²,
+  notch-to-posterior extent 30.1 ± 3.4 mm, trochlea 1209/1103 mm², posterior condyle
+  882/942 mm², whole femoral tAB 5225 mm² (4266–6445). Across the four flexion angles of one
+  subject+load (24 series): CV of cF tAB 1.9–3.0% median against a 1.7% floor from the whole
+  femoral tAB (i.e. the segmentation's own variability), SD of each third's share 0.05–0.23 pp;
+  the extension zones are looser (6.5–7.8%) because how far the trochlea is labelled is not
+  flexion-invariant. Loaded vs unloaded (45 pairs): cF tAB median |Δ| 1.0/1.3%.
+- Validation: the femur-tibia sagittal angle (the femoral frame against a tibial shaft axis
+  fitted the same way) tracks the nominal flexion — median −32.9 / −13.8 / +19.2 / +43.7° at
+  0/30/60/90°, Spearman ρ 0.956, strictly increasing in all 21 complete series, fit
+  `0.86 × nominal − 34.9°`. The offset is the tibial axis (proximal metaphysis, line-fit
+  residual 3.1 mm against the femur's 1.6), not the femoral frame. At nominal 0° the femoral
+  axis's *sagittal* tilt against the scanner's superior axis — the only component that reaches
+  the subregions, since a coronal tilt rotates the axis within the prox–ml plane and leaves
+  `cross(prox, ml)` unchanged — is +1.22° ± 3.43 (n = 24); the full 3-D angle to world +z is
+  9.80° ± 4.12, the remainder a coronal tilt of −6.04° ± 8.15.
+- Thickness (still step 4's voxel-column method) now picks its column axis per subregion from
+  the femoral frame rather than hard-coding it: superior-inferior everywhere except the two
+  posterior-condyle zones, which use the image axis nearest the *femoral* A-P axis. That is the
+  image A-P axis in an extended knee (what the old code assumed) but the image S-I axis at 90°
+  of flexion, where the old assumption measured across the whole condyle (`left_posterior_zone`
+  4.88 mm mean / 11.8 max on K9_90_belastet → 2.29 / 3.61).
+  **This supersedes every existing `analyse_thinnest_point_flexion.py` run.** The posterior
+  zones hold 8.8 / 14.4 / 48.0 / 76.3% of the tibiofemoral overlap the thinnest-point search
+  runs on at 0 / 30 / 60 / 90°; their old values were implausibly large, so they never won the
+  argmin and now can — which is the hypothesis the script tests. Over the 93 clean scans, with
+  the subregions fixed and only the depth axis switched back, the thinnest point is unchanged
+  at 0° (0/24) and 30° (0/24), moves on 13/24 at 60° and 20/21 at 90° (max 118 voxels,
+  |Δ ap_fraction| median 0.300 / max 0.944 at 90°), and the sign of the per-series Spearman ρ
+  flips on **9 of 24 series** (e.g. K9_belastet −0.20 → +0.80, K10_unbelastet +0.60 → −0.40).
+  Old and new thinnest-point locations, `ap_fraction`s and trends must not be pooled or
+  compared.
 
 **4. Transfer and thickness.**
 - Each AC triangle takes the region of its nearest tAB triangle.

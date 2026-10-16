@@ -18,6 +18,10 @@ whole-leg CT, plus a FastAPI service and batch-processing scripts.
   - Region modules at the package root (`hip.py`, `femur.py`, `knee.py`,
     `tibia.py`, `ankle.py`, `whole_leg.py`, `cartilage/`) hold the landmark /
     reference-line helpers (`get_*`) the measurements build on.
+    `cartilage/` holds the knee cartilage subregions after Wirth & Eckstein 2008
+    (`surface.py` = bone-surface geometry in world mm, `tibia_regions.py` and
+    `femur_regions.py` = the per-bone subdivisions, `knee.py` = the `Tibia` /
+    `Femur` classes and the thickness maps).
   - Infrastructure: `image_io.py` (the `Image` / `Segmentation` wrapper),
     `geometry.py`, `constants.py`, `utils.py`, `bresenham.py`.
 - **`api/`** — a FastAPI service that ingests DICOM uploads / Orthanc callbacks

@@ -19,6 +19,8 @@ This module provides that shared geometry and nothing knee-specific:
 - :func:`face_components`, :func:`extract_faces`, :func:`merge_meshes` -- edge-connected
   patches, sub-meshes and concatenation (used to split the tibial cAB into plates).
 - :func:`array_indices_to_world` -- world mm of indices into ``Image.array`` (either backend).
+- :func:`transfer_qc` -- how far the cartilage voxels ended up from the bone surface region
+  they were given (shared by the tibial and femoral subdivisions).
 
 All coordinates are physical (world) mm obtained through the image's full index-to-world
 transform (direction cosines, spacing and origin), so results do not depend on where or how
@@ -656,3 +658,39 @@ def split_mesh_by_plane(mesh: pv.PolyData, origin, normal):
     normal = normal / np.linalg.norm(normal)
     signed = (np.asarray(mesh.points, dtype=float) - np.asarray(origin, dtype=float)) @ normal
     return split_mesh_by_scalar(mesh, signed, 0.0)
+
+
+# ----------------------------------------------------------------------------------------
+# 5. Region-transfer QC
+# ----------------------------------------------------------------------------------------
+
+# QC of the transfer of bone-surface regions to the cartilage voxels (the ``Tibia`` /
+# ``Femur`` classes): a cartilage voxel is at most about one cartilage thickness (<= ~4 mm in
+# dfg_knees) plus a voxel half-diagonal from the bone surface it belongs to; on the clean
+# dfg_knees no tibial voxel is more than 5 mm from its nearest tAB triangle. Voxels farther
+# than TRANSFER_FAR_MM (6 mm, a margin over that) are cartilage the tAB does not explain -- a
+# plate or condyle missing from the bone coverage, cartilage label on the wrong bone, a broken
+# segmentation (K7_90_belastet: 49% of its tibial voxels are > 6 mm away, up to 45 mm). More
+# than TRANSFER_MAX_FAR_FRACTION of them triggers a WARNING; a few stray voxels do not.
+TRANSFER_FAR_MM = 6.0
+TRANSFER_MAX_FAR_FRACTION = 0.01
+
+
+def transfer_qc(distances: np.ndarray, far_mm: float = TRANSFER_FAR_MM) -> dict:
+    """
+    Summarise how far cartilage voxels are from the tAB triangle they took their region from.
+
+    :param distances: ``(N,)`` voxel-to-nearest-tAB-centroid distances in mm (from
+        ``TibiaSubdivision.nearest_regions`` / ``FemurSubdivision.nearest_regions``).
+    :param far_mm: Distance above which a voxel counts as unexplained by the tAB (see
+        :data:`TRANSFER_FAR_MM`).
+    :return: ``{'n_voxels', 'median_mm', 'p99_mm', 'max_mm', 'far_fraction', 'far_mm'}``;
+        the statistics are ``NaN`` (and ``far_fraction`` 0) without voxels.
+    """
+    distances = np.asarray(distances, dtype=float)
+    if len(distances) == 0:
+        return {'n_voxels': 0, 'median_mm': np.nan, 'p99_mm': np.nan, 'max_mm': np.nan,
+                'far_fraction': 0.0, 'far_mm': far_mm}
+    return {'n_voxels': int(len(distances)), 'median_mm': float(np.median(distances)),
+            'p99_mm': float(np.percentile(distances, 99)), 'max_mm': float(distances.max()),
+            'far_fraction': float(np.mean(distances > far_mm)), 'far_mm': far_mm}

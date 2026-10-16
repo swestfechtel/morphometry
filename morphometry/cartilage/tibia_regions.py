@@ -59,16 +59,11 @@ PLATE_SIDES = ('left', 'right')
 # Region key per integer code: code = plate_index * 5 + letter_index.
 TIBIA_REGION_KEYS = tuple(f'{letter}{side[0]}t' for side in PLATE_SIDES for letter in REGION_LETTERS)
 
-# QC of the transfer of the regions to the cartilage voxels (Tibia.calculate_landmarks): a
-# tibial cartilage voxel is at most about one cartilage thickness (<= ~4 mm in dfg_knees,
-# thickest regional maxima ~3.1-3.4 mm) plus a voxel half-diagonal from the plate's bone
-# surface; on the clean dfg_knees no voxel is more than 5 mm from its nearest tAB triangle.
-# Voxels farther than TRANSFER_FAR_MM (6 mm, a margin over that) are cartilage the tAB does
-# not explain -- a plate missing from the bone coverage, cartilage label on the wrong bone,
-# a broken segmentation (K7_90_belastet: 49% of its voxels are > 4 mm away, up to 45 mm).
-# More than TRANSFER_MAX_FAR_FRACTION of them triggers a WARNING; a few stray voxels do not.
-TRANSFER_FAR_MM = 6.0
-TRANSFER_MAX_FAR_FRACTION = 0.01
+# Transfer QC of the region -> cartilage-voxel assignment: shared with the femur, defined in
+# surface.py and re-exported here (callers have always imported it from this module).
+TRANSFER_FAR_MM = S.TRANSFER_FAR_MM
+TRANSFER_MAX_FAR_FRACTION = S.TRANSFER_MAX_FAR_FRACTION
+transfer_qc = S.transfer_qc
 
 # World anterior direction. The surface meshes are in RAS (+x patient right, +y anterior,
 # +z superior) for both image backends, see surface.index_to_world_affine.
@@ -631,23 +626,3 @@ def subdivide_tibia(image: Image, bone_label: int = 2, cartilage_label: int = 4,
     dropped = float(areas[covered & ~tab['left'] & ~tab['right']].sum())
     return TibiaSubdivision(mesh=S.merge_meshes(parts), plates=plates, laterality=laterality,
                             plate_split=method, dropped_area=dropped, bone_mesh=bone)
-
-
-def transfer_qc(distances: np.ndarray, far_mm: float = TRANSFER_FAR_MM) -> Dict[str, float]:
-    """
-    Summarise how far cartilage voxels are from the tAB triangle they took their region from.
-
-    :param distances: ``(N,)`` voxel-to-nearest-tAB-centroid distances in mm (from
-        :meth:`TibiaSubdivision.nearest_regions`).
-    :param far_mm: Distance above which a voxel counts as unexplained by the tAB (see
-        :data:`TRANSFER_FAR_MM`).
-    :return: ``{'n_voxels', 'median_mm', 'p99_mm', 'max_mm', 'far_fraction', 'far_mm'}``;
-        the statistics are ``NaN`` (and ``far_fraction`` 0) without voxels.
-    """
-    distances = np.asarray(distances, dtype=float)
-    if len(distances) == 0:
-        return {'n_voxels': 0, 'median_mm': np.nan, 'p99_mm': np.nan, 'max_mm': np.nan,
-                'far_fraction': 0.0, 'far_mm': far_mm}
-    return {'n_voxels': int(len(distances)), 'median_mm': float(np.median(distances)),
-            'p99_mm': float(np.percentile(distances, 99)), 'max_mm': float(distances.max()),
-            'far_fraction': float(np.mean(distances > far_mm)), 'far_mm': far_mm}

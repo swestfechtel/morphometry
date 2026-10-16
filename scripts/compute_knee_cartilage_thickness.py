@@ -32,17 +32,20 @@ Examples
         -o results/ --dump-json results/ --screenshot results/viz --html results/viz
 
 The segmentation is expected to label the femoral and tibial cartilage with distinct
-integer labels (defaults 3 and 4, matching the Duesseldorf/T1rho convention), and the tibial
-bone (``--tibia-bone-label``, default 2): the tibial subregions (Wirth & Eckstein 2008) are
-defined on the tibial subchondral bone surface. Tibial subregion keys are patient-side
-(``clt`` = central patient-left plate); ``--laterality-table`` (CSV ``subject,laterality``)
-adds the paper's medial/lateral names (``cMT`` ... ``pLT``) in an extra CSV column.
+integer labels (defaults 3 and 4, matching the Duesseldorf/T1rho convention), and both bones
+(``--tibia-bone-label``, default 2; ``--femur-bone-label``, default 1): the subregions (Wirth &
+Eckstein 2008) are defined on each bone's subchondral surface. Subregion keys are patient-side
+(``clt`` = central patient-left tibial plate, ``iclf`` = internal third of the patient-left
+weight-bearing femoral condyle); ``--laterality-table`` (CSV ``subject,laterality``) adds the
+paper's medial/lateral names (``cMT`` ... ``pLT``, ``icMF`` ... ``ecLF``) in an extra CSV
+column.
 
 Known bad-scan signals are flagged, not fixed or dropped: the last CSV column ``qc_flags``
 (and a per-subject ``qc_flags`` entry in the JSON) holds ``;``-separated ``name:value`` flags
 from :func:`morphometry.cartilage.knee.scan_qc_flags` -- ``non_lpi_orientation:<codes>`` when
-the scan did not land in LPI after reorientation, ``tibia_transfer_far:<fraction>`` when the
-tibial region transfer left too much cartilage far from its subchondral bone area. Empty for
+the scan did not land in LPI after reorientation, ``tibia_transfer_far:<fraction>`` /
+``femur_transfer_far:<fraction>`` when that bone's region transfer left too much cartilage far
+from its subchondral bone area. Empty for
 a clean scan; the measurements are written as usual either way. A scan for which neither
 bone yields a result keeps one placeholder CSV row (empty ``bone`` / ``subregion``, NaN
 statistics) so that it, and its flags, stay visible; so does a scan whose processing raises
@@ -68,6 +71,7 @@ from morphometry.cartilage.knee import (
     Tibia, Femur, plot_knee_segments, plot_knee_thickness, scan_qc_flags,
 )
 from morphometry.cartilage.tibia_regions import anatomical_tibia_names
+from morphometry.cartilage.femur_regions import anatomical_femur_names
 
 # Column order for the summary CSV. The stdout table omits the leading ``subject``
 # column (it is printed as a per-subject header instead).
@@ -103,14 +107,15 @@ def load_segmentation(input_path: str, remove_outliers: bool = False) -> Segment
 
 
 def compute_thickness(seg: Segmentation, femur_label: int, tibia_label: int,
-                      method: str, tibia_bone_label: int = 2,
+                      method: str, tibia_bone_label: int = 2, femur_bone_label: int = 1,
                       laterality: Optional[str] = None) -> Tuple[Optional[Tibia], Optional[Femur], dict, dict]:
     """
     Compute tibial and femoral cartilage thickness for a segmentation.
 
-    The two bones are computed independently and each is wrapped so a failure on one
-    (e.g. a mask that cannot be split into two plates) does not abort the other,
-    mirroring the per-measurement tolerance used elsewhere in the codebase.
+    The two bones are computed independently -- each bone's subregions are derived from its
+    own subchondral surface -- and each is wrapped so a failure on one (e.g. a mask that
+    cannot be split into two plates) does not abort the other, mirroring the per-measurement
+    tolerance used elsewhere in the codebase.
 
     :param seg: The LPI-oriented knee cartilage ``Segmentation``.
     :param femur_label: The label of the femoral cartilage.
@@ -118,8 +123,10 @@ def compute_thickness(seg: Segmentation, femur_label: int, tibia_label: int,
     :param method: Thickness method, ``'knn'`` or ``'mesh'``.
     :param tibia_bone_label: The label of the tibial bone (the tibial subregions are
         defined on its subchondral surface).
-    :param laterality: ``'left'`` / ``'right'`` knee or ``None``; passed to ``Tibia`` (adds
-        the medial/lateral region names, the subdivision itself does not depend on it).
+    :param femur_bone_label: The label of the femoral bone (the femoral subregions and the
+        femoral frame are derived from it).
+    :param laterality: ``'left'`` / ``'right'`` knee or ``None``; passed to both bones (adds
+        the medial/lateral region names, the subdivisions themselves do not depend on it).
     :return: ``(tibia, femur, tibia_results, femur_results)``. ``tibia`` / ``femur`` are
         the computed objects (``None`` if that bone failed), and the results are the
         per-subregion thickness dicts (empty ``{}`` on failure).
@@ -137,16 +144,13 @@ def compute_thickness(seg: Segmentation, femur_label: int, tibia_label: int,
         print(f'[warning] tibial cartilage thickness failed: {exc}', file=sys.stderr)
         tibia = None
 
-    # The femur is defined relative to the tibial plateau, so it needs a valid Tibia.
-    if tibia is not None:
-        try:
-            femur = Femur(seg, cartilage_label=femur_label)
-            femur_results = femur.calculate_thickness(tibia, method)
-        except (RuntimeError, AssertionError, ValueError) as exc:
-            print(f'[warning] femoral cartilage thickness failed: {exc}', file=sys.stderr)
-            femur = None
-    else:
-        print('[warning] skipping femur: it requires a valid tibia.', file=sys.stderr)
+    try:
+        femur = Femur(seg, cartilage_label=femur_label, bone_label=femur_bone_label,
+                      laterality=laterality)
+        femur_results = femur.calculate_thickness(method=method)
+    except (RuntimeError, AssertionError, ValueError) as exc:
+        print(f'[warning] femoral cartilage thickness failed: {exc}', file=sys.stderr)
+        femur = None
 
     return tibia, femur, tibia_results, femur_results
 
@@ -171,19 +175,20 @@ def summarize(results_by_bone: Dict[str, dict], subject: str,
 
     :param results_by_bone: ``{bone_name: {subregion: {(x, y): thickness}}}``.
     :param subject: Identifier of the scan the results belong to (first CSV column).
-    :param laterality: ``'left'`` / ``'right'`` knee or ``None``; with a value, tibial rows
-        get the paper's medial/lateral name in the ``anatomical_subregion`` column.
+    :param laterality: ``'left'`` / ``'right'`` knee or ``None``; with a value, each row
+        gets the paper's medial/lateral name in the ``anatomical_subregion`` column.
     :param qc_flags: The scan's QC flag string (:func:`scan_qc_flags`), written into the
         ``qc_flags`` column of every row of this subject (``''`` = no flags).
     :return: A list of rows ``[subject, bone, subregion, mean, std, min, max, n_points,
         anatomical_subregion, qc_flags]``, with ``NaN`` statistics for subregions that have
         no finite values and an empty ``anatomical_subregion`` where it is unknown.
     """
-    names = anatomical_tibia_names(laterality) or {}
+    names = {'tibia': anatomical_tibia_names(laterality) or {},
+             'femur': anatomical_femur_names(laterality) or {}}
     rows: List[list] = []
     for bone, results in results_by_bone.items():
         for subregion, thickness_map in results.items():
-            anatomical = names.get(subregion, '') if bone == 'tibia' else ''
+            anatomical = names.get(bone, {}).get(subregion, '')
             values = _finite_values(thickness_map)
             if len(values) == 0:
                 rows.append([subject, bone, subregion, np.nan, np.nan, np.nan, np.nan, 0, anatomical,
@@ -524,11 +529,12 @@ def process_one(path: str, subject: str, args: argparse.Namespace,
     laterality = args.laterality_by_subject.get(subject)
     tibia, femur, tibia_results, femur_results = compute_thickness(
         seg, femur_label=args.femur_label, tibia_label=args.tibia_label, method=args.method,
-        tibia_bone_label=args.tibia_bone_label, laterality=laterality,
+        tibia_bone_label=args.tibia_bone_label, femur_bone_label=args.femur_bone_label,
+        laterality=laterality,
     )
 
     # Flag (do not fix or drop) the known bad-scan signals; the measurements stand as computed.
-    qc_flags = scan_qc_flags(seg, tibia)
+    qc_flags = scan_qc_flags(seg, tibia, femur)
     if qc_flags:
         print(f'[qc] {subject}: {qc_flags}', file=sys.stderr)
 
@@ -613,6 +619,9 @@ if __name__ == '__main__':
     parser.add_argument('--tibia-bone-label', type=int, default=2,
                         help='Label of the tibial bone; the tibial subregions are defined on '
                              'its subchondral surface (default: 2).')
+    parser.add_argument('--femur-bone-label', type=int, default=1,
+                        help='Label of the femoral bone; the femoral subregions and the '
+                             'femoral frame are derived from it (default: 1).')
     parser.add_argument('--laterality-table', default=None,
                         help='Optional CSV with columns subject,laterality (left/right knee). '
                              'Adds the medial/lateral tibial subregion names (cMT ... pLT) in '

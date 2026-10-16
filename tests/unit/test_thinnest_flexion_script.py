@@ -204,6 +204,7 @@ def test_main_flags_scans_and_series(monkeypatch, tmp_path):
 
     monkeypatch.setattr(mod, 'process_file', fake_process)
     args = SimpleNamespace(input=str(tmp_path), femur_label=3, tibia_label=4,
+                           femur_bone_label=1,
                            tibia_bone_label=2, method='knn', output=str(tmp_path / 'out'),
                            visualize=False, screenshot=None, html=None)
     mod.main(args)

@@ -36,9 +36,9 @@ Outputs (``-o <dir>``): ``detail.csv`` in long format, one row per (scan, compar
 Known bad-scan signals are flagged, not fixed or dropped: ``detail.csv``'s last column
 ``qc_flags`` holds the scan's ``;``-separated ``name:value`` flags from
 :func:`morphometry.cartilage.knee.scan_qc_flags` (``non_lpi_orientation:<codes>`` when the scan
-did not land in LPI after reorientation, ``tibia_transfer_far:<fraction>`` when the tibial
-region transfer left too much cartilage far from its subchondral bone area; empty for a clean
-scan), and ``summary.csv``'s last column ``qc_flagged_angles`` lists the flexion angles of the
+did not land in LPI after reorientation, ``tibia_transfer_far:<fraction>`` /
+``femur_transfer_far:<fraction>`` when that bone's region transfer left too much cartilage far
+from its subchondral bone area; empty for a clean scan), and ``summary.csv``'s last column ``qc_flagged_angles`` lists the flexion angles of the
 series' flagged scans (``;``-separated), so a trend resting on a flagged scan stays visible.
 Flagged scans are measured and enter the statistics as usual. Visualisations show one scene
 per scan with an arrow per compartment (``left`` red, ``right`` blue, ``both`` black).
@@ -220,7 +220,7 @@ def load_scan(path: str) -> Segmentation:
 
 def process_file(path: str, femur_label: int, tibia_label: int, method: str,
                  want_objects: bool = False, label: str = '', tibia_bone_label: int = 2,
-                 seg: Optional[Segmentation] = None) -> dict:
+                 femur_bone_label: int = 1, seg: Optional[Segmentation] = None) -> dict:
     """
     Compute the per-compartment thinnest points and their A-P fractions for one scan.
 
@@ -233,6 +233,8 @@ def process_file(path: str, femur_label: int, tibia_label: int, method: str,
     :param label: Scan identifier used in per-compartment failure warnings.
     :param tibia_bone_label: Label of the tibial bone; the tibial subregions (and hence the
         patient-side compartments) are defined on its subchondral surface.
+    :param femur_bone_label: Label of the femoral bone; the femoral subregions and the
+        femoral frame are derived from it.
     :param seg: The scan already loaded by :func:`load_scan`; ``None`` loads ``path``.
     :return: A dict with ``compartments``: ``{compartment: row}`` for every entry of
         :data:`COMPARTMENTS`, each row as returned by :func:`compartment_row` (all ``NaN``
@@ -248,14 +250,14 @@ def process_file(path: str, femur_label: int, tibia_label: int, method: str,
 
     tibia = Tibia(seg, tibia_label, bone_label=tibia_bone_label)
     tibia_thickness = tibia.calculate_thickness(method)
-    femur = Femur(seg, femur_label)
-    femur_thickness = femur.calculate_thickness(tibia, method)
+    femur = Femur(seg, femur_label, bone_label=femur_bone_label)
+    femur_thickness = femur.calculate_thickness(method=method)
     thinnest = locate_thinnest_points(tibia_thickness, femur_thickness, seg, label=label)
 
     result = {'compartments': {c: compartment_row(femur, thinnest[c], seg.spacing)
                                for c in COMPARTMENTS},
               # flagged, not fixed: the measurements above stand as computed
-              'qc_flags': scan_qc_flags(seg, tibia)}
+              'qc_flags': scan_qc_flags(seg, tibia, femur)}
     if want_objects:
         result.update(tibia=tibia, femur=femur, tibia_thickness=tibia_thickness,
                       femur_thickness=femur_thickness,
@@ -483,7 +485,8 @@ def main(args: argparse.Namespace):
                 seg = load_scan(path)
                 case = process_file(path, args.femur_label, args.tibia_label, args.method,
                                     want_objects=want_objects, label=label,
-                                    tibia_bone_label=args.tibia_bone_label, seg=seg)
+                                    tibia_bone_label=args.tibia_bone_label,
+                                    femur_bone_label=args.femur_bone_label, seg=seg)
                 want_render = want_objects
             # Deliberately broad: a cohort run should survive any single pathological scan
             # (segmentation defects surface as varied exceptions from the thickness pipeline).
@@ -563,6 +566,9 @@ if __name__ == '__main__':
     parser.add_argument('--tibia-bone-label', type=int, default=2,
                         help='Label of the tibial bone; the tibial subregions are defined on '
                              'its subchondral surface (default: 2).')
+    parser.add_argument('--femur-bone-label', type=int, default=1,
+                        help='Label of the femoral bone; the femoral subregions and the '
+                             'femoral frame are derived from it (default: 1).')
     parser.add_argument('--method', choices=['knn', 'mesh'], default='knn',
                         help='Thickness computation method (default: knn).')
     parser.add_argument('-o', '--output', default=None,

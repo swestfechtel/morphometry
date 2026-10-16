@@ -1,3 +1,12 @@
+"""Legacy one-off analysis of the T1rho knee series (unloaded / med-to-lat / lat-to-med).
+
+**Unmaintained.** Data paths are hard-coded (``data_path`` below), it is not covered by the
+test suite, and it has a pre-existing bug of its own: the ``except ValueError`` branches never
+clear ``tibia_success`` / ``femur_success``, so a bone that fails still reaches the plotting
+code with an unbound name. It is kept for reference and was only updated far enough to keep
+calling the current API (both bones now need their bone label, and ``Femur`` no longer takes a
+``Tibia``).
+"""
 from morphometry.cartilage import knee
 from morphometry.image_io import Image
 from matplotlib import pyplot as plt
@@ -11,6 +20,10 @@ import pandas as pd
 ul = 7
 tibia_label = 4
 femur_label = 3
+# Both subdivisions (Wirth & Eckstein 2008) are defined on the subchondral bone surface, so
+# each bone's own label has to be present too.
+tibia_bone_label = 2
+femur_bone_label = 1
 data_path = '/home/simon/Data'
 # data_path = 'E:/Data/Daten UKA'
 
@@ -18,7 +31,7 @@ data_path = '/home/simon/Data'
 def process_patient(row_identifier: str, unloaded_image: Image, med_to_lat_image: Image, lat_to_med_image: Image, dataframe_unloaded: pd.DataFrame, dataframe_med_to_lat: pd.DataFrame, dataframe_lat_to_med: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     tibia_success = femur_success = True
     try:
-        tibia = knee.Tibia(unloaded_image, cartilage_label=tibia_label)
+        tibia = knee.Tibia(unloaded_image, cartilage_label=tibia_label, bone_label=tibia_bone_label)
         tibia_results = tibia.calculate_thickness('knn')
         tibia_success = True
     except ValueError as e:
@@ -27,15 +40,17 @@ def process_patient(row_identifier: str, unloaded_image: Image, med_to_lat_image
         tibia_results['clt'] = tibia_results['ilt'] = tibia_results['elt'] = tibia_results['alt'] = tibia_results['plt'] = tibia_results['crt'] = tibia_results['irt'] = tibia_results['ert'] = tibia_results['art'] = tibia_results['prt'] = dict()
 
     try:
-        femur = knee.Femur(unloaded_image, cartilage_label=femur_label)
-        femur_results = femur.calculate_thickness(tibia, 'knn')
+        femur = knee.Femur(unloaded_image, cartilage_label=femur_label, bone_label=femur_bone_label)
+        femur_results = femur.calculate_thickness(method='knn')
         femur_success = True
     except ValueError as e:
         print(f'Patient {row_identifier} | unloaded femur.', e)
         femur_results = dict()
         femur_results['iclf'] = femur_results['cclf'] = femur_results['eclf'] = femur_results['plf'] = femur_results['alf'] = femur_results['icrf'] = femur_results['ccrf'] = femur_results['ecrf'] = femur_results['prf'] = femur_results['arf'] = dict()
 
-    map = {'clf': 'left_cwbz', 'plf': 'left_posterior_zone', 'alf': 'left_anterior_zone', 'crf': 'right_cwbz',
+    # Femoral region key -> thickness-dict key: the four extension zones keep their old long
+    # names, the condylar thirds are keyed by the region key itself.
+    map = {'plf': 'left_posterior_zone', 'alf': 'left_anterior_zone',
            'prf': 'right_posterior_zone', 'arf': 'right_anterior_zone',
            'iclf': 'iclf', 'cclf': 'cclf', 'eclf': 'eclf', 'icrf': 'icrf', 'ccrf': 'ccrf', 'ecrf': 'ecrf'}
 
@@ -81,7 +96,7 @@ def process_patient(row_identifier: str, unloaded_image: Image, med_to_lat_image
 
     femur_success = tibia_success = False
     try:
-        tibia = knee.Tibia(med_to_lat_image, cartilage_label=tibia_label)
+        tibia = knee.Tibia(med_to_lat_image, cartilage_label=tibia_label, bone_label=tibia_bone_label)
         tibia_results = tibia.calculate_thickness('knn')
         tibia_success = True
     except ValueError as e:
@@ -90,8 +105,8 @@ def process_patient(row_identifier: str, unloaded_image: Image, med_to_lat_image
         tibia_results['clt'] = tibia_results['ilt'] = tibia_results['elt'] = tibia_results['alt'] = tibia_results['plt'] = tibia_results['crt'] = tibia_results['irt'] = tibia_results['ert'] = tibia_results['art'] = tibia_results['prt'] = dict()
 
     try:
-        femur = knee.Femur(med_to_lat_image, cartilage_label=femur_label)
-        femur_results = femur.calculate_thickness(tibia, 'knn')
+        femur = knee.Femur(med_to_lat_image, cartilage_label=femur_label, bone_label=femur_bone_label)
+        femur_results = femur.calculate_thickness(method='knn')
         femur_success = True
     except ValueError as e:
         print(f'Patient {row_identifier} | med_to_lat femur.', e)
@@ -136,7 +151,7 @@ def process_patient(row_identifier: str, unloaded_image: Image, med_to_lat_image
     tibia_success = femur_success = False
 
     try:
-        tibia = knee.Tibia(lat_to_med_image, cartilage_label=tibia_label)
+        tibia = knee.Tibia(lat_to_med_image, cartilage_label=tibia_label, bone_label=tibia_bone_label)
         tibia_results = tibia.calculate_thickness('knn')
         tibia_success = True
     except ValueError as e:
@@ -145,8 +160,8 @@ def process_patient(row_identifier: str, unloaded_image: Image, med_to_lat_image
         tibia_results['clt'] = tibia_results['ilt'] = tibia_results['elt'] = tibia_results['alt'] = tibia_results['plt'] = tibia_results['crt'] = tibia_results['irt'] = tibia_results['ert'] = tibia_results['art'] = tibia_results['prt'] = dict()
 
     try:
-        femur = knee.Femur(lat_to_med_image, cartilage_label=femur_label)
-        femur_results = femur.calculate_thickness(tibia, 'knn')
+        femur = knee.Femur(lat_to_med_image, cartilage_label=femur_label, bone_label=femur_bone_label)
+        femur_results = femur.calculate_thickness(method='knn')
         femur_success = True
     except ValueError as e:
         print(f'Patient {row_identifier} | lat_to_med femur.', e)

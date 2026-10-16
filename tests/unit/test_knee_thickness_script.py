@@ -26,13 +26,13 @@ def test_laterality_table(tmp_path):
 
 
 def test_summarize_adds_anatomical_names_only_with_laterality():
-    """Tibial rows get cMT ... only with a laterality; 'subregion' stays patient-side."""
+    """Rows get the medial/lateral names only with a laterality; 'subregion' stays patient-side."""
     results = {'tibia': {'clt': {(0.0, 0.0): 1.0}, 'crt': {(1.0, 0.0): 2.0}},
                'femur': {'iclf': {(0.0, 0.0): 3.0}}}
     rows = mod.summarize(results, 'K1', 'right')        # right knee: patient-left plate medial
     assert [r[2] for r in rows] == ['clt', 'crt', 'iclf']
     col = mod.SUMMARY_COLUMNS.index('anatomical_subregion')
-    assert [r[col] for r in rows] == ['cMT', 'cLT', '']
+    assert [r[col] for r in rows] == ['cMT', 'cLT', 'icMF']
     assert len(rows[0]) == len(mod.SUMMARY_COLUMNS)
     assert [r[col] for r in mod.summarize(results, 'K1')] == ['', '', '']
     assert np.isclose(rows[1][3], 2.0)
@@ -77,7 +77,8 @@ def test_process_one_writes_qc_flags_to_csv_and_json(monkeypatch, tmp_path):
     for name in segs:
         (tmp_path / f'{name}.nii.gz').write_bytes(b'')
     args = SimpleNamespace(input=[str(tmp_path)], laterality_table=None, femur_label=3,
-                           tibia_label=4, tibia_bone_label=2, method='knn', remove_outliers=False,
+                           tibia_label=4, tibia_bone_label=2, femur_bone_label=1,
+                           method='knn', remove_outliers=False,
                            visualize='none', screenshot=None, html=None,
                            output=str(tmp_path / 'out.csv'), dump_json=str(tmp_path / 'out.json'))
     mod.main(args)
@@ -117,7 +118,8 @@ def test_scan_that_raises_keeps_placeholder_row(monkeypatch, tmp_path):
     for name in ('K7_90_belastet', 'unreadable'):
         (tmp_path / f'{name}.nii.gz').write_bytes(b'')
     args = SimpleNamespace(input=[str(tmp_path)], laterality_table=None, femur_label=3,
-                           tibia_label=4, tibia_bone_label=2, method='knn', remove_outliers=False,
+                           tibia_label=4, tibia_bone_label=2, femur_bone_label=1,
+                           method='knn', remove_outliers=False,
                            visualize='none', screenshot=None, html=None,
                            output=str(tmp_path / 'out.csv'), dump_json=None)
     mod.main(args)

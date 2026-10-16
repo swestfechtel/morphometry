@@ -8,10 +8,15 @@ from typing import Optional, Tuple
 from scipy.spatial import KDTree
 from scipy.ndimage import label, generic_filter
 from morphometry.image_io import Image
-from morphometry.cartilage.surface import array_indices_to_world
+from morphometry.cartilage.surface import (
+    array_indices_to_world, index_to_world_affine, transfer_qc, TRANSFER_FAR_MM,
+    TRANSFER_MAX_FAR_FRACTION,
+)
 from morphometry.cartilage.tibia_regions import (
-    subdivide_tibia, anatomical_tibia_names, tibia_display_label, transfer_qc, TIBIA_REGION_KEYS,
-    TRANSFER_FAR_MM, TRANSFER_MAX_FAR_FRACTION,
+    subdivide_tibia, anatomical_tibia_names, tibia_display_label, TIBIA_REGION_KEYS,
+)
+from morphometry.cartilage.femur_regions import (
+    subdivide_femur, anatomical_femur_names, FEMUR_REGION_KEYS, ZONE_THICKNESS_KEYS,
 )
 
 logger = logging.getLogger(__name__)
@@ -360,232 +365,140 @@ class Tibia:
 
 
 class Femur:
-    def __init__(self, image: Image, cartilage_label: int, outlier_ratio: float = 0.1):
+    """
+    Femoral cartilage of one knee: subregions (Wirth & Eckstein 2008) and thickness.
+
+    The subregions are defined on the femoral subchondral bone area (tAB) by
+    :func:`morphometry.cartilage.femur_regions.subdivide_femur` and transferred to the
+    cartilage voxels by nearest tAB triangle. Regions are keyed by **patient side**
+    (``iclf``, ``cclf``, ``eclf`` = the thirds of the patient-left weight-bearing condyle,
+    ``icrf``, ``ccrf``, ``ecrf`` the patient-right ones, plus the in-house extension zones
+    ``alf`` / ``arf`` for the trochlea and ``plf`` / ``prf`` for the posterior condyles);
+    with a known ``laterality`` :attr:`anatomical_names` maps them to the paper's
+    medial/lateral names.
+
+    The subdivision is built from the femur alone -- its shaft axis, posterior condylar line
+    and intercondylar notch -- so it no longer needs a :class:`Tibia` and no longer moves with
+    knee flexion. The ``tibia`` arguments of :meth:`calculate_thickness` and the plotting
+    methods are kept only so existing callers keep working; they are ignored.
+    """
+
+    def __init__(self, image: Image, cartilage_label: int, outlier_ratio: float = 0.1,
+                 bone_label: int = 1, laterality: Optional[str] = None,
+                 weightbearing_fraction: float = 0.6):
+        """
+        :param image: The (LPI-oriented) knee ``Segmentation``.
+        :param cartilage_label: Label of the femoral cartilage (``dfg_knees``: 3).
+        :param outlier_ratio: Cartilage components smaller than this fraction of the total
+            cartilage volume are dropped from the point cloud (see
+            :func:`_remove_mask_outliers`); ``0`` disables it.
+        :param bone_label: Label of the femoral bone (``dfg_knees``: 1), on whose surface the
+            subregions are defined and from which the femoral frame is built.
+        :param laterality: ``'left'`` / ``'right'`` knee or ``None``; only adds the
+            medial/lateral names (:attr:`anatomical_names`).
+        :param weightbearing_fraction: Where the weight-bearing condyle ends, as a fraction of
+            the distance from the trochlear notch to the condyle's posterior end (0.6).
+        """
+        anatomical_femur_names(laterality)  # validate early
+        if not 0.0 < weightbearing_fraction < 1.0:
+            raise ValueError('weightbearing_fraction must be in (0, 1), got '
+                             f'{weightbearing_fraction}')
         self.image = image
         self.cartilage_label = cartilage_label
+        self.bone_label = bone_label
+        self.laterality = laterality
+        self.weightbearing_fraction = weightbearing_fraction
         self.outlier_ratio = outlier_ratio
-        self.dividing_line = None
-        self.left_part, self.right_part = None, None
-        self.left_cwbz, self.right_cwbz = None, None
-        self.left_anterior_zone, self.right_anterior_zone = None, None
-        self.left_posterior_zone, self.right_posterior_zone = None, None
-        self.eclf, self.iclf, self.cclf, self.ecrf, self.icrf, self.ccrf = None, None, None, None, None, None
-        self.alf, self.arf, self.plf, self.prf = None, None, None, None
+        self.subdivision = None
+        # FemoralFrame and the two CondyleFrames once calculate_landmarks ran.
+        self.frame = None
+        self.left_landmarks, self.right_landmarks = None, None
+        # Region key ('iclf', ...) of every point_cloud row, raw (before fragment removal).
+        self.point_labels = None
+        # Distance QC of the region transfer (see calculate_landmarks), None until then.
+        self.transfer_qc = None
+        self.iclf, self.cclf, self.eclf = None, None, None
+        self.icrf, self.ccrf, self.ecrf = None, None, None
+        self.alf, self.plf, self.arf, self.prf = None, None, None, None
 
         cartilage = np.where(self.image.array == self.cartilage_label, 1, 0)
         cartilage = _remove_mask_outliers(cartilage, self.outlier_ratio)
         self.point_cloud = np.argwhere(cartilage).astype(float)
 
-        # Split the cartilage into its two condyles along the intercondylar notch. The
-        # dividing axis (``x = slope * y + intercept``, x = left-right, y = anterior-
-        # posterior, in voxel-index space) is fitted to the notch-gap centres across all
-        # coronal slices where the cartilage separates into two condyles. This is robust
-        # to the trochlea being continuous anteriorly, unlike the previous approach of
-        # subtracting two independently-estimated notch points.
-        slope, intercept = _femoral_condyle_dividing_line(cartilage)
-        self.dividing_line = (slope, intercept)
-
-        # A high left-right index is the image-left side, so voxels above the dividing
-        # axis form the left part and the rest the right part.
-        line_lr = slope * self.point_cloud[:, 1] + intercept
-        self.left_part = self.point_cloud[self.point_cloud[:, 0] > line_lr]
-        self.right_part = self.point_cloud[self.point_cloud[:, 0] <= line_lr]
-
-    def _si_gap(self) -> float:
+    @property
+    def anatomical_names(self) -> Optional[dict]:
         """
-        The S-I gap (in voxels) that separates the folded trochlea from the contact surface.
+        The paper's medial/lateral names of the patient-side region keys.
 
-        Fixed at ~1.5 mm of superior-inferior clearance, converted to voxels via the S-I
-        voxel spacing, so :func:`_restrict_to_contact_cluster` splits fold-from-contact
-        consistently across differently-sampled scans.
-
-        :return: The gap threshold in voxels (at least 2).
+        :return: ``{'iclf': 'icMF', ...}`` for a right knee, ``{'iclf': 'icLF', ...}`` for a
+            left knee, ``None`` without a laterality (see
+            :func:`morphometry.cartilage.femur_regions.anatomical_femur_names`).
         """
-        return max(2.0, 1.5 / float(self.image.spacing[2]))
+        return anatomical_femur_names(self.laterality)
 
-    def extract_central_weightbearing_zone(self, tibia: Tibia, side: str = 'left'):
+    def calculate_landmarks(self):
         """
-        Extract the central weight-bearing zone of the cartilage.
+        Subdivide the femoral subchondral bone and label every cartilage voxel.
 
-        The zone is the femoral cartilage inside the anterior-posterior / left-right window
-        of the tibial central plateau, further restricted to the superior-inferior cluster
-        in contact with the tibia (see :func:`_restrict_to_contact_cluster`) so a flexed
-        knee's anterior trochlea is not mistaken for weight-bearing cartilage.
-        :param tibia: A Tibia object.
-        :param side: The side of the tibia (patient side) to extract the central weight-bearing zone from. Can be either 'left' or 'right'.
+        Runs :func:`morphometry.cartilage.femur_regions.subdivide_femur` (stored as
+        :attr:`subdivision`; its femoral frame as :attr:`frame` and the two condyles'
+        frames as :attr:`left_landmarks` / :attr:`right_landmarks`, patient side) and gives
+        each ``point_cloud`` voxel the region of its nearest tAB triangle (world mm), stored
+        in :attr:`point_labels`. The voxel-to-triangle distances are summarised in
+        :attr:`transfer_qc` (:func:`~morphometry.cartilage.surface.transfer_qc`); a WARNING is
+        logged on the ``morphometry`` logger when more than ``TRANSFER_MAX_FAR_FRACTION`` (1%)
+        of the voxels are farther than ``TRANSFER_FAR_MM`` (6 mm), which flags broken
+        segmentations.
         """
-        if tibia.point_labels is None:
-            tibia.calculate_landmarks()
-        # The tibial voxels' precomputed region labels (patient side).
-        plate = 'LT' if side == 'left' else 'RT'
-        labels = tibia.point_labels
-        central_tibia = tibia.point_cloud[labels == 'c' + plate]
-        internal_external_tibia = tibia.point_cloud[(labels == 'i' + plate) | (labels == 'e' + plate)]
-        max_anterior = central_tibia[:, 1].min()  # min because anterior - posterior is low to high
-        max_posterior = central_tibia[:, 1].max()
-        max_left = internal_external_tibia[:, 0].min()  # refers to image side
-        max_right = internal_external_tibia[:, 0].max()
+        self.subdivision = subdivide_femur(self.image, bone_label=self.bone_label,
+                                           cartilage_label=self.cartilage_label,
+                                           weightbearing_fraction=self.weightbearing_fraction,
+                                           laterality=self.laterality)
+        self.frame = self.subdivision.frame
+        self.left_landmarks = self.subdivision.condyles['left']
+        self.right_landmarks = self.subdivision.condyles['right']
+        codes, distances = self.subdivision.nearest_regions(
+            array_indices_to_world(self.image, self.point_cloud))
+        self.point_labels = np.asarray(FEMUR_REGION_KEYS, dtype=object)[codes]
+        # QC: cartilage far from every tAB triangle is not explained by the subdivision
+        # (broken segmentation, cartilage label on the wrong bone). Warn, do not fail.
+        self.transfer_qc = transfer_qc(distances)
+        if self.transfer_qc['far_fraction'] > TRANSFER_MAX_FAR_FRACTION:
+            logger.warning(
+                'Femur: %.1f%% of the femoral cartilage voxels are more than %.0f mm from the '
+                'subchondral bone area they were assigned to (max %.1f mm); the segmentation '
+                'is probably broken and the femoral subregions unreliable.',
+                100 * self.transfer_qc['far_fraction'], TRANSFER_FAR_MM, self.transfer_qc['max_mm'])
 
-        central_weightbearing_zone = self.point_cloud[self.point_cloud[:, 0] >= max_left]
-        central_weightbearing_zone = central_weightbearing_zone[central_weightbearing_zone[:, 0] <= max_right]
-        central_weightbearing_zone = central_weightbearing_zone[central_weightbearing_zone[:, 1] >= max_anterior]
-        central_weightbearing_zone = central_weightbearing_zone[central_weightbearing_zone[:, 1] <= max_posterior]
-
-        # The A-P/L-R window alone captures the anterior trochlea when the knee is flexed
-        # (it folds into the same A-P range as the weight-bearing surface). Keep only the
-        # superior-inferior cluster in contact with the tibia to exclude that fold.
-        central_weightbearing_zone = _restrict_to_contact_cluster(
-            central_weightbearing_zone, central_tibia[:, 2].min(), max_gap=self._si_gap())
-
-        if side == 'left':
-            self.left_cwbz = central_weightbearing_zone
-        else:
-            self.right_cwbz = central_weightbearing_zone
-
-    def get_femoral_thirds(self, side: str = 'left') -> Tuple[int, int]:
+    def classify_point(self, point: np.ndarray) -> str:
         """
-        Divide the central weight-bearing zone of the femoral cartilage into three subregions along the sagittal axis,
-        each comprising 33% of the total volume.
+        Classify a point as belonging to a specific region of the femur.
 
-        :param side: The side (patient side) of the cartilage.
-        :return: The sagittal coordinates of the split points.
+        The point gets the region of the nearest tAB triangle (see
+        :meth:`FemurSubdivision.region_codes_at`). For the cartilage voxels themselves use the
+        precomputed :attr:`point_labels` instead of calling this per point.
+
+        :param point: A length-3 index into ``image.array``.
+        :return: The region key (``'iclf'`` ... ``'prf'``, patient side).
         """
-        plate = self.left_cwbz if side == 'left' else self.right_cwbz
-        lr_min = np.min(plate[:, 0])
-        lr_max = np.max(plate[:, 0])
-        lr_range = lr_max - lr_min
-        first_split = lr_min + int(lr_range / 3)
-        second_split = lr_min + 2 * int(lr_range / 3)
-
-        points_in_first_third = list()
-        points_in_second_third = list()
-        num_it = 0
-
-        while not (abs(len(points_in_first_third) / len(plate) - .33) < .02):
-            if num_it > 30:
-                break
-
-            points_in_first_third = list()
-            for point in plate:
-                if point[0] < first_split:
-                    points_in_first_third.append(point)
-
-            if len(points_in_first_third) / len(plate) > 0.33:
-                first_split -= 1
-            else:
-                first_split += 1
-
-            num_it += 1
-
-        num_it = 0
-
-        while not (abs(len(points_in_second_third) / len(plate) - .33) < .02):
-            if num_it > 30:
-                break
-
-            points_in_second_third = list()
-            for point in plate:
-                if first_split <= point[0] < second_split:
-                    points_in_second_third.append(point)
-
-            if len(points_in_second_third) / len(plate) > 0.33:
-                second_split -= 1
-            else:
-                second_split += 1
-
-            num_it += 1
-
-        return first_split, second_split
-
-    def extract_anterior_posterior_zones(self, side: str = 'left'):
-        """
-        Extract the anterior and posterior zones of the cartilage.
-
-        The posterior zone is restricted to the superior-inferior cluster contiguous with
-        the weight-bearing surface (see :func:`_restrict_to_contact_cluster`) so a flexed
-        knee's folded trochlea — which falls posterior to the CWBZ in image coordinates — is
-        excluded; the anterior zone genuinely is the trochlea and is left unrestricted.
-        :param side: The side (patient) of the cartilage.
-        """
-        # split_axis = np.median(self.point_cloud[:, 0])
-        # cartilage = self.point_cloud[self.point_cloud[:, 0] < split_axis] if side == 'right' else self.point_cloud[self.point_cloud[:, 0] > split_axis]
-        cartilage = self.left_part if side == 'left' else self.right_part
-
-        cwbz = self.left_cwbz if side == 'left' else self.right_cwbz
-        cwbz_most_anterior = cwbz[:, 1].min()
-        cwbz_most_posterior = cwbz[:, 1].max()
-
-        anterior_zone = cartilage[cartilage[:, 1] < cwbz_most_anterior]
-        posterior_zone = cartilage[cartilage[:, 1] > cwbz_most_posterior]
-
-        # At high flexion the folded anterior trochlea also falls posterior to the CWBZ in
-        # image A-P coordinates, so the posterior zone picks it up as a separate superior
-        # S-I cluster. Keep only the cluster contiguous with the weight-bearing surface (the
-        # anterior zone genuinely is the trochlea, so it is left untouched).
-        if len(posterior_zone) > 0:
-            posterior_zone = _restrict_to_contact_cluster(
-                posterior_zone, float(cwbz[:, 2].mean()), max_gap=self._si_gap())
-
-        if side == 'left':
-            self.left_anterior_zone = anterior_zone
-            self.left_posterior_zone = posterior_zone
-        else:
-            self.right_anterior_zone = anterior_zone
-            self.right_posterior_zone = posterior_zone
+        if self.subdivision is None:
+            self.calculate_landmarks()
+        code = self.subdivision.region_codes_at(array_indices_to_world(self.image, point))[0]
+        return FEMUR_REGION_KEYS[code]
 
     def extract_subregions(self):
         """
-        Extract the subregions of the femoral cartilage.
+        Extract the subregions of the femoral cartilage as voxel point clouds (``self.iclf``
+        etc.).
         """
-        alf, arf, plf, prf = list(), list(), list(), list()
-        eclf, iclf, cclf, ecrf, icrf, ccrf = list(), list(), list(), list(), list(), list()
-
-        for point in self.left_anterior_zone:
-            alf.append(point)
-
-        for point in self.right_anterior_zone:
-            arf.append(point)
-
-        for point in self.left_posterior_zone:
-            plf.append(point)
-
-        for point in self.right_posterior_zone:
-            prf.append(point)
-
-        first_split, second_split = self.get_femoral_thirds(side='left')
-        for point in self.left_cwbz:
-            if point[0] < first_split:
-                iclf.append(point)
-            elif first_split <= point[0] < second_split:
-                cclf.append(point)
-            else:
-                eclf.append(point)
-
-        first_split, second_split = self.get_femoral_thirds(side='right')
-        for point in self.right_cwbz:
-            if point[0] < first_split:
-                ecrf.append(point)
-            elif first_split <= point[0] < second_split:
-                ccrf.append(point)
-            else:
-                icrf.append(point)
-
-        self.alf = np.array(alf)
-        self.arf = np.array(arf)
-        self.plf = np.array(plf)
-        self.prf = np.array(prf)
-        self.eclf = np.array(eclf)
-        self.iclf = np.array(iclf)
-        self.cclf = np.array(cclf)
-        self.ecrf = np.array(ecrf)
-        self.icrf = np.array(icrf)
-        self.ccrf = np.array(ccrf)
-
-        # Enforce subregion contiguity (a no-op once the zone-level fold restriction has
-        # removed the flexed-knee folds, but a general safety net for stray fragments).
-        for attr in ('alf', 'arf', 'plf', 'prf', 'eclf', 'iclf', 'cclf', 'ecrf', 'icrf', 'ccrf'):
-            setattr(self, attr, _remove_subregion_fragments(getattr(self, attr)))
-
+        if self.point_labels is None:
+            self.calculate_landmarks()
+        for key in FEMUR_REGION_KEYS:
+            # Safety net kept from the voxel-based scheme: a subregion is one anatomical
+            # patch, so drop small disconnected fragments (a no-op when the nearest-triangle
+            # transfer gives contiguous regions, which it does on clean scans).
+            setattr(self, key, _remove_subregion_fragments(
+                self.point_cloud[self.point_labels == key]))
 
     def mesh_method(self, superior_surface: np.ndarray, inferior_surface: np.ndarray) -> dict:
         """
@@ -601,6 +514,9 @@ class Femur:
                                                       auto_orient_normals=True)
 
         thicknesses = dict()
+        # The key is always array axes 0 and 1, whatever axis the surfaces were taken along;
+        # for a zone measured along axis 1 that second component is the depth coordinate and
+        # the keys collide. See Femur.calculate_thickness and plan step 4.
         for i, point in enumerate(superior_mesh.points):
             vec = superior_mesh['Normals'][i] * superior_mesh.length
             v0 = point - vec
@@ -635,110 +551,103 @@ class Femur:
         is_world = np.array(is_world)
         superior_tree = KDTree(ss_world)
         distances, indices = superior_tree.query(is_world, k=1)
+        # The key is always array axes 0 and 1, whatever axis the surfaces were taken along;
+        # for a zone measured along axis 1 that second component is the depth coordinate and
+        # the keys collide. See Femur.calculate_thickness and plan step 4.
         for i, distance in enumerate(distances):
             thicknesses[(inferior_surface[i][0], inferior_surface[i][1])] = distance
 
         return thicknesses
 
-    def calculate_thickness(self, tibia: Tibia, method: str = 'mesh') -> dict:
+    def calculate_thickness(self, tibia: Tibia = None, method: str = 'mesh') -> dict:
         """
-        Calculate the cartilage thickness for all zones (subregions).
+        Calculate the cartilage thickness for all subregions of the femoral cartilage.
 
-        :param tibia: A Tibia object.
+        The thickness itself is still measured per voxel column: the two opposing surfaces of
+        each subregion are extracted per image column and the distance between them taken
+        (step 4 of ``docs/wirth_eckstein_2008_plan.md`` replaces this with the paper's
+        area-weighted surface distances). The columns run along the superior-inferior image
+        axis, except for the two posterior-condyle zones, whose articular surface faces
+        posteriorly: theirs run along the image axis nearest the **femoral** anterior-posterior
+        axis (:func:`_depth_axis`), which is the image's anterior-posterior axis in an extended
+        knee but not in a flexed one.
+
+        **The map keys do not follow the depth axis.** :meth:`mesh_method` / :meth:`knn_method`
+        key every point by its array axes 0 and 1, so a zone measured along axis 1 is keyed by
+        ``(x, depth)`` rather than by a position in the plane it was measured across: two
+        points of such a zone that share ``(x, y)`` overwrite each other, and
+        :func:`find_thinnest_area` / :func:`_thickness_surface` place its values at the wrong
+        in-plane position. The defect predates this method -- the posterior zones were always
+        measured across one axis and keyed by another -- but it used to apply to every scan and
+        now applies only to those whose femoral A-P axis is the image's (i.e. at low flexion
+        but not at 60-90 degrees), so it varies *within* a flexion series. It is not fixable
+        here: the two bones would have to share one in-plane frame, which is what the
+        area-weighted thickness of plan step 4 brings.
+
+        :param tibia: Ignored, and kept only so that callers written against the old
+            tibia-relative subdivision keep working. The femoral subregions are now derived
+            from the femur alone. Anything other than ``None`` or a ``Tibia`` raises, so that
+            ``calculate_thickness('knn')`` -- which would bind the method to this parameter and
+            silently run the mesh method -- is caught.
         :param method: The method used for thickness calculation. Can be either 'mesh' or 'knn'.
-        :return: A dictionary where keys are zone labels and values are dictionaries, where keys are coordinates and values are thicknesses.
+        :return: A dictionary where keys are zone labels and values are dictionaries, where
+            keys are coordinates and values are thicknesses. The weight-bearing condyles'
+            thirds are keyed by their region key (``'iclf'`` ...), the extension zones by the
+            names the femoral thickness dicts have always used for them
+            (``'left_anterior_zone'`` ... ``'right_posterior_zone'``).
+        :raises TypeError: If ``tibia`` is neither ``None`` nor a ``Tibia``.
         """
+        # 'tibia' is ignored, but it is still the first positional parameter, so a caller
+        # writing femur.calculate_thickness('knn') would silently run the mesh method.
+        if tibia is not None and not isinstance(tibia, Tibia):
+            raise TypeError(
+                f'Femur.calculate_thickness takes the (ignored) tibia first and the method '
+                f'second; got {tibia!r} as the tibia. Call it as '
+                f'calculate_thickness(method={tibia!r}).')
         assert method in ['mesh', 'knn'], 'Method must be either "mesh" or "knn".'
-        self.extract_central_weightbearing_zone(tibia, side='left')
-        self.extract_central_weightbearing_zone(tibia, side='right')
-        self.extract_anterior_posterior_zones(side='left')
-        self.extract_anterior_posterior_zones(side='right')
+        self.extract_subregions()
 
         thicknesses = dict()
-        for zone in ['left_cwbz', 'right_cwbz', 'left_posterior_zone', 'right_posterior_zone', 'left_anterior_zone', 'right_anterior_zone']:
-            if zone in ['left_posterior_zone', 'right_posterior_zone']:
-                tmp = getattr(self, zone).copy()
-                tmp[:, 1], tmp[:, 2] = tmp[:, 2], tmp[:, 1].copy()  # rotate to allow extraction of anterior and posterior surface
-                superior_surface, inferior_surface = get_superior_and_inferior_surface_points(tmp)
-                superior_surface[:, 1], superior_surface[:, 2] = superior_surface[:, 2], superior_surface[:, 1].copy()  # rotate back
-                inferior_surface[:, 1], inferior_surface[:, 2] = inferior_surface[:, 2], inferior_surface[:, 1].copy()
+        for key in FEMUR_REGION_KEYS:
+            points = getattr(self, key)
+            zone = ZONE_THICKNESS_KEYS.get(key, key)
+            if points is None or len(points) == 0:
+                thicknesses[zone] = dict()
+                continue
+            superior_surface, inferior_surface = _zone_surface_points(
+                points, depth_axis=self.depth_axis(key))
+            if method == 'mesh':
+                thicknesses[zone] = self.mesh_method(superior_surface, inferior_surface)
             else:
-                superior_surface, inferior_surface = get_superior_and_inferior_surface_points(getattr(self, zone))
-
-            if zone == 'left_cwbz':  # remember: left & right = patient side
-                first_split, second_split = self.get_femoral_thirds(side='left')
-                iclf_superior = superior_surface[superior_surface[:, 0] < first_split]
-                iclf_inferior = inferior_surface[inferior_surface[:, 0] < first_split]
-                cclf_superior = superior_surface[superior_surface[:, 0] >= first_split]
-                cclf_superior = cclf_superior[cclf_superior[:, 0] < second_split]
-                cclf_inferior = inferior_surface[inferior_surface[:, 0] >= first_split]
-                cclf_inferior = cclf_inferior[cclf_inferior[:, 0] < second_split]
-                eclf_superior = superior_surface[superior_surface[:, 0] >= second_split]
-                eclf_inferior = inferior_surface[inferior_surface[:, 0] >= second_split]
-
-                if method == 'mesh':
-                    thicknesses['iclf'] = self.mesh_method(iclf_superior, iclf_inferior)
-                    thicknesses['cclf'] = self.mesh_method(cclf_superior, cclf_inferior)
-                    thicknesses['eclf'] = self.mesh_method(eclf_superior, eclf_inferior)
-                else:
-                    thicknesses['iclf'] = self.knn_method(iclf_superior, iclf_inferior)
-                    thicknesses['cclf'] = self.knn_method(cclf_superior, cclf_inferior)
-                    thicknesses['eclf'] = self.knn_method(eclf_superior, eclf_inferior)
-            elif zone == 'right_cwbz':
-                first_split, second_split = self.get_femoral_thirds(side='right')
-                icrf_superior = superior_surface[superior_surface[:, 0] >= second_split]
-                icrf_inferior = inferior_surface[inferior_surface[:, 0] >= second_split]
-                ccrf_superior = superior_surface[superior_surface[:, 0] >= first_split]
-                ccrf_superior = ccrf_superior[ccrf_superior[:, 0] < second_split]
-                ccrf_inferior = inferior_surface[inferior_surface[:, 0] >= first_split]
-                ccrf_inferior = ccrf_inferior[ccrf_inferior[:, 0] < second_split]
-                ecrf_superior = superior_surface[superior_surface[:, 0] < first_split]
-                ecrf_inferior = inferior_surface[inferior_surface[:, 0] < first_split]
-
-                if method == 'mesh':
-                    thicknesses['icrf'] = self.mesh_method(icrf_superior, icrf_inferior)
-                    thicknesses['ccrf'] = self.mesh_method(ccrf_superior, ccrf_inferior)
-                    thicknesses['ecrf'] = self.mesh_method(ecrf_superior, ecrf_inferior)
-                else:
-                    thicknesses['icrf'] = self.knn_method(icrf_superior, icrf_inferior)
-                    thicknesses['ccrf'] = self.knn_method(ccrf_superior, ccrf_inferior)
-                    thicknesses['ecrf'] = self.knn_method(ecrf_superior, ecrf_inferior)
-            else:
-                if method == 'mesh':
-                    thicknesses[zone] = self.mesh_method(superior_surface, inferior_surface)
-                else:
-                    thicknesses[zone] = self.knn_method(superior_surface, inferior_surface)
+                thicknesses[zone] = self.knn_method(superior_surface, inferior_surface)
 
         return thicknesses
+
+    def depth_axis(self, key: str) -> int:
+        """
+        The array axis a subregion's (voxel-column) thickness is measured along.
+
+        :param key: A region key from
+            :data:`~morphometry.cartilage.femur_regions.FEMUR_REGION_KEYS`.
+        :return: ``2`` (superior-inferior) for every region except the two posterior-condyle
+            zones, whose surface faces posteriorly: for those, the array axis nearest the
+            femoral anterior-posterior axis (see :func:`_depth_axis`).
+        """
+        if key not in ('plf', 'prf') or self.frame is None:
+            return 2
+        return _depth_axis(self.image, self.frame.ap_axis)
 
     def _ensure_subregions(self, tibia: Tibia = None):
         """
         Lazily compute the femoral subregion voxel clouds needed for visualisation.
 
-        The femoral subregions are defined relative to the tibial plateau, so a
-        ``Tibia`` is required the first time they are computed (its landmarks are
-        computed on demand if missing). Idempotent once the subregions exist.
+        Idempotent: does nothing once the subregions are available.
 
-        :param tibia: A ``Tibia`` instance for the same knee. Required only if the
-            femoral subregions have not been extracted yet.
-        :raises ValueError: If the subregions are not yet available and no ``tibia``
-            is provided.
+        :param tibia: Ignored (see :meth:`calculate_thickness`); kept so the plotting
+            methods' signatures do not change.
         """
-        if self.alf is not None:
+        if self.iclf is not None:
             return
-        if tibia is None:
-            raise ValueError(
-                'Femoral subregions require a Tibia (they are defined relative to the '
-                'tibial plateau); pass tibia=... to the plotting method.'
-            )
-        if tibia.point_cloud is None:
-            tibia.get_surface_points()
-        if tibia.point_labels is None:
-            tibia.calculate_landmarks()
-        self.extract_central_weightbearing_zone(tibia, side='left')
-        self.extract_central_weightbearing_zone(tibia, side='right')
-        self.extract_anterior_posterior_zones(side='left')
-        self.extract_anterior_posterior_zones(side='right')
         self.extract_subregions()
 
     def plot_segments(self, tibia: Tibia = None, plotter: pv.Plotter = None,
@@ -747,8 +656,7 @@ class Femur:
         Render the raw voxel volume of every femoral subregion as coloured cube
         glyphs in a single 3D scene, one distinct colour per subregion.
 
-        :param tibia: A ``Tibia`` for the same knee (needed to derive the subregions
-            unless they have already been extracted).
+        :param tibia: Ignored (the subregions no longer depend on the tibia).
         :param plotter: An existing PyVista ``Plotter`` to draw into (new one if ``None``).
         :param show: Whether to call ``plotter.show()`` (see :meth:`Tibia.plot_segments`).
         :return: The ``Plotter`` the segments were drawn into.
@@ -756,7 +664,7 @@ class Femur:
         created = plotter is None
         if plotter is None:
             plotter = pv.Plotter()
-        self._ensure_subregions(tibia)
+        self._ensure_subregions()
 
         drawn = False
         for attr, label, color, _ in FEMUR_SUBREGIONS:
@@ -764,6 +672,62 @@ class Femur:
 
         if drawn:
             plotter.add_legend(bcolor='white')
+        if show or (show is None and created):
+            plotter.show()
+        return plotter
+
+    def plot_regions(self, plotter: pv.Plotter = None, show: bool = None,
+                     show_bone: bool = True, show_frames: bool = True) -> pv.Plotter:
+        """
+        Render the subdivided femoral subchondral bone area (tAB), one colour per region.
+
+        This shows the subdivision itself (on the bone surface, triangles cut exactly),
+        unlike :meth:`plot_segments`, which shows the cartilage voxels it was transferred to.
+        It is the view of the paper's Fig. 6 (the condyles seen from inferior).
+
+        :param plotter: An existing PyVista ``Plotter`` to draw into (new one if ``None``).
+        :param show: Whether to call ``plotter.show()`` (see :meth:`Tibia.plot_segments`).
+        :param show_bone: Also draw the rest of the femoral bone surface, translucent grey.
+        :param show_frames: Draw the femoral frame's axes at the trochlear notch, the notch
+            point, and the anterior (notch) and posterior (60%) border planes.
+        :return: The ``Plotter`` the regions were drawn into.
+        """
+        created = plotter is None
+        if plotter is None:
+            plotter = pv.Plotter()
+        if self.subdivision is None:
+            self.calculate_landmarks()
+        sub = self.subdivision
+        if show_bone and sub.bone_mesh is not None:
+            plotter.add_mesh(sub.bone_mesh, color='lightgrey', opacity=0.25)
+        codes = np.asarray(sub.mesh.cell_data['region'])
+        colors = {attr: color for attr, _, color, _ in FEMUR_SUBREGIONS}
+        names = sub.anatomical_names
+        for code, key in enumerate(FEMUR_REGION_KEYS):
+            if not (codes == code).any():
+                continue
+            label = key + (f' ({names[key]})' if names else '')
+            part = sub.mesh.extract_cells(np.flatnonzero(codes == code))
+            plotter.add_mesh(part, color=colors[key], label=label)
+        if show_frames:
+            frame = sub.frame
+            size = 2.0 * float(np.linalg.norm(frame.posterior_points['right']
+                                              - frame.posterior_points['left']))
+            for direction, color in ((frame.ap_axis, 'black'), (frame.ml_axis, 'white'),
+                                     (frame.proximal_axis, 'dimgrey')):
+                plotter.add_mesh(pv.Arrow(frame.notch_point, direction, scale=0.4 * size),
+                                 color=color)
+            plotter.add_mesh(pv.Sphere(radius=1.2, center=frame.notch_point), color='black')
+            # The anterior border (through the notch) and each condyle's posterior border.
+            levels = [(frame.notch_ap, 'black')] + [(c.boundary_ap, 'dimgrey')
+                                                    for c in sub.condyles.values()]
+            centre = np.asarray(sub.mesh.points, dtype=float).mean(axis=0)
+            for level, color in levels:
+                origin = centre + (level - centre @ frame.ap_axis) * frame.ap_axis
+                plotter.add_mesh(pv.Plane(center=origin, direction=frame.ap_axis,
+                                          i_size=size, j_size=size),
+                                 color=color, opacity=0.2, style='surface')
+        plotter.add_legend(bcolor='white')
         if show or (show is None and created):
             plotter.show()
         return plotter
@@ -777,8 +741,7 @@ class Femur:
 
         :param thicknesses: The per-subregion thickness dict returned by
             :meth:`calculate_thickness`.
-        :param tibia: A ``Tibia`` for the same knee (needed to derive the subregions
-            unless they have already been extracted).
+        :param tibia: Ignored (the subregions no longer depend on the tibia).
         :param plotter: An existing PyVista ``Plotter`` to draw into (new one if ``None``).
         :param show: Whether to call ``plotter.show()`` (see :meth:`Tibia.plot_segments`).
         :param cmap: A matplotlib colormap name used for the thickness heatmap.
@@ -789,15 +752,15 @@ class Femur:
         created = plotter is None
         if plotter is None:
             plotter = pv.Plotter()
-        self._ensure_subregions(tibia)
+        self._ensure_subregions()
 
         meshes = []
         for attr, label, color, thickness_key in FEMUR_SUBREGIONS:
             tmap = thicknesses.get(thickness_key)
             if not tmap:
                 continue
-            swap_yz = thickness_key in ('left_posterior_zone', 'right_posterior_zone')
-            surf = _thickness_surface(self.image, getattr(self, attr), tmap, swap_yz=swap_yz)
+            surf = _thickness_surface(self.image, getattr(self, attr), tmap,
+                                      depth_axis=self.depth_axis(attr))
             if surf is not None:
                 meshes.append(surf)
 
@@ -807,7 +770,49 @@ class Femur:
         return plotter
 
 
-def scan_qc_flags(image: Image, tibia: Optional['Tibia'] = None) -> str:
+def _depth_axis(image: Image, direction: np.ndarray) -> int:
+    """
+    The axis of ``image.array`` most nearly parallel to a world direction.
+
+    The voxel-column thickness method measures between the two extremes of a subregion along
+    one array axis. Which axis that should be depends on the direction the articular surface
+    faces, which is a property of the anatomy (the femoral frame), not of the image -- a
+    flexed knee turns the femur's anterior-posterior axis into a different image axis.
+
+    :param image: The ``Image`` / ``Segmentation`` whose array axes are meant (either backend;
+        ``array`` is ``(i, j, k)`` for nibabel and ``(k, j, i)`` for SimpleITK).
+    :param direction: A world (RAS, mm) direction.
+    :return: ``0``, ``1`` or ``2``: the index into ``image.array``'s shape.
+    """
+    columns = index_to_world_affine(image)[:3, :3]
+    if image.type != 'nibabel':
+        columns = columns[:, ::-1]
+    unit = columns / np.linalg.norm(columns, axis=0)
+    return int(np.argmax(np.abs(np.asarray(direction, dtype=float) @ unit)))
+
+
+def _zone_surface_points(points: np.ndarray, depth_axis: int = 2):
+    """
+    The two opposing surfaces of one subregion's voxel cloud along a given array axis.
+
+    The voxels are grouped by their two other coordinates and the extremes along
+    ``depth_axis`` taken, so for the default axis 2 (superior-inferior in an LPI image) this
+    is the subregion's superior and inferior surface.
+
+    :param points: ``Nx3`` voxel indices of the subregion (LPI index space).
+    :param depth_axis: The array axis to measure the subregion's thickness along.
+    :return: ``(near, far)``, each an ``Mx3`` array of voxel indices in the original axis
+        order; ``near`` holds the smaller coordinate along ``depth_axis``.
+    """
+    pts = np.asarray(points, dtype=float)
+    order = [a for a in range(3) if a != depth_axis] + [depth_axis]
+    near, far = get_superior_and_inferior_surface_points(pts[:, order])
+    inverse = np.argsort(order)
+    return near[:, inverse], far[:, inverse]
+
+
+def scan_qc_flags(image: Image, tibia: Optional['Tibia'] = None,
+                  femur: Optional['Femur'] = None) -> str:
     """
     Describe the known bad-scan signals of one knee scan as a QC flag string.
 
@@ -821,24 +826,27 @@ def scan_qc_flags(image: Image, tibia: Optional['Tibia'] = None) -> str:
       ``<codes>`` are the achieved axis codes, e.g. ``LSP``. Every knee measurement
       assumes LPI (patient sides, superior-inferior surfaces), so such a scan's
       subregions and patient-side compartments may be mislabelled.
-    * ``tibia_transfer_far:<fraction>`` -- more than ``TRANSFER_MAX_FAR_FRACTION`` of the
-      tibial cartilage voxels lie farther than ``TRANSFER_FAR_MM`` from the subchondral
-      bone area they were assigned to (:attr:`Tibia.transfer_qc`, the same condition that
-      logs the WARNING in :meth:`Tibia.calculate_landmarks`); ``<fraction>`` is that share
+    * ``tibia_transfer_far:<fraction>`` / ``femur_transfer_far:<fraction>`` -- more than
+      ``TRANSFER_MAX_FAR_FRACTION`` of that bone's cartilage voxels lie farther than
+      ``TRANSFER_FAR_MM`` from the subchondral bone area they were assigned to
+      (:attr:`Tibia.transfer_qc` / :attr:`Femur.transfer_qc`, the same condition that logs
+      the WARNING in their ``calculate_landmarks``); ``<fraction>`` is that share
       (0-1, three decimals).
 
     :param image: The loaded (and reoriented) knee ``Segmentation``.
     :param tibia: The scan's ``Tibia`` after its thickness was computed, or ``None`` when
-        the tibia failed or was not computed (the transfer flag is then skipped).
+        the tibia failed or was not computed (its transfer flag is then skipped).
+    :param femur: The scan's ``Femur``, likewise.
     :return: The ``;``-separated flag string (``''`` for a clean scan).
     """
     flags = []
     # orientation_ok is None when no orientation was requested; only a definite False flags.
     if image.orientation_ok is False:
         flags.append(f"non_lpi_orientation:{''.join(image.achieved_axcodes)}")
-    qc = getattr(tibia, 'transfer_qc', None)
-    if qc is not None and qc['far_fraction'] > TRANSFER_MAX_FAR_FRACTION:
-        flags.append(f"tibia_transfer_far:{qc['far_fraction']:.3f}")
+    for name, bone in (('tibia', tibia), ('femur', femur)):
+        qc = getattr(bone, 'transfer_qc', None)
+        if qc is not None and qc['far_fraction'] > TRANSFER_MAX_FAR_FRACTION:
+            flags.append(f"{name}_transfer_far:{qc['far_fraction']:.3f}")
     return ';'.join(flags)
 
 
@@ -874,9 +882,9 @@ def _remove_subregion_fragments(points: np.ndarray, ratio: float = 0.2) -> np.nd
     """
     Drop small disconnected fragments from a subregion's voxel point cloud.
 
-    A subregion is a single anatomical patch, but the ``(x, y)``-based classification can
-    bucket a few edge voxels (e.g. anterior tibial cartilage that crosses the plateau
-    midline) into a subregion where they sit spatially disconnected from its main body.
+    A subregion is a single anatomical patch, but a voxel can be assigned to one it is not
+    attached to -- the nearest subchondral-bone triangle is not always on the patch the voxel
+    belongs to, e.g. across the intercondylar notch.
     This keeps only the 26-connectivity connected components whose voxel count is at least
     ``ratio`` of the largest component's, removing such fragments while retaining a
     genuinely multi-lobed subregion.
@@ -900,117 +908,6 @@ def _remove_subregion_fragments(points: np.ndarray, ratio: float = 0.2) -> np.nd
     sizes[0] = 0
     keep = sizes >= ratio * sizes.max()
     return p[keep[labeled[local]]]
-
-
-def _femoral_condyle_dividing_line(cartilage: np.ndarray, min_size: int = 40) -> Tuple[float, float]:
-    """
-    Fit the anterior-posterior axis that separates the two femoral condyles.
-
-    The femoral cartilage is a horseshoe: the two condyles are separated posteriorly by
-    the intercondylar notch but join anteriorly at the trochlea. For every coronal slice
-    (fixed anterior-posterior index) that splits into exactly two connected components
-    (the two condyles), the left-right centre of the gap between them is recorded. A
-    least-squares line is fitted through these notch centres, giving the dividing axis in
-    voxel-index space as ``x = slope * y + intercept`` where ``x`` is the left-right axis
-    (axis 0) and ``y`` is the anterior-posterior axis (axis 1).
-
-    This is robust because it aggregates evidence over many slices and relies only on the
-    posterior region where the condyles are genuinely separate; it does not depend on a
-    (non-existent) anterior notch. Spurious notch centres (e.g. from a stray anterior
-    two-component slice) are rejected with a median-absolute-deviation band before fitting.
-
-    :param cartilage: A binary 3-D mask of the femoral cartilage in LPI index convention
-        (axis 0 = left-right, axis 1 = anterior-posterior, axis 2 = superior-inferior).
-    :param min_size: Minimum voxel count for a connected component in a slice to count as
-        a condyle (filters small speckle).
-    :return: ``(slope, intercept)`` of the dividing axis ``x = slope * y + intercept``.
-        Falls back to a vertical (``slope = 0``) mid-sagittal axis when no slice separates
-        into two condyles.
-    """
-    centers_y, centers_x = [], []
-    for c in range(cartilage.shape[1]):
-        labeled, n = label(cartilage[:, c, :])
-        if n < 2:
-            continue
-        sizes = np.bincount(labeled.ravel())
-        kept = [lab for lab in range(1, n + 1) if sizes[lab] >= min_size]
-        if len(kept) != 2:
-            continue
-        components = [np.argwhere(labeled == lab) for lab in kept]
-        components.sort(key=lambda comp: comp[:, 0].mean())
-        gap_center = (components[0][:, 0].max() + components[1][:, 0].min()) / 2.0
-        centers_y.append(float(c))
-        centers_x.append(float(gap_center))
-
-    if len(centers_x) == 0:
-        # No coronal slice separates into two condyles; fall back to the mid-sagittal
-        # plane through the cartilage's left-right median.
-        return 0.0, float(np.median(np.argwhere(cartilage)[:, 0]))
-
-    centers_y = np.asarray(centers_y)
-    centers_x = np.asarray(centers_x)
-
-    # Reject outlier notch centres before fitting so a stray slice cannot tilt the axis.
-    median = np.median(centers_x)
-    mad = np.median(np.abs(centers_x - median))
-    if mad > 0:
-        inliers = np.abs(centers_x - median) <= 5.0 * mad
-        if inliers.sum() >= 2:
-            centers_y, centers_x = centers_y[inliers], centers_x[inliers]
-
-    if len(centers_x) < 2:
-        return 0.0, float(centers_x[0])
-
-    slope, intercept = np.polyfit(centers_y, centers_x, 1)
-    return float(slope), float(intercept)
-
-
-def _restrict_to_contact_cluster(points: np.ndarray, reference_si: float,
-                                 max_gap: float = 3.0) -> np.ndarray:
-    """
-    Keep only the superior-inferior cluster of points nearest a reference S-I level.
-
-    The femoral central weight-bearing / posterior zones are selected by an anterior-
-    posterior (and left-right) window. At high knee flexion the curved femoral cartilage
-    folds back on itself, so that window intersects the cartilage at two separate
-    superior-inferior levels: the true weight-bearing surface (in contact with the tibia)
-    and the anterior trochlea, which has rotated into the same A-P range. This helper
-    removes the fold by clustering the candidate points along the S-I axis (axis 2) —
-    splitting wherever there is an S-I gap larger than ``max_gap`` voxels — and keeping only
-    the cluster closest to the tibial contact level. At low flexion the candidates form a
-    single cluster and are returned unchanged.
-
-    ``max_gap`` is an *absolute* voxel gap (the caller scales it by the S-I voxel spacing):
-    the two surfaces are separated by an anatomical clearance of a few voxels, whereas a
-    genuine single contact band is S-I-contiguous. A span-relative threshold would fail
-    here, because a *distant* fold inflates the span and pushes the threshold above the
-    real (small) valley gap between the fold and the contact surface. This assumes the true
-    zone is itself S-I-contiguous within ``max_gap``; a genuine internal S-I gap larger than
-    that would trim the zone to the reference-side sub-cluster.
-
-    :param points: An ``Nx3`` array of candidate voxels (LPI index space).
-    :param reference_si: The tibial contact S-I level (axis 2) the true zone sits against,
-        e.g. the most-superior tibial central-zone voxel, or the CWBZ's mean S-I level.
-    :param max_gap: The maximum S-I gap (in voxels) within one cluster; larger gaps split.
-    :return: The subset of ``points`` belonging to the S-I cluster nearest ``reference_si``.
-    """
-    if len(points) == 0:
-        return points
-    si_sorted = np.sort(points[:, 2])
-
-    tolerance = max(2.0, max_gap)
-    labels = np.zeros(len(si_sorted), dtype=int)
-    for boundary in np.where(np.diff(si_sorted) > tolerance)[0]:
-        labels[boundary + 1:] += 1
-
-    best_label, best_distance = 0, np.inf
-    for label_id in np.unique(labels):
-        distance = np.min(np.abs(si_sorted[labels == label_id] - reference_si))
-        if distance < best_distance:
-            best_distance, best_label = distance, label_id
-
-    kept = si_sorted[labels == best_label]
-    return points[(points[:, 2] >= kept.min()) & (points[:, 2] <= kept.max())]
 
 
 def _flatten_thickness(thicknesses: dict) -> dict:
@@ -1457,7 +1354,7 @@ def _add_voxel_glyphs(plotter: pv.Plotter, image: Image, points: np.ndarray, col
 
 
 def _thickness_surface(image: Image, points: np.ndarray, thickness_map: dict,
-                       swap_yz: bool = False) -> pv.PolyData:
+                       depth_axis: int = 2) -> pv.PolyData:
     """
     Reconstruct a subregion's articular (superior) surface and attach thickness values.
 
@@ -1469,22 +1366,14 @@ def _thickness_surface(image: Image, points: np.ndarray, thickness_map: dict,
     :param image: The ``Image`` providing the index->physical transform.
     :param points: An ``Nx3`` array of the subregion's voxel indices.
     :param thickness_map: ``{(x, y): thickness_mm}`` for this subregion.
-    :param swap_yz: If ``True``, swap the y/z axes before extracting the superior
-        surface (matching the rotated extraction used for the femoral posterior zones,
-        whose articular surface faces posteriorly rather than superiorly).
+    :param depth_axis: The array axis the thickness was measured along (see
+        :meth:`Femur.depth_axis`); the surface is the subregion's extreme along it.
     :return: A triangulated ``PolyData`` surface carrying a point-scalar ``'thickness'``,
         or ``None`` if fewer than three points could be coloured.
     """
     if points is None or len(points) == 0:
         return None
-    pts = np.asarray(points, dtype=float)
-    if swap_yz:
-        pts = pts.copy()
-        pts[:, [1, 2]] = pts[:, [2, 1]]
-    superior, _ = get_superior_and_inferior_surface_points(pts)
-    if swap_yz:
-        superior = superior.copy()
-        superior[:, [1, 2]] = superior[:, [2, 1]]
+    superior, _ = _zone_surface_points(points, depth_axis=depth_axis)
 
     # The (x, y) keys rely on integer-valued voxel indices: mesh_method stores keys as
     # float32 (from PyVista mesh points) while this reconstruction is float64, so the
