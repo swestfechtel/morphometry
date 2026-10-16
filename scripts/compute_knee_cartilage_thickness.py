@@ -24,12 +24,25 @@ Examples
 
     # single scan
     python scripts/compute_knee_cartilage_thickness.py -i knee_seg.nii.gz \\
-        --femur-label 3 --tibia-label 4 --method knn \\
+        --femur-label 3 --tibia-label 4 \\
         -o thickness.csv --visualize both --screenshot ./out --html ./out
 
     # batch: a whole directory tree, combined outputs + all visualisations in one dir
     python scripts/compute_knee_cartilage_thickness.py -i /data/knees \\
         -o results/ --dump-json results/ --screenshot results/viz --html results/viz
+
+Thickness is the area-weighted surface distance of Wirth & Eckstein 2008 (section II-C),
+measured between each bone's subchondral bone area and its articular cartilage surface in both
+directions (:mod:`morphometry.cartilage.thickness`). The per-subregion CSV carries both the
+plain statistics of the per-position map (``mean_mm`` ... ``n_points``, where a "point" is now
+an in-plane grid cell of the knee's shared frame, not a voxel column) and the paper's
+area-weighted parameters appended after them, in two families that must not be mixed: the
+bare names are ThC.**cAB** (``aMe_mm`` -- the number to quote -- with its own ``aSD_mm``,
+``aMax_mm``, ``aMav_mm``, ``aMin_mm``, ``aMiv_mm``) and the ``tab_`` ones ThC.**tAB**, the same
+with denuded bone counted as 0.0 mm (``tab_aMe_mm``, ``tab_aSD_mm``, ``tab_aMin_mm``,
+``tab_aMiv_mm``), plus the areas the subregion covers. **Rows from before this change
+(the voxel-column ``mesh`` / ``knn`` thickness) must not be pooled with these.** There is no
+``--method`` any more; passing one is an error rather than a silent change of meaning.
 
 The segmentation is expected to label the femoral and tibial cartilage with distinct
 integer labels (defaults 3 and 4, matching the Duesseldorf/T1rho convention), and both bones
@@ -78,10 +91,26 @@ from morphometry.cartilage.femur_regions import anatomical_femur_names
 # 'anatomical_subregion' is the paper's medial/lateral name of a tibial subregion (e.g. cMT),
 # filled only when the knee's laterality is known (--laterality-table); 'subregion' keeps the
 # patient-side key (clt = central patient-LEFT plate) in every row.
-# 'qc_flags' is the scan's QC flag string (see scan_qc_flags), repeated on each of its rows;
-# appended last so the earlier columns keep their positions.
+# 'qc_flags' is the scan's QC flag string (see scan_qc_flags), repeated on each of its rows.
+# The paper's area-weighted statistics are appended after 'qc_flags' so every earlier column
+# keeps its position; STATISTIC_COLUMNS maps a CSV column to its key in
+# ThicknessMaps.statistics.
+# There are two families and they must not be mixed (see thickness.STATISTIC_KEYS): the bare
+# names are ThC.**cAB** -- the cartilage that is there -- and the tab_ ones ThC.**tAB**, the
+# same with denuded bone counted as 0.0 mm. So aMe_mm +- aSD_mm is self-consistent, and
+# tab_aMin_mm is exactly 0 for any subregion with any denuded bone while aMin_mm is the
+# thinnest cartilage actually measured. tab_aMax / tab_aMav are not in the CSV: zeros cannot
+# be the maximum and the top 1% is unaffected unless a subregion is almost wholly denuded;
+# both are in the JSON dump's `statistics` block.
+STATISTIC_COLUMNS = [('aMe_mm', 'aMe'), ('aSD_mm', 'aSD'), ('aMax_mm', 'aMax'),
+                     ('aMav_mm', 'aMav'), ('aMin_mm', 'aMin'), ('aMiv_mm', 'aMiv'),
+                     ('tab_aMe_mm', 'tab_aMe'), ('tab_aSD_mm', 'tab_aSD'),
+                     ('tab_aMin_mm', 'tab_aMin'), ('tab_aMiv_mm', 'tab_aMiv'),
+                     ('tab_area_mm2', 'tab_area_mm2'),
+                     ('cab_area_mm2', 'cab_area_mm2'),
+                     ('denuded_fraction', 'denuded_fraction')]
 SUMMARY_COLUMNS = ['subject', 'bone', 'subregion', 'mean_mm', 'std_mm', 'min_mm', 'max_mm', 'n_points',
-                   'anatomical_subregion', 'qc_flags']
+                   'anatomical_subregion', 'qc_flags'] + [c for c, _ in STATISTIC_COLUMNS]
 
 # Default filenames used when an output path is given as a directory.
 DEFAULT_CSV_NAME = 'summary.csv'
@@ -107,20 +136,21 @@ def load_segmentation(input_path: str, remove_outliers: bool = False) -> Segment
 
 
 def compute_thickness(seg: Segmentation, femur_label: int, tibia_label: int,
-                      method: str, tibia_bone_label: int = 2, femur_bone_label: int = 1,
+                      tibia_bone_label: int = 2, femur_bone_label: int = 1,
                       laterality: Optional[str] = None) -> Tuple[Optional[Tibia], Optional[Femur], dict, dict]:
     """
     Compute tibial and femoral cartilage thickness for a segmentation.
 
-    The two bones are computed independently -- each bone's subregions are derived from its
-    own subchondral surface -- and each is wrapped so a failure on one (e.g. a mask that
-    cannot be split into two plates) does not abort the other, mirroring the per-measurement
-    tolerance used elsewhere in the codebase.
+    Each bone's subregions are derived from its own subchondral surface, and each bone is
+    wrapped so a failure on one (e.g. a mask that cannot be split into two plates) does not
+    abort the other, mirroring the per-measurement tolerance used elsewhere in the codebase.
+    The femur is given the ``Tibia`` so that both bones' maps are keyed in the knee's shared
+    in-plane frame (the tibial plateau plane); if the tibia failed, the femur falls back to its
+    own frame and its maps cannot be overlapped with a tibial one.
 
     :param seg: The LPI-oriented knee cartilage ``Segmentation``.
     :param femur_label: The label of the femoral cartilage.
     :param tibia_label: The label of the tibial cartilage.
-    :param method: Thickness method, ``'knn'`` or ``'mesh'``.
     :param tibia_bone_label: The label of the tibial bone (the tibial subregions are
         defined on its subchondral surface).
     :param femur_bone_label: The label of the femoral bone (the femoral subregions and the
@@ -129,7 +159,7 @@ def compute_thickness(seg: Segmentation, femur_label: int, tibia_label: int,
         the medial/lateral region names, the subdivisions themselves do not depend on it).
     :return: ``(tibia, femur, tibia_results, femur_results)``. ``tibia`` / ``femur`` are
         the computed objects (``None`` if that bone failed), and the results are the
-        per-subregion thickness dicts (empty ``{}`` on failure).
+        ``ThicknessMaps`` of each bone (empty ``{}`` on failure).
     """
     tibia: Optional[Tibia] = None
     femur: Optional[Femur] = None
@@ -139,7 +169,7 @@ def compute_thickness(seg: Segmentation, femur_label: int, tibia_label: int,
     try:
         tibia = Tibia(seg, cartilage_label=tibia_label, bone_label=tibia_bone_label,
                       laterality=laterality)
-        tibia_results = tibia.calculate_thickness(method)
+        tibia_results = tibia.calculate_thickness()
     except (RuntimeError, AssertionError, ValueError) as exc:
         print(f'[warning] tibial cartilage thickness failed: {exc}', file=sys.stderr)
         tibia = None
@@ -147,7 +177,7 @@ def compute_thickness(seg: Segmentation, femur_label: int, tibia_label: int,
     try:
         femur = Femur(seg, cartilage_label=femur_label, bone_label=femur_bone_label,
                       laterality=laterality)
-        femur_results = femur.calculate_thickness(method=method)
+        femur_results = femur.calculate_thickness(tibia)
     except (RuntimeError, AssertionError, ValueError) as exc:
         print(f'[warning] femoral cartilage thickness failed: {exc}', file=sys.stderr)
         femur = None
@@ -159,7 +189,7 @@ def _finite_values(thickness_map: dict) -> np.ndarray:
     """
     Extract the finite (non-``NaN``, non-``None``) thickness values from a per-point map.
 
-    :param thickness_map: ``{(x, y): thickness}`` for one subregion.
+    :param thickness_map: ``{(u, v): thickness}`` for one subregion.
     :return: A 1-D array of finite thickness values (possibly empty).
     """
     return np.array(
@@ -168,20 +198,42 @@ def _finite_values(thickness_map: dict) -> np.ndarray:
     )
 
 
+def _statistic_cells(results: dict, subregion: str) -> list:
+    """
+    The paper's area-weighted statistics of one subregion, in :data:`STATISTIC_COLUMNS` order.
+
+    :param results: One bone's thickness result -- a
+        :class:`~morphometry.cartilage.thickness.ThicknessMaps` carrying ``statistics``, or a
+        plain dict (then every statistic is ``NaN``).
+    :param subregion: The subregion key.
+    :return: One value per entry of :data:`STATISTIC_COLUMNS`.
+    """
+    statistics = getattr(results, 'statistics', {}).get(subregion, {})
+    return [statistics.get(key, np.nan) for _column, key in STATISTIC_COLUMNS]
+
+
 def summarize(results_by_bone: Dict[str, dict], subject: str,
               laterality: Optional[str] = None, qc_flags: str = '') -> List[list]:
     """
     Build per-subregion summary statistics for one subject's bones.
 
-    :param results_by_bone: ``{bone_name: {subregion: {(x, y): thickness}}}``.
+    Each row carries two kinds of number: the plain statistics of the per-position thickness
+    map (``mean_mm`` ... ``n_points``, one "point" per in-plane grid cell of the knee's shared
+    frame, unweighted), and -- appended after ``qc_flags`` -- the paper's area-weighted
+    parameters taken from :attr:`ThicknessMaps.statistics` (``aMe_mm`` is ThC.cAB.aMe, the
+    number to quote).
+
+    :param results_by_bone: ``{bone_name: ThicknessMaps}`` (a plain
+        ``{subregion: {(u, v): thickness}}`` dict also works, with NaN in the appended
+        columns).
     :param subject: Identifier of the scan the results belong to (first CSV column).
     :param laterality: ``'left'`` / ``'right'`` knee or ``None``; with a value, each row
         gets the paper's medial/lateral name in the ``anatomical_subregion`` column.
     :param qc_flags: The scan's QC flag string (:func:`scan_qc_flags`), written into the
         ``qc_flags`` column of every row of this subject (``''`` = no flags).
-    :return: A list of rows ``[subject, bone, subregion, mean, std, min, max, n_points,
-        anatomical_subregion, qc_flags]``, with ``NaN`` statistics for subregions that have
-        no finite values and an empty ``anatomical_subregion`` where it is unknown.
+    :return: A list of rows matching :data:`SUMMARY_COLUMNS`, with ``NaN`` statistics for
+        subregions that have no finite values and an empty ``anatomical_subregion`` where it
+        is unknown.
     """
     names = {'tibia': anatomical_tibia_names(laterality) or {},
              'femur': anatomical_femur_names(laterality) or {}}
@@ -191,15 +243,14 @@ def summarize(results_by_bone: Dict[str, dict], subject: str,
             anatomical = names.get(bone, {}).get(subregion, '')
             values = _finite_values(thickness_map)
             if len(values) == 0:
-                rows.append([subject, bone, subregion, np.nan, np.nan, np.nan, np.nan, 0, anatomical,
-                             qc_flags])
+                head = [subject, bone, subregion, np.nan, np.nan, np.nan, np.nan, 0, anatomical,
+                        qc_flags]
             else:
-                rows.append([
-                    subject, bone, subregion,
-                    float(values.mean()), float(values.std()),
-                    float(values.min()), float(values.max()), int(len(values)), anatomical,
-                    qc_flags,
-                ])
+                head = [subject, bone, subregion,
+                        float(values.mean()), float(values.std()),
+                        float(values.min()), float(values.max()), int(len(values)), anatomical,
+                        qc_flags]
+            rows.append(head + _statistic_cells(results, subregion))
     return rows
 
 
@@ -209,10 +260,11 @@ def failed_row(subject: str, qc_flags: str = '') -> list:
 
     :param subject: Identifier of the scan.
     :param qc_flags: The scan's QC flag string (``''`` = no flags).
-    :return: ``[subject, '', '', NaN, NaN, NaN, NaN, 0, '', qc_flags]`` (empty ``bone`` and
-        ``subregion`` mark the failure), matching :data:`SUMMARY_COLUMNS`.
+    :return: A row with empty ``bone`` / ``subregion`` (which mark the failure) and ``NaN``
+        statistics, matching :data:`SUMMARY_COLUMNS`.
     """
-    return [subject, '', '', np.nan, np.nan, np.nan, np.nan, 0, '', qc_flags]
+    return ([subject, '', '', np.nan, np.nan, np.nan, np.nan, 0, '', qc_flags]
+            + [np.nan] * len(STATISTIC_COLUMNS))
 
 
 def load_laterality_table(path: Optional[str]) -> Dict[str, str]:
@@ -301,38 +353,78 @@ def _results_to_serializable(results: dict) -> dict:
     """
     Convert a per-subregion thickness dict into a JSON-serialisable structure.
 
-    Tuple ``(x, y)`` keys become ``[x, y, thickness]`` triples (thickness ``null`` for
-    ``NaN``), avoiding non-string dict keys while preserving the point coordinates.
+    Tuple ``(u, v)`` keys become ``[u, v, thickness]`` triples (thickness ``null`` for
+    ``NaN``), avoiding non-string dict keys while preserving the positions. ``(u, v)`` is an
+    in-plane grid cell of the knee's shared frame, which is also written out (see
+    :func:`_frame_to_serializable`) so the positions can be mapped back to world millimetres.
 
-    :param results: ``{subregion: {(x, y): thickness}}``.
-    :return: ``{subregion: [[x, y, thickness_or_null], ...]}``.
+    :param results: ``{subregion: {(u, v): thickness}}``.
+    :return: ``{subregion: [[u, v, thickness_or_null], ...]}``.
     """
     serialisable: dict = {}
     for subregion, thickness_map in results.items():
         points = []
-        for (x, y), value in thickness_map.items():
+        for (u, v), value in thickness_map.items():
             if value is None or math.isnan(float(value)):
                 thickness = None
             else:
                 thickness = float(value)
-            points.append([float(x), float(y), thickness])
+            points.append([float(u), float(v), thickness])
         serialisable[subregion] = points
     return serialisable
 
 
+def _frame_to_serializable(results: dict) -> Optional[dict]:
+    """
+    The in-plane frame a bone's thickness maps are keyed in, as JSON.
+
+    :param results: One bone's thickness result.
+    :return: ``{'source', 'grid_mm', 'origin', 'axes'}`` in world mm (RAS), or ``None`` for a
+        result that carries no frame (a failed bone).
+    """
+    frame = getattr(results, 'frame', None)
+    if frame is None:
+        return None
+    return {'source': frame.source, 'grid_mm': float(frame.grid_mm),
+            'origin': [float(c) for c in frame.origin],
+            'axes': [[float(c) for c in row] for row in frame.axes]}
+
+
+def _statistics_to_serializable(results: dict) -> dict:
+    """
+    One bone's per-subregion area-weighted statistics as plain JSON floats.
+
+    :param results: One bone's thickness result (a ``ThicknessMaps`` or a plain dict).
+    :return: ``{subregion: {statistic: value_or_null}}`` (empty without statistics).
+    """
+    out: dict = {}
+    for subregion, statistics in getattr(results, 'statistics', {}).items():
+        out[subregion] = {key: (None if value is None or (isinstance(value, float)
+                                                          and math.isnan(value))
+                                else (float(value) if not isinstance(value, int) else value))
+                          for key, value in statistics.items()}
+    return out
+
+
 def subject_payload(tibia_results: dict, femur_results: dict, qc_flags: str = '') -> dict:
     """
-    Build the JSON-serialisable payload of full per-point thickness maps for one subject.
+    Build the JSON-serialisable payload of one subject's thickness maps and statistics.
 
-    :param tibia_results: The tibial per-subregion thickness dict.
-    :param femur_results: The femoral per-subregion thickness dict.
+    :param tibia_results: The tibial thickness result.
+    :param femur_results: The femoral thickness result.
     :param qc_flags: The scan's QC flag string (:func:`scan_qc_flags`, ``''`` = no flags).
-    :return: ``{'tibia': ..., 'femur': ..., 'qc_flags': ...}`` with serialisable point lists.
+    :return: ``{'tibia', 'femur', 'qc_flags', 'statistics', 'frames'}`` -- the per-position
+        maps per bone, the scan's QC flags, the paper's per-subregion statistics per bone and
+        the in-plane frame the positions are keyed in per bone.
     """
     return {
         'tibia': _results_to_serializable(tibia_results),
         'femur': _results_to_serializable(femur_results),
         'qc_flags': qc_flags,
+        'statistics': {'tibia': _statistics_to_serializable(tibia_results),
+                       'femur': _statistics_to_serializable(femur_results)},
+        'frames': {'tibia': _frame_to_serializable(tibia_results),
+                   'femur': _frame_to_serializable(femur_results)},
     }
 
 
@@ -518,7 +610,7 @@ def process_one(path: str, subject: str, args: argparse.Namespace,
 
     :param path: Path to the segmentation NIfTI.
     :param subject: The subject id for this scan.
-    :param args: Parsed command-line arguments (labels, method, visualise mode, ...).
+    :param args: Parsed command-line arguments (labels, visualise mode, ...).
     :param seg: The scan already loaded by :func:`load_segmentation` (``main`` loads it
         first so a scan that fails later still reports its orientation flag); ``None``
         loads ``path`` here.
@@ -528,7 +620,7 @@ def process_one(path: str, subject: str, args: argparse.Namespace,
         seg = load_segmentation(path, remove_outliers=args.remove_outliers)
     laterality = args.laterality_by_subject.get(subject)
     tibia, femur, tibia_results, femur_results = compute_thickness(
-        seg, femur_label=args.femur_label, tibia_label=args.tibia_label, method=args.method,
+        seg, femur_label=args.femur_label, tibia_label=args.tibia_label,
         tibia_bone_label=args.tibia_bone_label, femur_bone_label=args.femur_bone_label,
         laterality=laterality,
     )
@@ -627,8 +719,9 @@ if __name__ == '__main__':
                              'Adds the medial/lateral tibial subregion names (cMT ... pLT) in '
                              'the anatomical_subregion CSV column; subregion keeps the '
                              'patient-side key.')
-    parser.add_argument('--method', choices=['knn', 'mesh'], default='knn',
-                        help='Thickness computation method (default: knn).')
+    # Removed, but still accepted so that an old command line fails with an explanation
+    # instead of argparse's bare 'unrecognized arguments'.
+    parser.add_argument('--method', default=None, help=argparse.SUPPRESS)
     parser.add_argument('-o', '--output', default=None,
                         help='Optional path to write the per-subregion summary CSV.')
     parser.add_argument('--dump-json', default=None,
@@ -645,4 +738,12 @@ if __name__ == '__main__':
                              '<subject>_knee_<view>.html) into this directory.')
     parser.add_argument('--remove-outliers', action='store_true',
                         help='Apply Segmentation.remove_outliers() after loading.')
-    main(parser.parse_args())
+    parsed = parser.parse_args()
+    if parsed.method is not None:
+        parser.error(
+            "--method is gone: cartilage thickness is now the area-weighted surface distance "
+            "between the subchondral bone area and the articular surface (Wirth & Eckstein "
+            "2008, section II-C), the only definition there is. Drop the flag. The old "
+            "voxel-column methods ('mesh', 'knn') are only reachable from git history and "
+            "their numbers must not be pooled with the new ones.")
+    main(parsed)

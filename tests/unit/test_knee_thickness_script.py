@@ -40,15 +40,53 @@ def test_summarize_adds_anatomical_names_only_with_laterality():
 
 # --- QC flags ------------------------------------------------------------------------
 
-def test_qc_flags_column_is_last_and_on_every_row():
-    """qc_flags is appended after the existing columns and repeated on each subject row."""
-    assert mod.SUMMARY_COLUMNS[:9] == ['subject', 'bone', 'subregion', 'mean_mm', 'std_mm',
-                                       'min_mm', 'max_mm', 'n_points', 'anatomical_subregion']
-    assert mod.SUMMARY_COLUMNS[-1] == 'qc_flags'
+def test_column_order_is_preserved_and_statistics_appended():
+    """The original columns keep their positions; the paper's statistics follow them."""
+    assert mod.SUMMARY_COLUMNS[:10] == ['subject', 'bone', 'subregion', 'mean_mm', 'std_mm',
+                                        'min_mm', 'max_mm', 'n_points', 'anatomical_subregion',
+                                        'qc_flags']
+    assert mod.SUMMARY_COLUMNS[10:16] == ['aMe_mm', 'aSD_mm', 'aMax_mm', 'aMav_mm',
+                                          'aMin_mm', 'aMiv_mm']
+    # The tAB family is kept separate from the cAB one, never interleaved.
+    assert {'tab_aMe_mm', 'tab_aSD_mm', 'tab_aMin_mm', 'tab_aMiv_mm'} <= set(mod.SUMMARY_COLUMNS)
+
+
+def test_qc_flags_on_every_row():
+    """qc_flags is repeated on each of a subject's rows, including the NaN ones."""
+    flag_col = mod.SUMMARY_COLUMNS.index('qc_flags')
     results = {'tibia': {'clt': {(0.0, 0.0): 1.0}, 'crt': {}}, 'femur': {'iclf': {(0.0, 0.0): 3.0}}}
     rows = mod.summarize(results, 'K7', qc_flags='non_lpi_orientation:LSP')
-    assert [r[-1] for r in rows] == ['non_lpi_orientation:LSP'] * 3   # incl. the NaN row
-    assert [r[-1] for r in mod.summarize(results, 'K1')] == ['', '', '']
+    assert [r[flag_col] for r in rows] == ['non_lpi_orientation:LSP'] * 3   # incl. the NaN row
+    assert [r[flag_col] for r in mod.summarize(results, 'K1')] == ['', '', '']
+
+
+def test_summarize_carries_the_area_weighted_statistics():
+    """The appended columns come from ThicknessMaps.statistics; a plain dict gives NaN."""
+    import numpy as np
+    from morphometry.cartilage.thickness import KneeFrame, ThicknessMaps
+
+    frame = KneeFrame(origin=np.zeros(3), axes=np.eye(3), grid_mm=0.5)
+    maps = ThicknessMaps({'clt': {(0, 0): 1.0, (1, 0): 3.0}}, frame=frame, bone='tibia',
+                         statistics={'clt': {'aMe': 2.25, 'tab_aMe': 2.0, 'aMax': 3.5,
+                                             'aMav': 3.4, 'aSD': 0.5, 'aMin': 0.75,
+                                             'aMiv': 0.8, 'tab_aSD': 0.9,
+                                             'tab_aMin': 0.0, 'tab_aMiv': 0.1,
+                                             'tab_area_mm2': 160.0,
+                                             'cab_area_mm2': 142.0,
+                                             'denuded_fraction': 0.1125}})
+    row = mod.summarize({'tibia': maps}, 'K1')[0]
+    assert row[mod.SUMMARY_COLUMNS.index('mean_mm')] == pytest.approx(2.0)   # the plain map mean
+    assert row[mod.SUMMARY_COLUMNS.index('aMe_mm')] == pytest.approx(2.25)
+    assert row[mod.SUMMARY_COLUMNS.index('tab_aMe_mm')] == pytest.approx(2.0)
+    assert row[mod.SUMMARY_COLUMNS.index('aMiv_mm')] == pytest.approx(0.8)
+    # cAB and tAB minima are different numbers and go in different columns.
+    assert row[mod.SUMMARY_COLUMNS.index('aMin_mm')] == pytest.approx(0.75)
+    assert row[mod.SUMMARY_COLUMNS.index('tab_aMin_mm')] == pytest.approx(0.0)
+    assert row[mod.SUMMARY_COLUMNS.index('denuded_fraction')] == pytest.approx(0.1125)
+    # A plain dict (no statistics) leaves the appended columns NaN but keeps the row shape.
+    plain = mod.summarize({'tibia': {'clt': {(0, 0): 1.0}}}, 'K1')[0]
+    assert len(plain) == len(mod.SUMMARY_COLUMNS)
+    assert np.isnan(plain[mod.SUMMARY_COLUMNS.index('aMe_mm')])
 
 
 def test_process_one_writes_qc_flags_to_csv_and_json(monkeypatch, tmp_path):
@@ -78,7 +116,7 @@ def test_process_one_writes_qc_flags_to_csv_and_json(monkeypatch, tmp_path):
         (tmp_path / f'{name}.nii.gz').write_bytes(b'')
     args = SimpleNamespace(input=[str(tmp_path)], laterality_table=None, femur_label=3,
                            tibia_label=4, tibia_bone_label=2, femur_bone_label=1,
-                           method='knn', remove_outliers=False,
+                           remove_outliers=False,
                            visualize='none', screenshot=None, html=None,
                            output=str(tmp_path / 'out.csv'), dump_json=str(tmp_path / 'out.json'))
     mod.main(args)
@@ -94,7 +132,8 @@ def test_process_one_writes_qc_flags_to_csv_and_json(monkeypatch, tmp_path):
     payload = json.loads((tmp_path / 'out.json').read_text())
     assert payload['K7_90_belastet']['qc_flags'] == 'non_lpi_orientation:LSP;tibia_transfer_far:0.200'
     assert payload['K8_90_unbelastet']['qc_flags'] == ''
-    assert set(payload['K8_90_unbelastet']) == {'tibia', 'femur', 'qc_flags'}
+    assert set(payload['K8_90_unbelastet']) == {'tibia', 'femur', 'qc_flags', 'statistics',
+                                                'frames'}
 
 
 def test_scan_that_raises_keeps_placeholder_row(monkeypatch, tmp_path):
@@ -119,7 +158,7 @@ def test_scan_that_raises_keeps_placeholder_row(monkeypatch, tmp_path):
         (tmp_path / f'{name}.nii.gz').write_bytes(b'')
     args = SimpleNamespace(input=[str(tmp_path)], laterality_table=None, femur_label=3,
                            tibia_label=4, tibia_bone_label=2, femur_bone_label=1,
-                           method='knn', remove_outliers=False,
+                           remove_outliers=False,
                            visualize='none', screenshot=None, html=None,
                            output=str(tmp_path / 'out.csv'), dump_json=None)
     mod.main(args)

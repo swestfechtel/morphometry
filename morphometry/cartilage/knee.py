@@ -1,16 +1,14 @@
 import itertools
 import logging
+import warnings
 
-import pandas as pd
 import pyvista as pv
 import numpy as np
 from typing import Optional, Tuple
-from scipy.spatial import KDTree
-from scipy.ndimage import label, generic_filter
+from scipy.ndimage import distance_transform_edt, generic_filter, label, minimum_filter
 from morphometry.image_io import Image
 from morphometry.cartilage.surface import (
-    array_indices_to_world, index_to_world_affine, transfer_qc, TRANSFER_FAR_MM,
-    TRANSFER_MAX_FAR_FRACTION,
+    array_indices_to_world, transfer_qc, TRANSFER_FAR_MM, TRANSFER_MAX_FAR_FRACTION,
 )
 from morphometry.cartilage.tibia_regions import (
     subdivide_tibia, anatomical_tibia_names, tibia_display_label, TIBIA_REGION_KEYS,
@@ -18,8 +16,45 @@ from morphometry.cartilage.tibia_regions import (
 from morphometry.cartilage.femur_regions import (
     subdivide_femur, anatomical_femur_names, FEMUR_REGION_KEYS, ZONE_THICKNESS_KEYS,
 )
+from morphometry.cartilage.thickness import (
+    DEFAULT_GRID_MM, KneeFrame, ThicknessMaps, knee_frame_from_femur, knee_frame_from_tibia,
+    measure_thickness, thickness_frame,
+)
 
 logger = logging.getLogger(__name__)
+
+# The old voxel-column thickness ('mesh' = normal ray cast, 'knn' = one-directional nearest
+# neighbour) is gone: the area-weighted surface distances of Wirth & Eckstein are now the only
+# definition (docs/wirth_eckstein_2008_plan.md step 4), so there is nothing for a 'method'
+# argument to select. The parameter is kept, rejecting every value, so that an old call site
+# fails loudly instead of silently meaning something else.
+# How far a thinnest-point candidate must be from each bone's own cartilage-map boundary --
+# **off by default**, and deliberately so. The rim artefact this exists for had a specific
+# cause, now fixed: the refinement step searched the raw map over the whole overlap, escaping
+# the full-window restriction the neighbourhood-centre search obeys, and so handed back a rim
+# cell from inside the disc. Measured over the 93 clean dfg_knees, the femoral thickness at the
+# returned point went from a median 0.62 mm (67% below 1 mm; tibial 0.71 mm, 79%) to 1.51 mm
+# (11%) when the refinement was made to obey the same restriction.
+#
+# A margin can be stacked on top for the residual, but the data cannot choose its value: every
+# indicator improves monotonically with it, because eroding the search region simply drives the
+# answer towards the middle of the contact. Over the cohort, raising it to 0 / 2 / 3 mm takes
+# the share of results with a femoral thickness below 1 mm from 14.0 to 11.1 to 5.7%, and the
+# share whose arc position sits in the posterior tenth of the condyle from 15.4 to 12.9 to
+# 10.0% -- with no knee anywhere in those curves. Worse, for the flexion analysis the erosion
+# pushes the answer away from both ends of the condyle, i.e. towards the null, so a value
+# chosen to make the artefact indicators look good would manufacture its own result. That is
+# the user's call, not a library default. Note also that anything up to 1.5 mm is a no-op at
+# the default 3 mm neighbourhood and 0.5 mm grid: the full-window rule already excludes three
+# cells of boundary.
+DEFAULT_EDGE_MARGIN_MM = 0.0
+
+_METHOD_REMOVED = (
+    "the 'method' argument is gone: cartilage thickness is now the area-weighted surface "
+    "distance between the subchondral bone area and the articular surface (Wirth & Eckstein "
+    "2008, section II-C), the only definition there is. Drop the argument. The old voxel-column "
+    "methods ('mesh', 'knn') are only reachable from git history, and their numbers must not be "
+    "pooled with the new ones.")
 
 # Display label per tibial region code ('cLT', ..., 'pRT'; patient side).
 _TIBIA_DISPLAY_LABELS = tuple(tibia_display_label(key) for key in TIBIA_REGION_KEYS)
@@ -67,7 +102,6 @@ class Tibia:
         self.point_labels = None
         # Distance QC of the region transfer (see calculate_landmarks), None until then.
         self.transfer_qc = None
-        self.superior_surface, self.inferior_surface = None, None
         self.clt, self.ilt, self.elt, self.alt, self.plt = None, None, None, None, None
         self.crt, self.irt, self.prt, self.ert, self.art = None, None, None, None, None
 
@@ -84,14 +118,16 @@ class Tibia:
 
     def get_surface_points(self):
         """
-        Get the points of the superior and inferior surfaces of the tibia.
+        Build the tibial cartilage voxel point cloud (:attr:`point_cloud`).
+
+        The cleaned cartilage mask's voxel indices; the subregion labels are transferred onto
+        these points (:meth:`calculate_landmarks`) and they are what :meth:`plot_segments`
+        draws. The thickness itself is measured on the bone and cartilage *surfaces*, not on
+        these voxels (:mod:`morphometry.cartilage.thickness`).
         """
-        image_array = self.image.array
-        cartilage = np.where(image_array == self.cartilage_label, 1, 0)
+        cartilage = np.where(self.image.array == self.cartilage_label, 1, 0)
         cartilage = _remove_mask_outliers(cartilage, self.outlier_ratio)
-        cartilage = np.argwhere(cartilage)
-        self.point_cloud = cartilage.astype(float)
-        self.superior_surface, self.inferior_surface = get_superior_and_inferior_surface_points(cartilage)
+        self.point_cloud = np.argwhere(cartilage).astype(float)
 
     def calculate_landmarks(self):
         """
@@ -159,88 +195,61 @@ class Tibia:
         for attr in TIBIA_REGION_KEYS:
             setattr(self, attr, _remove_subregion_fragments(getattr(self, attr)))
 
-    def mesh_method(self, superior_surface: np.ndarray, inferior_surface: np.ndarray) -> dict:
+    def knee_frame(self, grid_mm: float = DEFAULT_GRID_MM) -> KneeFrame:
         """
-        Calculate the thickness of a cartilage using a mesh-based ray tracing method.
+        The shared in-plane frame of this knee: the tibial plateau plane.
 
-        :param superior_surface: The superior surface of the zone.
-        :param inferior_surface: The inferior surface of the zone.
-        :return: A dictionary where keys are coordinates and values are the thicknesses.
+        Both bones' thickness maps are keyed in it, so that their overlap stays over the
+        tibiofemoral contact at every flexion angle; pass it to
+        :meth:`Femur.calculate_thickness` (or pass this ``Tibia``, which does the same).
+
+        :param grid_mm: Side length of one map cell in mm.
+        :return: The :class:`~morphometry.cartilage.thickness.KneeFrame`
+            (``source='tibia'``); the subdivision is computed on demand.
         """
-        superior_mesh, inferior_mesh = build_cartilage_meshes(superior_surface, inferior_surface)
+        if self.subdivision is None:
+            self.calculate_landmarks()
+        return knee_frame_from_tibia(self.subdivision, grid_mm=grid_mm)
 
-        superior_mesh = superior_mesh.compute_normals(cell_normals=False, point_normals=True, inplace=False,
-                                                      auto_orient_normals=True)
-
-        thicknesses = dict()
-        for i, point in enumerate(superior_mesh.points):
-            point_coords = np.hstack((point[0], point[1]))
-            point_coords = tuple(point_coords)
-            vec = superior_mesh['Normals'][i] * superior_mesh.length
-            v0 = point - vec
-            v1 = point + vec
-            iv, ic = inferior_mesh.ray_trace(v0, v1, first_point=True)
-            # dist = np.linalg.norm(iv - point) * self.image.get_spacing()[0]
-            if len(iv) == 0:
-                thicknesses[point_coords] = np.nan
-                continue
-
-            iv_world = self.image.transform_index_to_physical_point(iv)
-            point_world = self.image.transform_index_to_physical_point(point)
-            dist = np.linalg.norm(iv_world - point_world)
-            thicknesses[point_coords] = dist  # discard axial coordinate
-
-        return thicknesses
-
-    def knn_method(self, superior_surface: np.ndarray, inferior_surface: np.ndarray) -> dict:
+    def calculate_thickness(self, method=None, grid_mm: float = DEFAULT_GRID_MM,
+                            frame: KneeFrame = None) -> ThicknessMaps:
         """
-        Calculate the thickness of a cartilage using a k-nearest neighbour method.
+        Calculate the tibial cartilage thickness per subregion (Wirth & Eckstein 2008, II-C).
 
-        :param superior_surface: The superior surface of the zone.
-        :param inferior_surface: The inferior surface of the zone.
-        :return: A dictionary where keys are coordinates and values are the thicknesses.
+        The thickness is the area-weighted Euclidean distance between the tibial subchondral
+        bone area and the articular cartilage surface, in both directions, as implemented by
+        :func:`~morphometry.cartilage.thickness.measure_thickness`. Denuded tAB triangles count
+        as 0.0 mm in the ``tab_*`` statistics.
+
+        :param method: Removed; must be ``None``. See the module-level note: there is only one
+            thickness definition now, so the old ``'mesh'`` / ``'knn'`` values raise rather
+            than silently meaning something else.
+        :param grid_mm: Side length of one in-plane map cell in mm (ignored when ``frame`` is
+            given).
+        :param frame: The shared in-plane frame to key the maps in; ``None`` derives it from
+            this tibia (:meth:`knee_frame`), which is the normal case -- the tibial plateau is
+            the shared frame.
+        :return: A :class:`~morphometry.cartilage.thickness.ThicknessMaps`: a
+            ``{subregion: {(u, v): thickness_mm}}`` dict (patient-side keys ``'clt'`` ...
+            ``'prt'``) carrying the per-subregion ``statistics``, the ``frame`` and the
+            per-triangle thicknesses.
+        :raises ValueError: If ``method`` is given, or the subdivision / articular surface
+            cannot be built.
         """
-        thicknesses = dict()
-        f = lambda x: self.image.transform_index_to_physical_point(x)
-        ss_world = list(superior_surface)
-        ss_world = list(map(f, ss_world))
-        ss_world = np.array(ss_world)
-        is_world = list(inferior_surface)
-        is_world = list(map(f, is_world))
-        is_world = np.array(is_world)
-        superior_tree = KDTree(ss_world)
-        distances, indices = superior_tree.query(is_world, k=1)
-
-        for i, distance in enumerate(distances):
-            point_coords = np.hstack((inferior_surface[i][0], inferior_surface[i][1]))
-            point_coords = tuple(point_coords)
-            thicknesses[point_coords] = distance
-
-        return thicknesses
-
-    def calculate_thickness(self, method: str = 'mesh') -> dict:
-        """
-        Calculate the thickness of the tibial cartilage for all subregions of the tibial cartilage.
-
-        :param method: The method used for thickness calculation. Can be either 'mesh' or 'knn'.
-        :return: A dictionary where keys are zone labels and values are dictionaries, where keys are coordinates and values are thicknesses.
-        """
-        assert method in ['mesh', 'knn'], 'Method must be either "mesh" or "knn".'
-        thicknesses = dict()
-        self.get_surface_points()
-        self.calculate_landmarks()
+        if method is not None:
+            raise ValueError(f'Tibia.calculate_thickness: {_METHOD_REMOVED}')
+        if self.point_cloud is None:
+            self.get_surface_points()
+        if self.subdivision is None:
+            self.calculate_landmarks()
         self.extract_subregions()
-
-        for subregion in ['clt', 'ilt', 'elt', 'alt', 'plt', 'crt', 'irt', 'ert', 'art', 'prt']:
-            superior_surface, inferior_surface = get_superior_and_inferior_surface_points(getattr(self, subregion))
-            if method == 'mesh':
-                tmp = self.mesh_method(superior_surface, inferior_surface)
-            else:
-                tmp = self.knn_method(superior_surface, inferior_surface)
-
-            thicknesses[subregion] = tmp
-
-        return thicknesses
+        if frame is None:
+            frame = knee_frame_from_tibia(self.subdivision, grid_mm=grid_mm)
+        # +1: the tibial plateau faces up, towards the femur.
+        return measure_thickness(self.image, self.subdivision, TIBIA_REGION_KEYS,
+                                 bone_label=self.bone_label,
+                                 cartilage_label=self.cartilage_label, frame=frame, bone='tibia',
+                                 facing_sign=+1)
 
     def _ensure_subregions(self):
         """
@@ -332,11 +341,16 @@ class Tibia:
                        cmap: str = 'viridis', clim: Tuple[float, float] = None,
                        show_scalar_bar: bool = True) -> pv.Plotter:
         """
-        Render the tibial articular (superior) surface coloured by measured cartilage
-        thickness, as a heatmap with a shared colour scale across all subregions.
+        Render the tibial subchondral bone area (tAB) coloured by cartilage thickness.
 
-        :param thicknesses: The per-subregion thickness dict returned by
-            :meth:`calculate_thickness` (``{subregion: {(x, y): thickness_mm}}``).
+        This is the paper's Fig. 4(b) / 5(b) view: the thickness as it was measured, one value
+        per tAB triangle, on the surface the subregions are defined on (denuded triangles read
+        0 mm). It needs the :class:`~morphometry.cartilage.thickness.ThicknessMaps` that
+        :meth:`calculate_thickness` returned, whose ``triangle_thickness`` is aligned with the
+        subdivision mesh; a plain dict of per-position maps is rendered from the maps instead,
+        as triangle-less points, which is only a fallback.
+
+        :param thicknesses: The result of :meth:`calculate_thickness`.
         :param plotter: An existing PyVista ``Plotter`` to draw into (new one if ``None``).
         :param show: Whether to call ``plotter.show()`` (see :meth:`plot_segments`).
         :param cmap: A matplotlib colormap name used for the thickness heatmap.
@@ -347,18 +361,10 @@ class Tibia:
         created = plotter is None
         if plotter is None:
             plotter = pv.Plotter()
-        self._ensure_subregions()
-
-        meshes = []
-        for attr, label, color in TIBIA_SUBREGIONS:
-            tmap = thicknesses.get(attr)
-            if not tmap:
-                continue
-            surf = _thickness_surface(self.image, getattr(self, attr), tmap)
-            if surf is not None:
-                meshes.append(surf)
-
-        _add_thickness_meshes(plotter, meshes, cmap, clim, show_scalar_bar)
+        if self.subdivision is None:
+            self.calculate_landmarks()
+        _add_thickness_meshes(plotter, _thickness_meshes(self.subdivision, thicknesses),
+                              cmap, clim, show_scalar_bar)
         if show or (show is None and created):
             plotter.show()
         return plotter
@@ -500,142 +506,70 @@ class Femur:
             setattr(self, key, _remove_subregion_fragments(
                 self.point_cloud[self.point_labels == key]))
 
-    def mesh_method(self, superior_surface: np.ndarray, inferior_surface: np.ndarray) -> dict:
+    def calculate_thickness(self, tibia: Tibia = None, method=None,
+                            grid_mm: float = DEFAULT_GRID_MM,
+                            frame: KneeFrame = None) -> ThicknessMaps:
         """
-        Calculate the thickness of a cartilage using a mesh-based ray tracing method.
+        Calculate the femoral cartilage thickness per subregion (Wirth & Eckstein 2008, II-C).
 
-        :param superior_surface: The superior surface of the zone.
-        :param inferior_surface: The inferior surface of the zone.
-        :return: A dictionary where keys are coordinates and values are the thicknesses.
-        """
-        superior_mesh, inferior_mesh = build_cartilage_meshes(superior_surface, inferior_surface)
+        The thickness is the area-weighted Euclidean distance between the femoral subchondral
+        bone area and the articular cartilage surface, in both directions, as implemented by
+        :func:`~morphometry.cartilage.thickness.measure_thickness`. It no longer depends on any
+        image axis -- the voxel-column method it replaced had to pick a depth axis per
+        subregion and keyed its values by two array axes that were not the ones it measured
+        across (plan step 4, open issue 1).
 
-        superior_mesh = superior_mesh.compute_normals(cell_normals=False, point_normals=True, inplace=False,
-                                                      auto_orient_normals=True)
+        **The maps need the tibia's frame.** They are keyed in the shared in-plane frame of the
+        knee, which is the tibial plateau plane (see
+        :mod:`morphometry.cartilage.thickness`), so that the tibiofemoral overlap
+        :func:`find_thinnest_area` searches stays over the contact at every flexion angle.
+        Pass the knee's ``Tibia`` (or its :meth:`Tibia.knee_frame`). Without one, the frame is
+        derived from the femur itself and marked as such; such maps are a valid femoral map but
+        :func:`find_thinnest_area` refuses to overlap them with tibial maps.
 
-        thicknesses = dict()
-        # The key is always array axes 0 and 1, whatever axis the surfaces were taken along;
-        # for a zone measured along axis 1 that second component is the depth coordinate and
-        # the keys collide. See Femur.calculate_thickness and plan step 4.
-        for i, point in enumerate(superior_mesh.points):
-            vec = superior_mesh['Normals'][i] * superior_mesh.length
-            v0 = point - vec
-            v1 = point + vec
-            iv, ic = inferior_mesh.ray_trace(v0, v1, first_point=True)
-            if len(iv) == 0:
-                thicknesses[(point[0], point[1])] = np.nan
-                continue
-            # dist = np.linalg.norm(iv - point) * self.image.get_spacing()[0]
-            iv_world = self.image.transform_index_to_physical_point(iv)
-            point_world = self.image.transform_index_to_physical_point(point)
-            dist = np.linalg.norm(iv_world - point_world)
-            thicknesses[(point[0], point[1])] = dist  # discard axial coordinate
-
-        return thicknesses
-
-    def knn_method(self, superior_surface: np.ndarray, inferior_surface: np.ndarray) -> dict:
-        """
-        Calculate the thickness of a cartilage using a k-nearest neighbour method.
-
-        :param superior_surface: The superior surface of the zone.
-        :param inferior_surface: The inferior surface of the zone.
-        :return: A dictionary where keys are coordinates and values are the thicknesses.
-        """
-        thicknesses = dict()
-        f = lambda x: self.image.transform_index_to_physical_point(x)
-        ss_world = list(superior_surface)
-        ss_world = list(map(f, ss_world))
-        ss_world = np.array(ss_world)
-        is_world = list(inferior_surface)
-        is_world = list(map(f, is_world))
-        is_world = np.array(is_world)
-        superior_tree = KDTree(ss_world)
-        distances, indices = superior_tree.query(is_world, k=1)
-        # The key is always array axes 0 and 1, whatever axis the surfaces were taken along;
-        # for a zone measured along axis 1 that second component is the depth coordinate and
-        # the keys collide. See Femur.calculate_thickness and plan step 4.
-        for i, distance in enumerate(distances):
-            thicknesses[(inferior_surface[i][0], inferior_surface[i][1])] = distance
-
-        return thicknesses
-
-    def calculate_thickness(self, tibia: Tibia = None, method: str = 'mesh') -> dict:
-        """
-        Calculate the cartilage thickness for all subregions of the femoral cartilage.
-
-        The thickness itself is still measured per voxel column: the two opposing surfaces of
-        each subregion are extracted per image column and the distance between them taken
-        (step 4 of ``docs/wirth_eckstein_2008_plan.md`` replaces this with the paper's
-        area-weighted surface distances). The columns run along the superior-inferior image
-        axis, except for the two posterior-condyle zones, whose articular surface faces
-        posteriorly: theirs run along the image axis nearest the **femoral** anterior-posterior
-        axis (:func:`_depth_axis`), which is the image's anterior-posterior axis in an extended
-        knee but not in a flexed one.
-
-        **The map keys do not follow the depth axis.** :meth:`mesh_method` / :meth:`knn_method`
-        key every point by its array axes 0 and 1, so a zone measured along axis 1 is keyed by
-        ``(x, depth)`` rather than by a position in the plane it was measured across: two
-        points of such a zone that share ``(x, y)`` overwrite each other, and
-        :func:`find_thinnest_area` / :func:`_thickness_surface` place its values at the wrong
-        in-plane position. The defect predates this method -- the posterior zones were always
-        measured across one axis and keyed by another -- but it used to apply to every scan and
-        now applies only to those whose femoral A-P axis is the image's (i.e. at low flexion
-        but not at 60-90 degrees), so it varies *within* a flexion series. It is not fixable
-        here: the two bones would have to share one in-plane frame, which is what the
-        area-weighted thickness of plan step 4 brings.
-
-        :param tibia: Ignored, and kept only so that callers written against the old
-            tibia-relative subdivision keep working. The femoral subregions are now derived
-            from the femur alone. Anything other than ``None`` or a ``Tibia`` raises, so that
-            ``calculate_thickness('knn')`` -- which would bind the method to this parameter and
-            silently run the mesh method -- is caught.
-        :param method: The method used for thickness calculation. Can be either 'mesh' or 'knn'.
-        :return: A dictionary where keys are zone labels and values are dictionaries, where
-            keys are coordinates and values are thicknesses. The weight-bearing condyles'
+        :param tibia: The knee's ``Tibia``, used **only** for the shared in-plane frame -- the
+            femoral subregions are derived from the femur alone. ``None`` falls back to a
+            femoral frame (see above). Anything other than ``None`` or a ``Tibia`` raises, so
+            that a positional ``calculate_thickness('knn')`` is caught.
+        :param method: Removed; must be ``None``. See the module-level note: there is only one
+            thickness definition now, so the old ``'mesh'`` / ``'knn'`` values raise rather
+            than silently meaning something else.
+        :param grid_mm: Side length of one in-plane map cell in mm. Ignored when ``frame`` is
+            given, and ignored when ``tibia`` is -- the grid then comes from the tibia, so the
+            two bones' maps cannot end up on different grids.
+        :param frame: The shared in-plane frame to key the maps in; takes precedence over
+            ``tibia``.
+        :return: A :class:`~morphometry.cartilage.thickness.ThicknessMaps`: a
+            ``{zone: {(u, v): thickness_mm}}`` dict carrying the per-subregion ``statistics``,
+            the ``frame`` and the per-triangle thicknesses. The weight-bearing condyles'
             thirds are keyed by their region key (``'iclf'`` ...), the extension zones by the
             names the femoral thickness dicts have always used for them
             (``'left_anterior_zone'`` ... ``'right_posterior_zone'``).
         :raises TypeError: If ``tibia`` is neither ``None`` nor a ``Tibia``.
+        :raises ValueError: If ``method`` is given, or the subdivision / articular surface
+            cannot be built.
         """
-        # 'tibia' is ignored, but it is still the first positional parameter, so a caller
-        # writing femur.calculate_thickness('knn') would silently run the mesh method.
+        # 'tibia' is the first positional parameter, so a caller writing
+        # femur.calculate_thickness('knn') would otherwise bind the method to it.
         if tibia is not None and not isinstance(tibia, Tibia):
             raise TypeError(
-                f'Femur.calculate_thickness takes the (ignored) tibia first and the method '
-                f'second; got {tibia!r} as the tibia. Call it as '
-                f'calculate_thickness(method={tibia!r}).')
-        assert method in ['mesh', 'knn'], 'Method must be either "mesh" or "knn".'
+                f'Femur.calculate_thickness takes the tibia (for the shared in-plane frame) '
+                f'first; got {tibia!r} as the tibia.')
+        if method is not None:
+            raise ValueError(f'Femur.calculate_thickness: {_METHOD_REMOVED}')
         self.extract_subregions()
-
-        thicknesses = dict()
-        for key in FEMUR_REGION_KEYS:
-            points = getattr(self, key)
-            zone = ZONE_THICKNESS_KEYS.get(key, key)
-            if points is None or len(points) == 0:
-                thicknesses[zone] = dict()
-                continue
-            superior_surface, inferior_surface = _zone_surface_points(
-                points, depth_axis=self.depth_axis(key))
-            if method == 'mesh':
-                thicknesses[zone] = self.mesh_method(superior_surface, inferior_surface)
-            else:
-                thicknesses[zone] = self.knn_method(superior_surface, inferior_surface)
-
-        return thicknesses
-
-    def depth_axis(self, key: str) -> int:
-        """
-        The array axis a subregion's (voxel-column) thickness is measured along.
-
-        :param key: A region key from
-            :data:`~morphometry.cartilage.femur_regions.FEMUR_REGION_KEYS`.
-        :return: ``2`` (superior-inferior) for every region except the two posterior-condyle
-            zones, whose surface faces posteriorly: for those, the array axis nearest the
-            femoral anterior-posterior axis (see :func:`_depth_axis`).
-        """
-        if key not in ('plf', 'prf') or self.frame is None:
-            return 2
-        return _depth_axis(self.image, self.frame.ap_axis)
+        if frame is None:
+            # With a tibia the grid size comes from it, not from grid_mm: a femoral map on a
+            # different grid would not be comparable with the tibial one, and the mismatch
+            # would surface later as a frame error that blames the missing tibia.
+            frame = (tibia.knee_frame() if tibia is not None
+                     else knee_frame_from_femur(self.subdivision, grid_mm=grid_mm))
+        # -1: the femoral articular surface faces down, towards the tibia. Without this the
+        # horseshoe folds onto itself in the shared plane (see _joint_facing_sheet).
+        return measure_thickness(self.image, self.subdivision, FEMUR_REGION_KEYS,
+                                 bone_label=self.bone_label,
+                                 cartilage_label=self.cartilage_label, frame=frame,
+                                 bone='femur', map_keys=ZONE_THICKNESS_KEYS, facing_sign=-1)
 
     def _ensure_subregions(self, tibia: Tibia = None):
         """
@@ -736,11 +670,11 @@ class Femur:
                        show: bool = None, cmap: str = 'viridis', clim: Tuple[float, float] = None,
                        show_scalar_bar: bool = True) -> pv.Plotter:
         """
-        Render the femoral articular (superior) surface coloured by measured cartilage
-        thickness, as a heatmap with a shared colour scale across all subregions.
+        Render the femoral subchondral bone area (tAB) coloured by cartilage thickness.
 
-        :param thicknesses: The per-subregion thickness dict returned by
-            :meth:`calculate_thickness`.
+        See :meth:`Tibia.plot_thickness`; this is the femoral half of the paper's Fig. 5(b).
+
+        :param thicknesses: The result of :meth:`calculate_thickness`.
         :param tibia: Ignored (the subregions no longer depend on the tibia).
         :param plotter: An existing PyVista ``Plotter`` to draw into (new one if ``None``).
         :param show: Whether to call ``plotter.show()`` (see :meth:`Tibia.plot_segments`).
@@ -752,63 +686,13 @@ class Femur:
         created = plotter is None
         if plotter is None:
             plotter = pv.Plotter()
-        self._ensure_subregions()
-
-        meshes = []
-        for attr, label, color, thickness_key in FEMUR_SUBREGIONS:
-            tmap = thicknesses.get(thickness_key)
-            if not tmap:
-                continue
-            surf = _thickness_surface(self.image, getattr(self, attr), tmap,
-                                      depth_axis=self.depth_axis(attr))
-            if surf is not None:
-                meshes.append(surf)
-
-        _add_thickness_meshes(plotter, meshes, cmap, clim, show_scalar_bar)
+        if self.subdivision is None:
+            self.calculate_landmarks()
+        _add_thickness_meshes(plotter, _thickness_meshes(self.subdivision, thicknesses),
+                              cmap, clim, show_scalar_bar)
         if show or (show is None and created):
             plotter.show()
         return plotter
-
-
-def _depth_axis(image: Image, direction: np.ndarray) -> int:
-    """
-    The axis of ``image.array`` most nearly parallel to a world direction.
-
-    The voxel-column thickness method measures between the two extremes of a subregion along
-    one array axis. Which axis that should be depends on the direction the articular surface
-    faces, which is a property of the anatomy (the femoral frame), not of the image -- a
-    flexed knee turns the femur's anterior-posterior axis into a different image axis.
-
-    :param image: The ``Image`` / ``Segmentation`` whose array axes are meant (either backend;
-        ``array`` is ``(i, j, k)`` for nibabel and ``(k, j, i)`` for SimpleITK).
-    :param direction: A world (RAS, mm) direction.
-    :return: ``0``, ``1`` or ``2``: the index into ``image.array``'s shape.
-    """
-    columns = index_to_world_affine(image)[:3, :3]
-    if image.type != 'nibabel':
-        columns = columns[:, ::-1]
-    unit = columns / np.linalg.norm(columns, axis=0)
-    return int(np.argmax(np.abs(np.asarray(direction, dtype=float) @ unit)))
-
-
-def _zone_surface_points(points: np.ndarray, depth_axis: int = 2):
-    """
-    The two opposing surfaces of one subregion's voxel cloud along a given array axis.
-
-    The voxels are grouped by their two other coordinates and the extremes along
-    ``depth_axis`` taken, so for the default axis 2 (superior-inferior in an LPI image) this
-    is the subregion's superior and inferior surface.
-
-    :param points: ``Nx3`` voxel indices of the subregion (LPI index space).
-    :param depth_axis: The array axis to measure the subregion's thickness along.
-    :return: ``(near, far)``, each an ``Mx3`` array of voxel indices in the original axis
-        order; ``near`` holds the smaller coordinate along ``depth_axis``.
-    """
-    pts = np.asarray(points, dtype=float)
-    order = [a for a in range(3) if a != depth_axis] + [depth_axis]
-    near, far = get_superior_and_inferior_surface_points(pts[:, order])
-    inverse = np.argsort(order)
-    return near[:, inverse], far[:, inverse]
 
 
 def scan_qc_flags(image: Image, tibia: Optional['Tibia'] = None,
@@ -912,14 +796,19 @@ def _remove_subregion_fragments(points: np.ndarray, ratio: float = 0.2) -> np.nd
 
 def _flatten_thickness(thicknesses: dict) -> dict:
     """
-    Flatten a per-subregion thickness dict into a single ``{(x, y): thickness}`` map.
+    Flatten a per-subregion thickness dict into a single ``{(u, v): thickness}`` map.
 
-    Coordinates that appear in more than one subregion (rare, at subregion boundaries)
-    are averaged; ``NaN`` / missing values are dropped.
+    Positions that appear in more than one subregion are averaged and ``NaN`` / missing values
+    are dropped. Two things put a position in more than one subregion: a cell straddling a
+    region cut, and -- much more often on the femur -- the surface folding onto itself in the
+    projection, where the trochlea and the posterior condyle land on the same cell from
+    opposite ends of the horseshoe. ``measure_thickness`` keeps only the joint-facing sheet
+    (:func:`~morphometry.cartilage.thickness._joint_facing_sheet`), which removes almost all of
+    the second kind before the maps are built; what is left is the first kind.
 
-    :param thicknesses: ``{subregion: {(x, y): thickness}}`` as returned by
-        ``calculate_thickness``.
-    :return: A flat ``{(x, y): thickness}`` map over all subregions.
+    :param thicknesses: ``{subregion: {(u, v): thickness}}`` as returned by
+        ``calculate_thickness``, keyed in the shared in-plane frame.
+    :return: A flat ``{(u, v): thickness}`` map over all subregions.
     """
     accumulated: dict = {}
     for subregion_map in thicknesses.values():
@@ -930,37 +819,136 @@ def _flatten_thickness(thicknesses: dict) -> dict:
     return {coord: float(np.mean(values)) for coord, values in accumulated.items()}
 
 
+def _overlap_spacing(tibia_thickness: dict, femur_thickness: dict, image: Image) -> float:
+    """
+    The in-plane sampling step (mm) of two thickness maps, and a check that they are comparable.
+
+    Maps from ``calculate_thickness`` are keyed in a shared in-plane
+    :class:`~morphometry.cartilage.thickness.KneeFrame`, whose ``grid_mm`` is the step. Both
+    maps must be in the *same* frame -- a femoral map keyed in a femoral frame (because no
+    ``Tibia`` was passed to ``Femur.calculate_thickness``) does not describe the same positions
+    as a tibial one, and overlapping them would silently pair up unrelated places.
+
+    Plain dicts without a frame (hand-built maps, e.g. in the unit tests) fall back to the
+    image's in-plane voxel spacing, which is what the per-voxel-column maps used to be keyed by.
+
+    :param tibia_thickness: The tibial per-subregion thickness dict.
+    :param femur_thickness: The femoral per-subregion thickness dict.
+    :param image: The segmentation image (its spacing is the fallback step).
+    :return: The in-plane step in mm.
+    :raises ValueError: If exactly one map carries a frame, or the two frames differ.
+    """
+    tibia_frame, femur_frame = thickness_frame(tibia_thickness), thickness_frame(femur_thickness)
+    if tibia_frame is None and femur_frame is None:
+        return float(np.mean(image.spacing[:2]))
+    if tibia_frame is None or femur_frame is None:
+        raise ValueError('One thickness map is keyed in a shared in-plane frame and the other '
+                         'is not; they cannot be overlapped.')
+    if not tibia_frame.matches(femur_frame):
+        raise ValueError(
+            f'The tibial ({tibia_frame.source}) and femoral ({femur_frame.source}) thickness '
+            'maps are keyed in different in-plane frames, so their positions are not '
+            'comparable. Pass the knee\'s Tibia (or its knee_frame()) to '
+            'Femur.calculate_thickness so both are keyed in the tibial plateau frame.')
+    return float(tibia_frame.grid_mm)
+
+
+def _interior_cells(footprint: np.ndarray, margin_mm: float, spacing: float) -> np.ndarray:
+    """
+    The cells of a footprint at least ``margin_mm`` from its boundary.
+
+    The boundary is measured with a Euclidean distance transform over a padded copy, so that a
+    footprint touching the array border is still treated as ending there.
+
+    :param footprint: ``(H, W)`` bool mask of the cells a bone's map covers.
+    :param margin_mm: Required distance to the nearest cell outside the footprint, in mm.
+        ``<= 0`` returns the footprint unchanged.
+    :param spacing: Cell size in mm.
+    :return: ``(H, W)`` bool mask of the interior cells.
+    """
+    if margin_mm <= 0 or not footprint.any():
+        return footprint
+    pad = int(np.ceil(margin_mm / spacing)) + 1
+    padded = np.pad(footprint, pad, mode='constant', constant_values=False)
+    inside = distance_transform_edt(padded, sampling=spacing) > margin_mm
+    return inside[pad:-pad, pad:-pad]
+
+
 def find_thinnest_area(tibia_thickness: dict, femur_thickness: dict, image: Image,
-                       neighbourhood_mm: float = 3.0, radius_mm: Optional[float] = None) -> dict:
+                       neighbourhood_mm: float = 3.0, radius_mm: Optional[float] = None,
+                       edge_margin_mm: float = DEFAULT_EDGE_MARGIN_MM,
+                       min_thickness_mm: float = 0.0) -> dict:
     """
     Locate the thinnest *area* of the tibiofemoral cartilage, robust to outliers.
 
-    A plain ``argmin`` over a thickness map is sensitive to single erroneous voxels, so
+    A plain ``argmin`` over a thickness map is sensitive to single erroneous cells, so
     this searches for the thinnest neighbourhood instead. The tibial and femoral thickness
-    maps are summed over the axial coordinates present in *both* (the contact region),
-    the combined map is median-smoothed to suppress single-voxel outliers, the thinnest
-    neighbourhood centre is found, and the result is refined to the actual thinnest voxel
+    maps are summed over the in-plane positions present in *both* (the contact region),
+    the combined map is median-smoothed to suppress single-cell outliers, the thinnest
+    neighbourhood centre is found, and the result is refined to the actual thinnest cell
     within a disc around that centre.
 
+    Positions are ``(u, v)`` integer cells of the knee's shared in-plane frame -- the tibial
+    plateau plane (:class:`~morphometry.cartilage.thickness.KneeFrame`) -- so the overlap is
+    the part of the plateau the femur sits over, at any flexion angle. Both maps must be keyed
+    in the same frame (see :func:`_overlap_spacing`).
+
+    .. warning::
+
+       **Without an edge margin this search returns a cartilage-label edge, not a thin spot.**
+       A cartilage map does not fade out at its rim, it stops; and the last fraction of a
+       millimetre of it reads near zero anyway, because ``cartilage_coverage`` is a distance
+       test and cAB reaches slightly past the cartilage onto bone that is beside rather than
+       under it (see :func:`~morphometry.cartilage.surface.cartilage_coverage`). Those cells
+       are the global minimum of almost every knee. Measured over the 93 clean ``dfg_knees``
+       with ``edge_margin_mm=0``: the femoral thickness *at the returned point* has a median of
+       0.61 mm and is below 1 mm in 77% of scans (tibial 0.74 mm, below 1 mm in 83%), against
+       real cartilage of 1.3-3.5 mm; the femoral region at the point is a central
+       weight-bearing third in only 3 of 279 compartment results; and the arc-length position
+       of the point piles up at both ends of the condyle (87 of 285 below 0.1, 59 above 0.9).
+       A flexion trend computed on that is a trend in *which end of the labelled cartilage
+       wins the argmin*, not in where the cartilage is thin. The defect is inherited from the
+       voxel-column maps, not introduced with the surface ones.
+
+    Three restrictions keep the search off that rim, all of them parameters:
+
+    * the smoothing window must lie wholly inside the overlap (always on -- see the comments
+      below; it guards the *overlap* boundary, which is not the same thing as either bone's
+      own cartilage edge);
+    * every cell must be at least ``edge_margin_mm`` from **each bone's own** map boundary;
+    * and, optionally, both bones must be at least ``min_thickness_mm`` thick there.
+
+    If nothing survives, the whole overlap is searched and a WARNING is logged, so a scan is
+    never silently dropped.
+
     :param tibia_thickness: Per-subregion tibial thickness dict (from
-        ``Tibia.calculate_thickness``): ``{subregion: {(x, y): thickness}}``.
+        ``Tibia.calculate_thickness``): ``{subregion: {(u, v): thickness}}``.
     :param femur_thickness: Per-subregion femoral thickness dict (from
         ``Femur.calculate_thickness``).
-    :param image: The segmentation image; only its in-plane voxel spacing is used, to
-        convert the physical neighbourhood/radius sizes into an odd kernel size.
+    :param image: The segmentation image; used only as the fallback in-plane step for maps
+        that carry no frame (see :func:`_overlap_spacing`).
     :param neighbourhood_mm: Diameter (mm) of the median-smoothing neighbourhood. The
-        kernel size ``k = round(neighbourhood_mm / in-plane spacing)`` is forced odd and
+        kernel size ``k = round(neighbourhood_mm / in-plane step)`` is forced odd and
         at least 3, so the search is comparable across differently-sampled scans.
     :param radius_mm: Radius (mm) of the refinement disc around the neighbourhood centre.
         Defaults to ``neighbourhood_mm / 2`` so the disc matches the smoothing extent.
-    :return: A dict with ``'point'`` (the actual thinnest ``(x, y)`` voxel), ``'center'``
-        (the smoothed-neighbourhood centre ``(x, y)``), ``'center_thickness'`` (the robust,
+    :param edge_margin_mm: How far (mm) a candidate cell must be from each bone's own map
+        boundary; ``0`` (the default, see :data:`DEFAULT_EDGE_MARGIN_MM`) is off. Anything up
+        to 1.5 mm is a no-op at the default neighbourhood and grid.
+    :param min_thickness_mm: Optional floor (mm) on each bone's thickness at a candidate cell,
+        off by default. It attacks the same artefact from the other side -- useful on a cohort
+        whose real cartilage is known to be thicker than some value, but it is an assumption
+        about the anatomy where the edge margin is only an assumption about the geometry.
+    :return: A dict with ``'point'`` (the actual thinnest ``(u, v)`` cell), ``'center'``
+        (the smoothed-neighbourhood centre ``(u, v)``), ``'center_thickness'`` (the robust,
         median-smoothed combined thickness of the thin area, mm), ``'combined_thickness'``
         (the raw, non-outlier-suppressed tibial + femoral thickness at ``point``, mm),
         ``'tibial_thickness'`` / ``'femoral_thickness'`` (the per-bone contributions at
         ``point``), and ``'kernel_size'`` (``k``).
-    :raises ValueError: If the two maps share no overlapping coordinates.
+    :raises ValueError: If the two maps share no overlapping positions, or are keyed in
+        different frames.
     """
+    spacing = _overlap_spacing(tibia_thickness, femur_thickness, image)
     tibia_flat = _flatten_thickness(tibia_thickness)
     femur_flat = _flatten_thickness(femur_thickness)
 
@@ -968,44 +956,68 @@ def find_thinnest_area(tibia_thickness: dict, femur_thickness: dict, image: Imag
     if not overlap:
         raise ValueError('Tibial and femoral thickness maps have no overlapping coordinates.')
 
-    coords = np.array(list(overlap), dtype=int)
+    # The bounding box spans *both* bones' footprints, not just their overlap: a cell well
+    # inside the overlap can still be at one bone's own cartilage edge, and the edge margin
+    # below has to see that edge.
+    coords = np.array(list(set(tibia_flat) | set(femur_flat)), dtype=int)
     x_min, y_min = coords[:, 0].min(), coords[:, 1].min()
     x_max, y_max = coords[:, 0].max(), coords[:, 1].max()
 
-    # Rasterise the per-bone maps onto dense grids over the overlap bounding box; cells
-    # outside the (irregular) overlap footprint stay NaN. Indexing by grid position keeps
-    # everything downstream free of float-coordinate dict lookups.
+    # Rasterise the per-bone maps onto dense grids; cells outside a bone's (irregular)
+    # footprint stay NaN. Indexing by grid position keeps everything downstream free of
+    # float-coordinate dict lookups.
     tibia_grid = np.full((x_max - x_min + 1, y_max - y_min + 1), np.nan)
     femur_grid = np.full_like(tibia_grid, np.nan)
-    for coord in overlap:
-        gx, gy = int(coord[0]) - x_min, int(coord[1]) - y_min
-        tibia_grid[gx, gy] = tibia_flat[coord]
-        femur_grid[gx, gy] = femur_flat[coord]
+    for flat, target in ((tibia_flat, tibia_grid), (femur_flat, femur_grid)):
+        for coord, value in flat.items():
+            target[int(coord[0]) - x_min, int(coord[1]) - y_min] = value
     grid = tibia_grid + femur_grid          # combined thickness; NaN outside the overlap
     valid = ~np.isnan(grid)
 
-    spacing = float(np.mean(image.spacing[:2]))
     k = int(round(neighbourhood_mm / spacing))
     if k % 2 == 0:
         k += 1
     k = max(3, k)
 
-    # Median smooth with reflection padding, ignoring NaN neighbours.
-    smoothed = generic_filter(grid, np.nanmedian, size=k, mode='reflect')
+    # Median smooth with reflection padding, ignoring NaN neighbours. A window holding no
+    # measured cell at all yields NaN and warns; that is expected (the overlap footprint is
+    # irregular) and such cells are excluded from the search below.
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', 'All-NaN slice encountered', RuntimeWarning)
+        smoothed = generic_filter(grid, np.nanmedian, size=k, mode='reflect')
 
-    # Restrict the neighbourhood-centre search to the overlap footprint.
-    search = np.where(valid & ~np.isnan(smoothed), smoothed, np.inf)
+    # Restrict the neighbourhood-centre search to cells whose whole k x k neighbourhood is
+    # inside the overlap footprint. We are looking for the thinnest *area*, so the area has to
+    # be fully measured: a cell on the footprint boundary has its median taken over the few
+    # neighbours that exist, and the boundary is exactly where the cartilage runs out and the
+    # measured thickness falls towards zero, so a partially-observed window would win the
+    # argmin on nearly every knee.
+    searchable = minimum_filter(valid, size=k, mode='constant', cval=False) & ~np.isnan(smoothed)
+    # ... and away from *each bone's own* cartilage edge, and thick enough to be cartilage.
+    # See the function docstring: this is what keeps the search off the rim.
+    for bone_grid in (tibia_grid, femur_grid):
+        searchable &= _interior_cells(~np.isnan(bone_grid), edge_margin_mm, spacing)
+        if min_thickness_mm > 0:
+            searchable &= np.nan_to_num(bone_grid, nan=-np.inf) >= min_thickness_mm
+    if not searchable.any():
+        logger.warning('find_thinnest_area: nothing survives the %.1f mm search neighbourhood, '
+                       'the %.1f mm edge margin and the %.2f mm minimum thickness; falling back '
+                       'to the whole tibiofemoral overlap.',
+                       neighbourhood_mm, edge_margin_mm, min_thickness_mm)
+        searchable = valid & ~np.isnan(smoothed)
+    search = np.where(searchable, smoothed, np.inf)
     ci, cj = np.unravel_index(np.argmin(search), search.shape)
     center = (float(ci + x_min), float(cj + y_min))
 
-    # Refine to the actual thinnest voxel within a disc around the centre, on the raw map.
-    # The disc radius defaults to half the neighbourhood so it matches the smoothing extent
-    # (k is a diameter) rather than doubling it.
+    # Refine to the actual thinnest cell within a disc around the centre, on the raw map. The
+    # disc radius defaults to half the neighbourhood so it matches the smoothing extent (k is
+    # a diameter) rather than doubling it. The refinement obeys the same restrictions, or it
+    # would hand back a rim cell from just inside the disc.
     radius = neighbourhood_mm / 2.0 if radius_mm is None else radius_mm
     r = max(1, int(round(radius / spacing)))
     ii, jj = np.indices(grid.shape)
     disc = (ii - ci) ** 2 + (jj - cj) ** 2 <= r ** 2
-    restricted = np.where(disc & valid, grid, np.inf)
+    restricted = np.where(disc & searchable, grid, np.inf)
     pi, pj = np.unravel_index(np.argmin(restricted), restricted.shape)
     point = (float(pi + x_min), float(pj + y_min))
 
@@ -1038,11 +1050,13 @@ def split_tibia_thickness_by_compartment(tibia_thickness: dict) -> dict:
     must not be passed here: it is refused (any ``*MT`` key raises), because its ``*LT``
     keys would otherwise be read as patient-left.
 
-    :param tibia_thickness: ``{subregion: {(x, y): thickness}}`` as returned by
+    :param tibia_thickness: ``{subregion: {(u, v): thickness}}`` as returned by
         :meth:`Tibia.calculate_thickness`.
     :return: ``{'left': {subregion: map}, 'right': {subregion: map}}`` keyed by patient
-        side. The per-subregion maps are the original objects (not copied); a side is an
-        empty dict if the input holds none of its subregions.
+        side. The per-subregion maps are the original objects (not copied), and a
+        :class:`~morphometry.cartilage.thickness.ThicknessMaps` input yields subsets that keep
+        its in-plane frame (so they can still be overlapped with the femoral map); a side is
+        an empty dict if the input holds none of its subregions.
     :raises ValueError: If a key belongs to neither compartment (it would otherwise be
         silently dropped from both searches).
     """
@@ -1051,44 +1065,57 @@ def split_tibia_thickness_by_compartment(tibia_thickness: dict) -> dict:
         raise ValueError(f'Tibial subregion keys {anatomical} are medial/lateral names; '
                          'split_tibia_thickness_by_compartment needs the patient-side keys '
                          '(*LT = patient left, *RT = patient right).')
-    split = {'left': {}, 'right': {}}
-    for key, subregion_map in tibia_thickness.items():
+    sides = {'left': [], 'right': []}
+    for key in tibia_thickness:
         suffix = key.lower()[-2:]
         if suffix == 'lt':
-            split['left'][key] = subregion_map
+            sides['left'].append(key)
         elif suffix == 'rt':
-            split['right'][key] = subregion_map
+            sides['right'].append(key)
         else:
             raise ValueError(f"Tibial subregion {key!r} belongs to neither compartment "
                              f"(expected a '*LT' or '*RT' key).")
-    return split
+    if isinstance(tibia_thickness, ThicknessMaps):
+        return {side: tibia_thickness.subset(keys) for side, keys in sides.items()}
+    return {side: {key: tibia_thickness[key] for key in keys} for side, keys in sides.items()}
 
 
 def find_thinnest_area_by_compartment(tibia_thickness: dict, femur_thickness: dict,
                                       image: Image, neighbourhood_mm: float = 3.0,
-                                      radius_mm: Optional[float] = None) -> dict:
+                                      radius_mm: Optional[float] = None,
+                                      edge_margin_mm: float = DEFAULT_EDGE_MARGIN_MM,
+                                      min_thickness_mm: float = 0.0) -> dict:
     """
     Locate the thinnest cartilage area separately in each tibiofemoral compartment.
 
     The tibial thickness dict is partitioned by patient side with
     :func:`split_tibia_thickness_by_compartment`, and :func:`find_thinnest_area` is run on
     each side's tibial subset against the *full* femoral map. Because that search only
-    considers coordinates where tibial and femoral thickness overlap, each search is
+    considers positions where tibial and femoral thickness overlap, each search is
     confined to its own plateau: a globally thinner point in the other compartment cannot
     win, and the median smoothing never mixes values across the intercondylar notch (the
     notch cells are outside the overlap and stay NaN).
 
+    The rim warning on :func:`find_thinnest_area` applies here in full, and the per-compartment
+    results are the ones it bites hardest: restricting the search moves the chosen cell on
+    nearly every compartment of every scan, and reorders which compartment looks most
+    significant in a flexion trend.
+
     :param tibia_thickness: Per-subregion tibial thickness dict (from
-        ``Tibia.calculate_thickness``): ``{subregion: {(x, y): thickness}}``.
+        ``Tibia.calculate_thickness``): ``{subregion: {(u, v): thickness}}``.
     :param femur_thickness: Per-subregion femoral thickness dict (from
         ``Femur.calculate_thickness``); used whole for both compartments.
-    :param image: The segmentation image (in-plane spacing sets the kernel size).
+    :param image: The segmentation image; only the fallback in-plane step for maps with no
+        frame (see :func:`_overlap_spacing`).
     :param neighbourhood_mm: Diameter (mm) of the median-smoothing neighbourhood, see
         :func:`find_thinnest_area`.
     :param radius_mm: Radius (mm) of the refinement disc, see :func:`find_thinnest_area`.
+    :param edge_margin_mm: Distance (mm) a candidate must keep from each bone's own map
+        boundary -- read the warning on :func:`find_thinnest_area` before changing it.
+    :param min_thickness_mm: Optional per-bone thickness floor, see :func:`find_thinnest_area`.
     :return: ``{'left': result, 'right': result}`` keyed by **patient** side, where each
-        result has exactly the fields returned by :func:`find_thinnest_area` (voxel
-        indices in the same LPI index space).
+        result has exactly the fields returned by :func:`find_thinnest_area` (in-plane cells
+        of the knee's shared frame).
     :raises ValueError: If a compartment has no tibial thickness values or no overlap with
         the femoral map (the message names the compartment), or if a tibial subregion key
         belongs to neither compartment.
@@ -1100,46 +1127,43 @@ def find_thinnest_area_by_compartment(tibia_thickness: dict, femur_thickness: di
         try:
             results[side] = find_thinnest_area(subset, femur_thickness, image,
                                                neighbourhood_mm=neighbourhood_mm,
-                                               radius_mm=radius_mm)
+                                               radius_mm=radius_mm,
+                                               edge_margin_mm=edge_margin_mm,
+                                               min_thickness_mm=min_thickness_mm)
         except ValueError as exc:
             raise ValueError(f'The patient-{side} compartment: {exc}') from exc
     return results
 
 
-def _thinnest_point_physical(tibia: 'Tibia', femur: 'Femur', point: tuple) -> np.ndarray:
+def thinnest_point_position(tibia_thickness: dict, femur_thickness: dict,
+                            point: tuple) -> np.ndarray:
     """
-    Locate the 3D physical position of a thinnest ``(x, y)`` column on the contact surface.
+    Locate the 3D world position of a thinnest ``(u, v)`` cell on the contact surface.
 
-    The thinnest point is an axial ``(x, y)`` coordinate (the thickness maps discard the
-    superior-inferior axis). Its depth is recovered from the cartilage voxels in that
-    column: the femoral tibia-facing surface (largest z) and the tibial femur-facing
-    surface (smallest z) bracket the joint contact, so their midpoint is used. If only one
-    bone has voxels in the column, that bone's contact surface is used instead.
+    The thinnest point is an in-plane cell of the knee's shared frame (the thickness maps
+    collapse the direction the joint is compressed along). Its depth is recovered from the two
+    articular surfaces recorded for that cell
+    (:attr:`~morphometry.cartilage.thickness.ThicknessMaps.positions`): the femoral and the
+    tibial articular surface bracket the joint contact, so their midpoint is used. If only one
+    bone recorded a surface there, that bone's surface is used; if neither did, the cell's own
+    in-plane centre on the frame plane is the last resort.
 
-    :param tibia: The ``Tibia`` (its ``point_cloud`` and ``image`` are read).
-    :param femur: The ``Femur`` (its ``point_cloud`` is read).
-    :param point: The thinnest ``(x, y)`` voxel coordinate.
-    :return: The marker's physical ``(x, y, z)`` position.
-    :raises ValueError: If neither bone has cartilage voxels in the column.
+    :param tibia_thickness: The tibial :class:`~morphometry.cartilage.thickness.ThicknessMaps`.
+    :param femur_thickness: The femoral one.
+    :param point: The thinnest ``(u, v)`` cell.
+    :return: The marker's world ``(x, y, z)`` position in mm.
+    :raises ValueError: If neither map carries an in-plane frame to place the cell in.
     """
-    if getattr(tibia, 'point_cloud', None) is None:
-        tibia.get_surface_points()
-    x, y = int(point[0]), int(point[1])
-
-    def surface_z(point_cloud, extreme):
-        if point_cloud is None or len(point_cloud) == 0:
-            return None
-        column = point_cloud[(point_cloud[:, 0] == x) & (point_cloud[:, 1] == y)]
-        return None if len(column) == 0 else extreme(column[:, 2])
-
-    femur_z = surface_z(femur.point_cloud, np.max)   # femoral tibia-facing (inferior) surface
-    tibia_z = surface_z(tibia.point_cloud, np.min)   # tibial femur-facing (superior) surface
-    zs = [z for z in (femur_z, tibia_z) if z is not None]
-    if not zs:
-        raise ValueError(f'No cartilage voxels found in column {point} to place the marker.')
-
-    index = np.array([[x, y, float(np.mean(zs))]])
-    return _indices_to_physical(tibia.image, index)[0]
+    cell = (int(point[0]), int(point[1]))
+    frame = thickness_frame(tibia_thickness) or thickness_frame(femur_thickness)
+    if frame is None:
+        raise ValueError('The thickness maps carry no in-plane frame, so the thinnest point '
+                         f'{point} cannot be placed in 3D.')
+    surfaces = [maps.positions[cell] for maps in (tibia_thickness, femur_thickness)
+                if cell in getattr(maps, 'positions', {})]
+    if not surfaces:
+        return frame.cell_centre(cell)
+    return np.mean(np.asarray(surfaces, dtype=float), axis=0)
 
 
 # Arrow colours for labelled thinnest points (patient-side compartments and the whole knee);
@@ -1177,8 +1201,10 @@ def plot_thinnest_point(tibia: 'Tibia', femur: 'Femur', tibia_thickness: dict,
 
     :param tibia: The ``Tibia`` for the knee.
     :param femur: The ``Femur`` for the same knee.
-    :param tibia_thickness: The tibial thickness dict (used when ``base='thickness'``).
-    :param femur_thickness: The femoral thickness dict (used when ``base='thickness'``).
+    :param tibia_thickness: The tibial thickness maps from ``Tibia.calculate_thickness``; they
+        carry the in-plane frame and the articular-surface position of every cell, which is
+        what places the arrows in 3D (:func:`thinnest_point_position`).
+    :param femur_thickness: The femoral thickness maps, likewise.
     :param thinnest: Either a single result dict from :func:`find_thinnest_area` (its
         ``'point'`` is marked with a red arrow labelled ``'thinnest'``), or a
         ``{label: result}`` dict such as the output of
@@ -1221,51 +1247,12 @@ def plot_thinnest_point(tibia: 'Tibia', femur: 'Femur', tibia_thickness: dict,
                    for label, result in thinnest.items() if result is not None]
 
     for label, color, result in markers:
-        marker = _thinnest_point_physical(tibia, femur, result['point'])
+        marker = thinnest_point_position(tibia_thickness, femur_thickness, result['point'])
         _add_thinnest_arrow(plotter, marker, length, color, label)
 
     if show or (show is None and created):
         plotter.show()
     return plotter
-
-
-def build_cartilage_meshes(superior_points: np.ndarray, inferior_points: np.ndarray) -> Tuple[pv.PolyData, pv.PolyData]:
-    """
-    Build superior and inferior cartilage surface meshes from superior and inferior surface points.
-
-    :param superior_points: A Nx3 point cloud representation of superior surface points.
-    :param inferior_points: A Nx3 point cloud representation of inferior surface points.
-    :return: Reconstructed surface meshes of the superior and inferior cartilage.
-    """
-    superior_mesh = pv.PolyData(superior_points)
-    inferior_mesh = pv.PolyData(inferior_points)
-
-    superior_mesh = superior_mesh.delaunay_2d(alpha=1.0)
-    inferior_mesh = inferior_mesh.delaunay_2d(alpha=1.0)
-
-    return superior_mesh, inferior_mesh
-
-
-def get_superior_and_inferior_surface_points(cartilage: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Get the superior and inferior surface points of a cartilage.
-
-    :param cartilage: A Nx3 point cloud representation of the cartilage.
-    :return: Two point clouds of the superior and inferior surface points.
-    """
-    cols = ['x', 'y', 'z']
-
-    df = pd.DataFrame(cartilage, columns=cols)
-    """
-    superior_points = df.groupby(group).min().reset_index() if transversal_direction == 1 else df.groupby(group).max().reset_index()
-    superior_points = superior_points[cols]
-    inferior_points = df.groupby(group).max().reset_index() if transversal_direction == 1 else df.groupby(group).min().reset_index()
-    inferior_points = inferior_points[cols]
-    """
-    inferior_points = df.groupby(['x', 'y']).max().reset_index()
-    superior_points = df.groupby(['x', 'y']).min().reset_index()
-
-    return superior_points.to_numpy(), inferior_points.to_numpy()
 
 
 # --- Visualisation ---------------------------------------------------------
@@ -1353,46 +1340,47 @@ def _add_voxel_glyphs(plotter: pv.Plotter, image: Image, points: np.ndarray, col
     return True
 
 
-def _thickness_surface(image: Image, points: np.ndarray, thickness_map: dict,
-                       depth_axis: int = 2) -> pv.PolyData:
+def _thickness_meshes(subdivision, thicknesses: dict) -> list:
     """
-    Reconstruct a subregion's articular (superior) surface and attach thickness values.
+    The subchondral bone area as a mesh carrying the measured thickness as a cell scalar.
 
-    The superior surface points are recovered from the subregion voxels with the same
-    grouping used during thickness computation, then each surface point is coloured by
-    the thickness measured at its ``(x, y)`` location. Points without a thickness entry
-    (or ``NaN``) are dropped.
+    This is the surface the thickness was measured on, so no reconstruction is involved: the
+    subdivision's own tAB mesh is returned with the per-triangle ``cAB -> AC`` distances
+    (:attr:`~morphometry.cartilage.thickness.ThicknessMaps.triangle_thickness`) attached as
+    the cell array ``'thickness'``.
 
-    :param image: The ``Image`` providing the index->physical transform.
-    :param points: An ``Nx3`` array of the subregion's voxel indices.
-    :param thickness_map: ``{(x, y): thickness_mm}`` for this subregion.
-    :param depth_axis: The array axis the thickness was measured along (see
-        :meth:`Femur.depth_axis`); the surface is the subregion's extreme along it.
-    :return: A triangulated ``PolyData`` surface carrying a point-scalar ``'thickness'``,
-        or ``None`` if fewer than three points could be coloured.
+    Fallback for a plain per-position dict (one not produced by ``calculate_thickness``, e.g.
+    a hand-built test map): the positions themselves are rendered as an unconnected point
+    cloud carrying the thickness, which still colours correctly but shows no surface.
+
+    :param subdivision: The bone's subdivision (its ``mesh`` is coloured).
+    :param thicknesses: The :class:`~morphometry.cartilage.thickness.ThicknessMaps` from
+        ``calculate_thickness``, or any ``{subregion: {(u, v): thickness}}`` dict.
+    :return: A list of meshes carrying a ``'thickness'`` array (empty if there is nothing to
+        draw), for :func:`_add_thickness_meshes`.
     """
-    if points is None or len(points) == 0:
-        return None
-    superior, _ = _zone_surface_points(points, depth_axis=depth_axis)
+    values = getattr(thicknesses, 'triangle_thickness', None)
+    if values is not None and subdivision is not None and subdivision.mesh.n_cells == len(values):
+        mesh = subdivision.mesh.copy()
+        mesh.cell_data['thickness'] = np.asarray(values, dtype=float)
+        return [mesh]
 
-    # The (x, y) keys rely on integer-valued voxel indices: mesh_method stores keys as
-    # float32 (from PyVista mesh points) while this reconstruction is float64, so the
-    # lookup only matches because integer voxel coordinates are exact in both dtypes.
-    coords, scalars = [], []
-    for p in superior:
-        value = thickness_map.get((p[0], p[1]))
-        if value is None or np.isnan(value):
-            continue
-        coords.append(p)
-        scalars.append(value)
-
-    if len(coords) < 3:
-        return None
-
-    phys = _indices_to_physical(image, np.array(coords))
-    mesh = pv.PolyData(phys)
-    mesh['thickness'] = np.array(scalars, dtype=float)
-    return mesh.delaunay_2d()
+    frame = thickness_frame(thicknesses)
+    if frame is None:
+        return []
+    points, scalars = [], []
+    for tmap in thicknesses.values():
+        for cell, value in (tmap or {}).items():
+            if value is None or np.isnan(value):
+                continue
+            points.append(thicknesses.positions.get(tuple(cell), frame.cell_centre(cell))
+                          if hasattr(thicknesses, 'positions') else frame.cell_centre(cell))
+            scalars.append(float(value))
+    if not points:
+        return []
+    cloud = pv.PolyData(np.asarray(points, dtype=float))
+    cloud['thickness'] = np.asarray(scalars, dtype=float)
+    return [cloud]
 
 
 def _add_thickness_meshes(plotter: pv.Plotter, meshes: list, cmap: str,
@@ -1480,14 +1468,26 @@ def plot_knee_thickness(tibia: Tibia, femur: Femur, tibia_thicknesses: dict,
 
 def _combined_thickness_clim(*thickness_dicts: dict) -> Optional[Tuple[float, float]]:
     """
-    Compute shared ``(min, max)`` thickness colour limits across one or more
-    per-subregion thickness dicts, ignoring ``NaN`` values.
+    Compute shared ``(min, max)`` thickness colour limits across one or more thickness results.
 
-    :param thickness_dicts: Any number of ``{subregion: {(x, y): thickness}}`` dicts.
+    The limits are taken from whatever the heatmap actually draws: the per-triangle
+    thicknesses when a result carries them (:func:`_thickness_meshes` colours the tAB mesh
+    with those), otherwise the per-position maps. Mixing the two would clip the extremes of
+    the triangle values, since a map cell is an area-weighted mean of several triangles.
+    ``NaN`` values are ignored.
+
+    :param thickness_dicts: Any number of
+        :class:`~morphometry.cartilage.thickness.ThicknessMaps`, or plain
+        ``{subregion: {(u, v): thickness}}`` dicts.
     :return: The ``(min, max)`` thickness, or ``None`` if there are no finite values.
     """
     values = []
     for thicknesses in thickness_dicts:
+        triangles = getattr(thicknesses, 'triangle_thickness', None)
+        if triangles is not None and len(triangles):
+            finite = np.asarray(triangles, dtype=float)
+            values.extend(finite[np.isfinite(finite)].tolist())
+            continue
         for tmap in thicknesses.values():
             values.extend(v for v in tmap.values() if v is not None and not np.isnan(v))
     if not values:

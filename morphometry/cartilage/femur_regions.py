@@ -826,6 +826,46 @@ def _polyline_components(points: np.ndarray, lines: np.ndarray) -> List[List[int
     return sequences
 
 
+def _slice_contour(mesh: pv.PolyData, normal: np.ndarray, level: float):
+    """
+    The longest ordered contour of one planar cross-section of a mesh.
+
+    VTK's cutter returns unordered segments; :func:`_polyline_components` chains them, and the
+    longest component is kept (a plane through a femoral tAB can cut off slivers besides the
+    curve of interest).
+
+    :param mesh: An all-triangle ``pv.PolyData`` in world mm.
+    :param normal: Unit normal of the cutting plane.
+    :param level: The plane's coordinate along ``normal``.
+    :return: An ``(M, 3)`` array of ordered contour points in world mm, or ``None`` if the
+        cross-section has no usable contour.
+    """
+    cut = mesh.slice(normal=normal, origin=level * np.asarray(normal, dtype=float))
+    if cut is None or cut.n_points < 2 or cut.n_cells == 0:
+        return None
+    points = np.asarray(cut.points, dtype=float)
+    best, best_length = None, 0.0
+    for sequence in _polyline_components(points, cut.lines):
+        if len(sequence) < 2:
+            continue
+        ordered = points[sequence]
+        length = float(np.linalg.norm(np.diff(ordered, axis=0), axis=1).sum())
+        if length > best_length:
+            best, best_length = ordered, length
+    return None if best is None or best_length <= 0 else best
+
+
+def _normalised_arc_length(contour: np.ndarray) -> np.ndarray:
+    """
+    Cumulative arc length along an ordered contour, normalised to ``[0, 1]``.
+
+    :param contour: ``(M, 3)`` ordered points in world mm.
+    :return: ``(M,)`` values, 0 at the first point and 1 at the last.
+    """
+    steps = np.linalg.norm(np.diff(contour, axis=0), axis=1)
+    return np.concatenate([[0.0], np.cumsum(steps)]) / steps.sum()
+
+
 def _slice_arc_length(mesh: pv.PolyData, level: float, ap_axis: np.ndarray,
                       internal_axis: np.ndarray):
     """
@@ -839,27 +879,90 @@ def _slice_arc_length(mesh: pv.PolyData, level: float, ap_axis: np.ndarray,
     :return: ``(points, u)``: the ordered contour points (world mm) and their normalised arc
         length in ``[0, 1]``, or ``None`` if the cross-section has no usable contour.
     """
-    cut = mesh.slice(normal=ap_axis, origin=level * ap_axis)
-    if cut is None or cut.n_points < 2 or cut.n_cells == 0:
-        return None
-    points = np.asarray(cut.points, dtype=float)
-    best, best_length = None, 0.0
-    for sequence in _polyline_components(points, cut.lines):
-        if len(sequence) < 2:
-            continue
-        ordered = points[sequence]
-        length = float(np.linalg.norm(np.diff(ordered, axis=0), axis=1).sum())
-        if length > best_length:
-            best, best_length = ordered, length
-    if best is None or best_length <= 0:
+    best = _slice_contour(mesh, ap_axis, level)
+    if best is None:
         return None
     # Measure from the internal end: the end of the contour facing the other condyle.
     edge = max(1, len(best) // 5)
     if (best[:edge] @ internal_axis).mean() < (best[-edge:] @ internal_axis).mean():
         best = best[::-1]
-    steps = np.linalg.norm(np.diff(best, axis=0), axis=1)
-    u = np.concatenate([[0.0], np.cumsum(steps)]) / steps.sum()
-    return best, u
+    return best, _normalised_arc_length(best)
+
+
+def articular_arc_fraction(subdivision, points_world: np.ndarray,
+                           edge_inset_mm: float = 0.5,
+                           max_outside_mm: float = 1.0) -> np.ndarray:
+    """
+    Where points sit along the femoral articular surface, anterior to posterior.
+
+    The femoral subchondral bone area is a horseshoe: in a **sagittal** cross-section of the
+    femoral frame it is one open curve running from the anterior end of the trochlea, round the
+    distal condyle, to the posterior end of the condyle. This returns each point's cumulative
+    arc length along that curve, normalised so that 0 is the anterior (trochlear) end and 1 the
+    posterior condylar end, measured in the cross-section through the point's own
+    medial-lateral coordinate.
+
+    Everything is expressed in the **femoral frame** (:class:`FemoralFrame`), which is built
+    from the femur alone, so the *frame* does not move when the knee is repositioned between
+    acquisitions, nor with flexion. That is what makes the coordinate usable across the
+    separately-acquired scans of a flexion series
+    (``scripts/analyse_thinnest_point_flexion.py``).
+
+    **It is only approximately flexion-invariant, though.** The arc is normalised over a
+    contour whose *anterior* end is the edge of the labelled trochlear cartilage, and how far
+    the trochlea is labelled is itself not reproducible between acquisitions of one knee (see
+    the note on the extension zones in :func:`subdivide_femur`). Measured directly: each
+    femoral region's area-weighted tAB centroid is a fixed anatomical landmark, yet its arc
+    fraction wobbles across the four flexion scans of one knee with a within-series SD of
+    0.017-0.065 (median per region, max 0.19) -- about 15-20% of the effect size the flexion
+    analysis looks for (median slope 0.0039 per degree over 90 degrees is ~0.35). Treat a
+    difference of a few hundredths as noise.
+
+    Note this is a *different* field from :func:`arc_length_coordinate`, which runs across a
+    condyle from its internal to its external end (medial-lateral) and defines the paper's
+    thirds; this one runs along the condyle (anterior-posterior).
+
+    A point just beyond the surface's medial-lateral extent is parametrised on the outermost
+    cross-section rather than dropped: the cut level is clamped to just inside that extent (a
+    plane through the very edge cuts nothing), which matters because the thinnest tibiofemoral
+    point can sit a fraction of a millimetre outside the femoral tAB's own range. A point
+    further out than ``max_outside_mm`` is **not** clamped but returned as ``NaN``: the
+    outermost cross-section there is a short, near-degenerate sliver at the condyle's edge, and
+    a fraction read off it is not comparable with one read off a full contour.
+
+    :param subdivision: A :class:`FemurSubdivision` (its ``mesh`` and ``frame`` are used).
+    :param points_world: ``(N, 3)`` points in world mm (RAS); they need not lie on the surface,
+        the nearest contour point is taken.
+    :param edge_inset_mm: How far inside the medial-lateral extent the cut level is clamped.
+    :param max_outside_mm: How far outside that extent a point may be and still be clamped;
+        further out it is ``NaN``.
+    :return: ``(N,)`` fractions in ``[0, 1]``, ``NaN`` for a point too far outside the
+        medial-lateral extent or whose cross-section has no usable contour.
+    """
+    frame = subdivision.frame
+    points = np.asarray(points_world, dtype=float).reshape(-1, 3)
+    across = np.asarray(subdivision.mesh.points, dtype=float) @ frame.ml_axis
+    lo, hi = float(across.min()), float(across.max())
+    inset = min(edge_inset_mm, 0.25 * (hi - lo))
+    fractions = np.full(len(points), np.nan)
+    for i, point in enumerate(points):
+        raw = float(point @ frame.ml_axis)
+        if raw < lo - max_outside_mm or raw > hi + max_outside_mm:
+            continue
+        level = float(np.clip(raw, lo + inset, hi - inset))
+        contour = _slice_contour(subdivision.mesh, frame.ml_axis, level)
+        if contour is None:
+            continue
+        # Orient the curve anterior -> posterior, so 0 is the trochlear end.
+        edge = max(1, len(contour) // 5)
+        if (contour[:edge] @ frame.ap_axis).mean() < (contour[-edge:] @ frame.ap_axis).mean():
+            contour = contour[::-1]
+        arc = _normalised_arc_length(contour)
+        # Locate the point within the cross-section's own plane (A-P and proximal axes).
+        plane = np.stack([contour @ frame.ap_axis, contour @ frame.proximal_axis], axis=1)
+        target = np.array([point @ frame.ap_axis, point @ frame.proximal_axis])
+        fractions[i] = float(arc[int(np.argmin(np.linalg.norm(plane - target, axis=1)))])
+    return fractions
 
 
 def arc_length_coordinate(mesh: pv.PolyData, ap_axis: np.ndarray, ml_axis: np.ndarray,

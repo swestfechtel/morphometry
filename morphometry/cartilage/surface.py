@@ -9,11 +9,15 @@ triangles exactly rather than assigning whole voxels.
 
 This module provides that shared geometry and nothing knee-specific:
 
-- :func:`bone_surface_mesh` -- a smoothed triangle mesh of one bone label in physical
-  (world) millimetres, open where the bone leaves the field of view.
+- :func:`bone_surface_mesh` -- a smoothed triangle mesh of one bone label (or of a union of
+  labels) in physical (world) millimetres, open where the bone leaves the field of view.
 - :func:`cartilage_coverage` -- the covered bone area cAB: triangles within a tolerance of
   the cartilage mask.
 - :func:`total_subchondral_area` -- tAB = cAB plus the enclosed denuded holes.
+- :func:`articular_surface_mesh` -- the articular cartilage surface AC: the outer surface of
+  the bone-plus-cartilage union where cartilage lies underneath it.
+- :func:`surface_distances` -- exact point-to-triangle distances from points to a mesh (the
+  primitive the area-weighted cartilage thickness is built from).
 - :func:`triangle_areas`, :func:`split_mesh_by_scalar`, :func:`split_mesh_by_plane` --
   exact area bookkeeping, with triangles split along a plane or a scalar level set.
 - :func:`face_components`, :func:`extract_faces`, :func:`merge_meshes` -- edge-connected
@@ -210,11 +214,11 @@ def _face_adjacency(faces: np.ndarray):
 # 1. Bone surface
 # ----------------------------------------------------------------------------------------
 
-def bone_surface_mesh(image: Image, bone_label: int, largest_component: bool = True,
+def bone_surface_mesh(image: Image, bone_label, largest_component: bool = True,
                       smoothing_iterations: int = 20, pass_band: float = 0.1,
                       open_at_fov: bool = True, fov_extension: int = 4) -> pv.PolyData:
     """
-    Triangle mesh of one bone label's surface in physical (world) mm.
+    Triangle mesh of one bone label's surface (or of a union of labels) in physical (world) mm.
 
     Marching cubes (level 0.5) is run on the binary bone mask in *index* space and the vertices
     are then mapped to world mm with the full index-to-world transform, so the mesh is correct
@@ -241,9 +245,12 @@ def bone_surface_mesh(image: Image, bone_label: int, largest_component: bool = T
     ``smoothing_iterations=0`` skips it.
 
     :param image: The (LPI-oriented) ``Segmentation`` holding the bone label.
-    :param bone_label: Label value of the bone (``dfg_knees``: 1 = femur, 2 = tibia).
-    :param largest_component: Keep only the largest 26-connected component of the label, so
-        stray mislabelled voxels elsewhere do not produce extra surfaces.
+    :param bone_label: Label value of the bone (``dfg_knees``: 1 = femur, 2 = tibia), or a
+        sequence of label values whose **union** is meshed -- e.g. ``(bone, cartilage)``, whose
+        outer surface carries the articular cartilage surface (:func:`articular_surface_mesh`).
+    :param largest_component: Keep only the largest 26-connected component of the label (of the
+        union, when several labels are given), so stray mislabelled voxels elsewhere do not
+        produce extra surfaces.
     :param smoothing_iterations: Windowed-sinc iterations (``smooth_taubin``'s ``n_iter``).
     :param pass_band: Windowed-sinc pass band (lower = smoother, 0 < pass_band < 2).
     :param open_at_fov: Cut the surface open at the array faces the bone touches (see above).
@@ -254,7 +261,7 @@ def bone_surface_mesh(image: Image, bone_label: int, largest_component: bool = T
         ``cell_data['Normals']`` / ``point_data['Normals']``. Empty if the label is absent.
     """
     labels = label_array_xyz(image)
-    mask = np.asarray(labels) == bone_label
+    mask = np.isin(np.asarray(labels), np.atleast_1d(bone_label))
     if not mask.any():
         return pv.PolyData()
 
@@ -661,7 +668,172 @@ def split_mesh_by_plane(mesh: pv.PolyData, origin, normal):
 
 
 # ----------------------------------------------------------------------------------------
-# 5. Region-transfer QC
+# 5. Articular cartilage surface (AC) and surface distances
+# ----------------------------------------------------------------------------------------
+
+# Defaults of the AC rim exclusion (articular_surface_mesh). Neither is tuned; both are
+# exposed as parameters, and their measured sensitivity is in that function's docstring.
+DEFAULT_RIM_ANGLE_DEG = 60.0
+DEFAULT_PROBE_DEPTHS = (0.5, 1.0)
+
+
+def articular_surface_mesh(image: Image, bone_label: int, cartilage_label: int,
+                           bone_mesh: pv.PolyData = None, tolerance_mm: float = None,
+                           max_rim_angle_deg: float = DEFAULT_RIM_ANGLE_DEG,
+                           probe_depths=DEFAULT_PROBE_DEPTHS, **mesh_kwargs) -> pv.PolyData:
+    """
+    Triangle mesh of the articular cartilage surface (AC) of one bone, in world mm.
+
+    Wirth & Eckstein measure cartilage thickness between the subchondral bone area (cAB/tAB)
+    and the *cartilage surface area* AC (their section II-C). AC is obtained here as the outer
+    surface of the **union** of the bone and its cartilage label: that union's boundary is bare
+    bone wherever the bone is uncovered and the cartilage's own outer boundary wherever it is
+    covered, so no bone-cartilage interface appears in it at all and the two surfaces of a
+    cartilage layer never have to be told apart by distance (which fails exactly where the
+    cartilage is thin).
+
+    **The cartilage rim and the foot of the rim are excluded.** Where the cartilage layer ends,
+    the union surface turns through a right angle and runs back down the side of the layer to
+    the bone, and smoothing rounds the inner corner at its foot into a band of triangles that
+    sit a fraction of a millimetre above the bone. Neither is joint-facing surface, and keeping
+    either wrecks the measurement: a cAB triangle within one cartilage thickness of the plate
+    edge then has its *nearest* AC point on that band rather than above itself, so the regional
+    mean is pulled down by however much rim the subregion has -- i.e. by its
+    perimeter-to-area ratio, which is exactly what distinguishes the peripheral subregions from
+    the central one. On the flat 2 mm plate phantom, keeping the rim reads 1.63 mm over the
+    whole plate and keeping only its foot 1.67 mm, against 1.95 mm with both excluded.
+
+    **What is left is not a global bias.** With the rim excluded, a region *interior* is exact:
+    that phantom's central subregions read 1.9989 and 1.9985 mm against a rasterised truth of
+    2.000, and 27 independent phantom combinations (pose, voxel size, oblique and reflecting
+    direction matrices, both image backends) reproduce their rasterised truth to within 0.5%.
+    The 1.95 mm is the *whole plate*: the exact interior plus a residual deficit in a
+    **fixed-width** band around the rim, where a cAB triangle's nearest AC point is still the
+    edge of the AC sheet rather than the surface above itself. Because that band has a fixed
+    width, its effect scales with a subregion's perimeter-to-area ratio, so it is not a
+    constant anyone can correct for: against an independent volume-over-cAB-area estimate on 48
+    real tibiae, the central region reads 2.34 vs 2.25 mm (ratio 0.96) while the external one
+    reads 1.57 vs 1.69 (ratio 1.08) -- roughly a tenth of the central-to-peripheral contrast
+    these subregions exist to measure is method rather than anatomy. Read regional
+    *differences* with that in mind.
+
+    Two tests, both relative to the **bone** surface underneath (the nearest cell of
+    ``bone_mesh``), select the joint-facing sheet:
+
+    1. *Orientation.* The triangle's outward normal must be within ``max_rim_angle_deg`` of the
+       bone's outward normal there: on the joint-facing sheet of a layer the two are nearly
+       parallel, on the rim nearly perpendicular.
+    2. *What lies underneath.* The centroid is stepped half a (smallest) voxel along the
+       **bone's inward** normal -- straight down towards the bone, not along the triangle's own
+       normal -- and the label at that voxel is read; it must be ``cartilage_label``. A triangle
+       at the foot of the rim is cartilage-labelled along its own (tilted) normal but sits over
+       *bone*, so this rejects it, while a cartilage layer one voxel thick is still accepted
+       (a distance rule with the coverage tolerance would discard it). A probe landing in
+       background is repeated at the next depth in ``probe_depths``, and anything still
+       undecided falls back to the distance rule of :func:`cartilage_coverage` (over
+       cartilage, not over bone).
+
+    **Neither constant is tuned**, and both are parameters so that a cohort sweep is possible.
+    Measured on a sharp-edged flat 2 mm phantom, where the *interior* reads 2.098 mm whatever
+    they are: ``max_rim_angle_deg`` 30 / 45 / 60 / 75 / 89 gives a whole-plate cMe of
+    2.095 / 2.083 / 2.021 / 1.802 / 1.788 mm, and ``probe_depths`` (0.25, 1.0) / (0.5, 1.0) /
+    (1.0, 1.0) gives 1.834 / 2.021 / 2.075 mm. Both only move how much of the rim band
+    survives; neither touches a region interior.
+
+    The paper's observation that every subregion except the central ones reads a 0 mm *minimal*
+    thickness still holds with the rim excluded, by a different route: it comes from the cAB
+    side rather than the AC side. :func:`cartilage_coverage` is a distance test, so cAB reaches
+    a fraction of a millimetre sideways past the cartilage edge onto bone that is beside rather
+    than under cartilage, and such a triangle's nearest AC point is the edge of the AC sheet at
+    roughly its own height. On the 93 clean ``dfg_knees`` the mean ThC.tAB.aMin is 0.00-0.15 mm
+    in every peripheral subregion and 1.2-2.2 mm in the central ones.
+
+    Where cartilage is not adjacent to its bone (a labelling gap wider than the coverage
+    tolerance) its surface is still AC, but the bone underneath it is not cAB, so it
+    contributes to the AC->cAB direction only.
+
+    :param image: The (LPI-oriented) ``Segmentation`` holding both labels.
+    :param bone_label: Label of the bone (``dfg_knees``: 1 = femur, 2 = tibia).
+    :param cartilage_label: Label of that bone's cartilage (``dfg_knees``: 3 = femoral,
+        4 = tibial).
+    :param bone_mesh: The bone's own surface from :func:`bone_surface_mesh`, which supplies the
+        local bone normal both tests are relative to; ``None`` builds it here (pass the one
+        already computed).
+    :param tolerance_mm: Tolerance of the fallback distance rule in mm; ``None`` uses
+        :func:`default_coverage_tolerance`.
+    :param max_rim_angle_deg: Largest angle between a triangle's normal and the underlying bone
+        surface normal at which it still counts as joint-facing cartilage surface.
+    :param probe_depths: Depths, in units of the smallest voxel edge, at which the label under
+        a triangle is probed; each is tried in turn for the triangles still undecided.
+    :param mesh_kwargs: Passed to :func:`bone_surface_mesh` (smoothing, FOV handling).
+    :return: An all-triangle ``pv.PolyData`` of the AC in world mm (empty if either label is
+        absent, or if the bone surface is).
+    """
+    outer = bone_surface_mesh(image, (bone_label, cartilage_label), **mesh_kwargs)
+    if bone_mesh is None:
+        bone_mesh = bone_surface_mesh(image, bone_label, **mesh_kwargs)
+    if outer.n_cells == 0 or bone_mesh.n_cells == 0:
+        return pv.PolyData()
+    labels = np.asarray(label_array_xyz(image))
+    inverse = np.linalg.inv(index_to_world_affine(image))
+    step = float(voxel_spacing(image).min())
+    centroids = triangle_centroids(outer)
+    normals = np.asarray(outer.cell_data['Normals'], dtype=float)
+
+    # The bone surface underneath each triangle: its outward normal orients both tests.
+    nearest = bone_mesh.find_closest_cell(centroids)
+    bone_normals = np.asarray(bone_mesh.cell_data['Normals'], dtype=float)[nearest]
+    joint_facing = (np.einsum('ij,ij->i', normals, bone_normals)
+                    >= np.cos(np.radians(max_rim_angle_deg)))
+
+    # Probe the label underneath (along the bone's inward normal): half a voxel down, then a
+    # whole voxel down for the triangles whose first probe found nothing (background).
+    inside = np.zeros(outer.n_cells, dtype=labels.dtype)
+    undecided = joint_facing.copy()
+    for depth in probe_depths:
+        probe = centroids[undecided] - depth * step * bone_normals[undecided]
+        index = np.rint(indices_to_world(inverse, probe)).astype(int)
+        index = np.clip(index, 0, np.asarray(labels.shape) - 1)
+        found = labels[index[:, 0], index[:, 1], index[:, 2]]
+        inside[undecided] = found
+        undecided[np.flatnonzero(undecided)[found != 0]] = False
+        if not undecided.any():
+            break
+
+    is_ac = joint_facing & (inside == cartilage_label)
+    # Triangles no probe could place (still background): fall back to the distance rule --
+    # over cartilage and not over bone.
+    if undecided.any():
+        near_cartilage = cartilage_coverage(outer, image, cartilage_label, tolerance_mm)
+        near_bone = cartilage_coverage(outer, image, bone_label, tolerance_mm)
+        is_ac[undecided] = near_cartilage[undecided] & ~near_bone[undecided]
+    return extract_faces(outer, is_ac)
+
+
+def surface_distances(points: np.ndarray, mesh: pv.PolyData) -> np.ndarray:
+    """
+    Exact Euclidean distance from each point to the nearest point of a triangle mesh.
+
+    Uses VTK's cell locator (``find_closest_cell``), which returns the closest point *on* the
+    nearest triangle, not the nearest vertex or centroid: on the ~0.1 mm^2 triangles of a knee
+    bone mesh a nearest-centroid approximation would be up to a tenth of a millimetre short,
+    which is a few per cent of a cartilage thickness.
+
+    :param points: ``(N, 3)`` query points in world mm.
+    :param mesh: The target all-triangle ``pv.PolyData`` (world mm).
+    :return: ``(N,)`` distances in mm; all ``NaN`` if the mesh is empty.
+    """
+    points = np.asarray(points, dtype=float).reshape(-1, 3)
+    if len(points) == 0:
+        return np.zeros(0)
+    if mesh.n_cells == 0:
+        return np.full(len(points), np.nan)
+    _, closest = mesh.find_closest_cell(points, return_closest_point=True)
+    return np.linalg.norm(points - np.asarray(closest, dtype=float).reshape(-1, 3), axis=1)
+
+
+# ----------------------------------------------------------------------------------------
+# 6. Region-transfer QC
 # ----------------------------------------------------------------------------------------
 
 # QC of the transfer of bone-surface regions to the cartilage voxels (the ``Tibia`` /

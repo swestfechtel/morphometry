@@ -1,11 +1,14 @@
 """Legacy one-off analysis of the T1rho knee series (unloaded / med-to-lat / lat-to-med).
 
 **Unmaintained.** Data paths are hard-coded (``data_path`` below), it is not covered by the
-test suite, and it has a pre-existing bug of its own: the ``except ValueError`` branches never
-clear ``tibia_success`` / ``femur_success``, so a bone that fails still reaches the plotting
-code with an unbound name. It is kept for reference and was only updated far enough to keep
-calling the current API (both bones now need their bone label, and ``Femur`` no longer takes a
-``Tibia``).
+test suite, and it has a pre-existing bug of its own: the ``except ValueError`` branches do not
+all clear ``femur_success``, so a femur that fails can still reach the plotting code with an
+unbound name. It is kept for reference and was only updated far enough to keep calling the
+current API: both bones need their bone label, thickness has no ``method`` argument any more
+(it is the area-weighted surface distance of Wirth & Eckstein 2008, section II-C), and the
+``Femur`` takes the ``Tibia`` again -- not for its subregions, which come from the femur alone,
+but for the shared in-plane frame both bones' maps are keyed in. A tibia that failed is passed
+as ``None``, and the femoral maps then live in a femoral frame of their own.
 """
 from morphometry.cartilage import knee
 from morphometry.image_io import Image
@@ -30,18 +33,20 @@ data_path = '/home/simon/Data'
 
 def process_patient(row_identifier: str, unloaded_image: Image, med_to_lat_image: Image, lat_to_med_image: Image, dataframe_unloaded: pd.DataFrame, dataframe_med_to_lat: pd.DataFrame, dataframe_lat_to_med: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     tibia_success = femur_success = True
+    tibia = None   # the femur takes its shared in-plane frame from the tibia, when it worked
     try:
         tibia = knee.Tibia(unloaded_image, cartilage_label=tibia_label, bone_label=tibia_bone_label)
-        tibia_results = tibia.calculate_thickness('knn')
+        tibia_results = tibia.calculate_thickness()
         tibia_success = True
     except ValueError as e:
         print(f'Patient {row_identifier} | unloaded tibia.', e)
+        tibia, tibia_success = None, False
         tibia_results = dict()
         tibia_results['clt'] = tibia_results['ilt'] = tibia_results['elt'] = tibia_results['alt'] = tibia_results['plt'] = tibia_results['crt'] = tibia_results['irt'] = tibia_results['ert'] = tibia_results['art'] = tibia_results['prt'] = dict()
 
     try:
         femur = knee.Femur(unloaded_image, cartilage_label=femur_label, bone_label=femur_bone_label)
-        femur_results = femur.calculate_thickness(method='knn')
+        femur_results = femur.calculate_thickness(tibia)
         femur_success = True
     except ValueError as e:
         print(f'Patient {row_identifier} | unloaded femur.', e)
@@ -95,18 +100,20 @@ def process_patient(row_identifier: str, unloaded_image: Image, med_to_lat_image
     dataframe_unloaded = pd.concat([dataframe_unloaded, pd.DataFrame([row])])
 
     femur_success = tibia_success = False
+    tibia = None   # the femur takes its shared in-plane frame from the tibia, when it worked
     try:
         tibia = knee.Tibia(med_to_lat_image, cartilage_label=tibia_label, bone_label=tibia_bone_label)
-        tibia_results = tibia.calculate_thickness('knn')
+        tibia_results = tibia.calculate_thickness()
         tibia_success = True
     except ValueError as e:
         print(f'Patient {row_identifier} | med_to_lat tibia.', e)
+        tibia = None
         tibia_results = dict()
         tibia_results['clt'] = tibia_results['ilt'] = tibia_results['elt'] = tibia_results['alt'] = tibia_results['plt'] = tibia_results['crt'] = tibia_results['irt'] = tibia_results['ert'] = tibia_results['art'] = tibia_results['prt'] = dict()
 
     try:
         femur = knee.Femur(med_to_lat_image, cartilage_label=femur_label, bone_label=femur_bone_label)
-        femur_results = femur.calculate_thickness(method='knn')
+        femur_results = femur.calculate_thickness(tibia)
         femur_success = True
     except ValueError as e:
         print(f'Patient {row_identifier} | med_to_lat femur.', e)
@@ -150,18 +157,20 @@ def process_patient(row_identifier: str, unloaded_image: Image, med_to_lat_image
 
     tibia_success = femur_success = False
 
+    tibia = None   # the femur takes its shared in-plane frame from the tibia, when it worked
     try:
         tibia = knee.Tibia(lat_to_med_image, cartilage_label=tibia_label, bone_label=tibia_bone_label)
-        tibia_results = tibia.calculate_thickness('knn')
+        tibia_results = tibia.calculate_thickness()
         tibia_success = True
     except ValueError as e:
         print(f'Patient {row_identifier} | lat_to_med tibia.', e)
+        tibia = None
         tibia_results = dict()
         tibia_results['clt'] = tibia_results['ilt'] = tibia_results['elt'] = tibia_results['alt'] = tibia_results['plt'] = tibia_results['crt'] = tibia_results['irt'] = tibia_results['ert'] = tibia_results['art'] = tibia_results['prt'] = dict()
 
     try:
         femur = knee.Femur(lat_to_med_image, cartilage_label=femur_label, bone_label=femur_bone_label)
-        femur_results = femur.calculate_thickness(method='knn')
+        femur_results = femur.calculate_thickness(tibia)
         femur_success = True
     except ValueError as e:
         print(f'Patient {row_identifier} | lat_to_med femur.', e)

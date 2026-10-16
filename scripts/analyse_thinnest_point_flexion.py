@@ -8,9 +8,20 @@ whether that position trends posteriorly as flexion increases.
 
 Because the flexion scans are separate acquisitions (the knee is repositioned), raw image
 coordinates are not comparable across angles. The posterior position is therefore measured
-*intrinsically* on the femur: the arc-length fraction of the thinnest point along the
-femoral tibia-facing articular surface at its sagittal slice (0 = anterior/trochlea,
-1 = posterior condyle).
+*intrinsically* on the femur: the arc-length fraction of the thinnest point along the femoral
+subchondral bone area in the sagittal cross-section of the **femoral frame** through it
+(0 = anterior/trochlea, 1 = posterior condyle), i.e.
+:func:`morphometry.cartilage.femur_regions.articular_arc_fraction`. The femoral frame is built
+from the femur alone (shaft axis and posterior condylar line), so the coordinate does not move
+with the knee's pose; the earlier version of this column measured the same idea in **image**
+index space, along the image's anterior-posterior axis, which is only the femur's at full
+extension.
+
+**Supersedes every earlier run of this script.** The thickness itself is now the area-weighted
+surface distance of Wirth & Eckstein 2008 (section II-C), the two bones' maps are keyed in one
+shared in-plane frame (the tibial plateau plane) instead of two colliding per-voxel-column
+keys, and ``ap_fraction`` is measured in the femoral frame. Thinnest-point locations,
+``ap_fraction``s and trends from before this change must not be pooled or compared with these.
 
 The thinnest point is located per **compartment**: ``both`` (the whole knee, one point, as
 :func:`find_thinnest_area` finds it), ``left`` and ``right`` (the patient-left and
@@ -67,9 +78,11 @@ from scipy.stats import spearmanr
 
 from morphometry.image_io import Segmentation
 from morphometry.cartilage.knee import (
-    Tibia, Femur, find_thinnest_area, split_tibia_thickness_by_compartment, plot_thinnest_point,
-    scan_qc_flags,
+    DEFAULT_EDGE_MARGIN_MM, Tibia, Femur, find_thinnest_area,
+    split_tibia_thickness_by_compartment, plot_thinnest_point, scan_qc_flags,
+    thinnest_point_position,
 )
+from morphometry.cartilage.femur_regions import articular_arc_fraction
 
 # ``K<subject>_<flexion>_<load>`` with a .nii / .nii.gz extension.
 _NAME_RE = re.compile(r'^(K\d+)_(\d+)_([A-Za-z]+)\.nii(?:\.gz)?$')
@@ -78,7 +91,9 @@ _NAME_RE = re.compile(r'^(K\d+)_(\d+)_([A-Za-z]+)\.nii(?:\.gz)?$')
 COMPARTMENTS = ('both', 'left', 'right')
 
 # Per-compartment measurement fields, in detail.csv column order.
-MEASUREMENT_FIELDS = ['thin_x', 'thin_y', 'ap_fraction', 'combined_thickness',
+# 'thin_u' / 'thin_v' are the thinnest point's in-plane grid cell in the knee's shared frame
+# (the tibial plateau plane), replacing the old image-index 'thin_x' / 'thin_y'.
+MEASUREMENT_FIELDS = ['thin_u', 'thin_v', 'ap_fraction', 'combined_thickness',
                       'center_thickness']
 # The QC columns are appended last so the earlier columns keep their positions: 'qc_flags'
 # is the scan's flag string (scan_qc_flags), 'qc_flagged_angles' the angles of a series'
@@ -108,48 +123,34 @@ def _natural_subject_key(subject: str) -> int:
     return int(subject[1:])
 
 
-def articular_ap_fraction(femur: Femur, point: tuple, spacing) -> float:
+def articular_ap_fraction(femur: Femur, point_world: np.ndarray) -> float:
     """
-    Position of an ``(x, y)`` point along the femoral tibia-facing articular surface.
+    Position of a world point along the femoral articular surface, anterior to posterior.
 
-    At the sagittal slice through ``x``, the femoral cartilage's inferior (tibia-facing)
-    surface is taken as the most-inferior voxel per anterior-posterior coordinate, ordered
-    anterior->posterior, and its cumulative physical arc length is measured. The returned
-    value is the point's fraction along that arc: 0 at the anterior (trochlear) end, 1 at
-    the posterior condylar end. This is intrinsic to the femoral surface and therefore
-    comparable across the separately-acquired flexion scans.
+    A thin wrapper around
+    :func:`morphometry.cartilage.femur_regions.articular_arc_fraction`: the cumulative arc
+    length of the point's sagittal cross-section of the femoral subchondral bone area,
+    normalised so that 0 is the anterior (trochlear) end and 1 the posterior condylar end, in
+    the **femoral frame** and therefore comparable across the separately-acquired flexion
+    scans.
 
-    :param femur: A ``Femur`` whose ``point_cloud`` is populated.
-    :param point: The ``(x, y)`` voxel coordinate to locate.
-    :param spacing: The image voxel spacing ``(sx, sy, sz)``.
-    :return: The arc-length fraction in ``[0, 1]``, or ``NaN`` if the slice is degenerate.
+    A thinnest point past the condyle's medial-lateral edge is parametrised on the outermost
+    cross-section rather than dropped (see ``articular_arc_fraction``).
+
+    :param femur: The scan's ``Femur`` (its ``subdivision`` is used; computed on demand).
+    :param point_world: The ``(3,)`` world (RAS, mm) position of the thinnest point.
+    :return: The arc-length fraction in ``[0, 1]``, or ``NaN`` if the cross-section is
+        degenerate.
     """
-    x, y = int(point[0]), int(point[1])
-    column = femur.point_cloud[femur.point_cloud[:, 0] == x]
-    if len(column) < 3:
-        return np.nan
-
-    ap = column[:, 1].astype(int)
-    unique_ap = np.unique(ap)
-    if len(unique_ap) < 2:
-        return np.nan
-    # Tibia-facing articular surface: the most-inferior (max z) voxel per A-P coordinate.
-    inferior_z = np.array([column[ap == a][:, 2].max() for a in unique_ap])
-
-    sy, sz = float(spacing[1]), float(spacing[2])
-    segment_lengths = np.sqrt((np.diff(unique_ap) * sy) ** 2 + (np.diff(inferior_z) * sz) ** 2)
-    arc = np.concatenate([[0.0], np.cumsum(segment_lengths)])
-    total = arc[-1]
-    if total == 0:
-        return np.nan
-
-    idx = int(np.searchsorted(unique_ap, y))
-    idx = min(idx, len(arc) - 1)
-    return float(arc[idx] / total)
+    if femur.subdivision is None:
+        femur.calculate_landmarks()
+    point = np.asarray(point_world, dtype=float).reshape(1, 3)
+    return float(articular_arc_fraction(femur.subdivision, point)[0])
 
 
 def locate_thinnest_points(tibia_thickness: dict, femur_thickness: dict, image,
-                           label: str = '') -> dict:
+                           label: str = '', edge_margin_mm: float = DEFAULT_EDGE_MARGIN_MM,
+                           min_thickness_mm: float = 0.0) -> dict:
     """
     Find the thinnest cartilage area for the whole knee and for each patient-side compartment.
 
@@ -162,6 +163,9 @@ def locate_thinnest_points(tibia_thickness: dict, femur_thickness: dict, image,
     :param femur_thickness: Per-subregion femoral thickness dict.
     :param image: The segmentation image (passed through to :func:`find_thinnest_area`).
     :param label: Scan identifier prefixed to failure warnings (e.g. ``'K1 30 belastet'``).
+    :param edge_margin_mm: Distance (mm) a candidate must keep from each bone's own cartilage
+        map boundary; see the warning on :func:`find_thinnest_area`.
+    :param min_thickness_mm: Optional per-bone thickness floor, same reference.
     :return: ``{compartment: result or None}`` for every entry of :data:`COMPARTMENTS`,
         where ``result`` is a :func:`find_thinnest_area` dict and ``None`` marks a failed
         compartment (a warning naming the scan and compartment is printed to stderr).
@@ -170,7 +174,9 @@ def locate_thinnest_points(tibia_thickness: dict, femur_thickness: dict, image,
     found = {}
     for compartment in COMPARTMENTS:
         try:
-            found[compartment] = find_thinnest_area(subsets[compartment], femur_thickness, image)
+            found[compartment] = find_thinnest_area(
+                subsets[compartment], femur_thickness, image,
+                edge_margin_mm=edge_margin_mm, min_thickness_mm=min_thickness_mm)
         # Deliberately broad, like the per-scan guard in main(): one bad compartment must
         # not abort the scan's other compartments.
         except Exception as exc:
@@ -180,23 +186,27 @@ def locate_thinnest_points(tibia_thickness: dict, femur_thickness: dict, image,
     return found
 
 
-def compartment_row(femur: Optional[Femur], thinnest: Optional[dict], spacing) -> dict:
+def compartment_row(femur: Optional[Femur], thinnest: Optional[dict],
+                    tibia_thickness: dict = None, femur_thickness: dict = None) -> dict:
     """
     Turn one compartment's thinnest-area result into its measurement fields.
 
     :param femur: The scan's ``Femur`` (for the articular A-P fraction); unused if
         ``thinnest`` is ``None``.
     :param thinnest: A :func:`find_thinnest_area` result, or ``None`` for a failed compartment.
-    :param spacing: The image voxel spacing ``(sx, sy, sz)``.
+    :param tibia_thickness: The tibial ``ThicknessMaps``, which carry the articular-surface
+        position of every in-plane cell (used to place the thinnest point in world mm).
+    :param femur_thickness: The femoral ``ThicknessMaps``, likewise.
     :return: ``{field: value}`` for every entry of :data:`MEASUREMENT_FIELDS`; all ``NaN``
         when ``thinnest`` is ``None``.
     """
     if thinnest is None:
         return {field: np.nan for field in MEASUREMENT_FIELDS}
+    world = thinnest_point_position(tibia_thickness, femur_thickness, thinnest['point'])
     return {
-        'thin_x': thinnest['point'][0],
-        'thin_y': thinnest['point'][1],
-        'ap_fraction': articular_ap_fraction(femur, thinnest['point'], spacing),
+        'thin_u': thinnest['point'][0],
+        'thin_v': thinnest['point'][1],
+        'ap_fraction': articular_ap_fraction(femur, world),
         'combined_thickness': thinnest['combined_thickness'],
         'center_thickness': thinnest['center_thickness'],
     }
@@ -218,16 +228,17 @@ def load_scan(path: str) -> Segmentation:
     return seg
 
 
-def process_file(path: str, femur_label: int, tibia_label: int, method: str,
+def process_file(path: str, femur_label: int, tibia_label: int,
                  want_objects: bool = False, label: str = '', tibia_bone_label: int = 2,
-                 femur_bone_label: int = 1, seg: Optional[Segmentation] = None) -> dict:
+                 femur_bone_label: int = 1, seg: Optional[Segmentation] = None,
+                 edge_margin_mm: float = DEFAULT_EDGE_MARGIN_MM,
+                 min_thickness_mm: float = 0.0) -> dict:
     """
     Compute the per-compartment thinnest points and their A-P fractions for one scan.
 
     :param path: Path to the segmentation NIfTI.
     :param femur_label: Label of the femoral cartilage.
     :param tibia_label: Label of the tibial cartilage.
-    :param method: Thickness method, 'knn' or 'mesh'.
     :param want_objects: If ``True``, also return the ``Tibia``/``Femur`` objects and
         thickness maps (needed for visualisation).
     :param label: Scan identifier used in per-compartment failure warnings.
@@ -236,6 +247,10 @@ def process_file(path: str, femur_label: int, tibia_label: int, method: str,
     :param femur_bone_label: Label of the femoral bone; the femoral subregions and the
         femoral frame are derived from it.
     :param seg: The scan already loaded by :func:`load_scan`; ``None`` loads ``path``.
+    :param edge_margin_mm: Distance (mm) a thinnest-point candidate must keep from each bone's
+        own cartilage map boundary (``--edge-margin``); see the warning on
+        :func:`find_thinnest_area`.
+    :param min_thickness_mm: Optional per-bone thickness floor (``--min-thickness``).
     :return: A dict with ``compartments``: ``{compartment: row}`` for every entry of
         :data:`COMPARTMENTS`, each row as returned by :func:`compartment_row` (all ``NaN``
         for a failed compartment), and ``qc_flags``, the scan's :func:`scan_qc_flags`
@@ -249,12 +264,16 @@ def process_file(path: str, femur_label: int, tibia_label: int, method: str,
         seg = load_scan(path)
 
     tibia = Tibia(seg, tibia_label, bone_label=tibia_bone_label)
-    tibia_thickness = tibia.calculate_thickness(method)
+    tibia_thickness = tibia.calculate_thickness()
     femur = Femur(seg, femur_label, bone_label=femur_bone_label)
-    femur_thickness = femur.calculate_thickness(method=method)
-    thinnest = locate_thinnest_points(tibia_thickness, femur_thickness, seg, label=label)
+    # The tibia supplies the shared in-plane frame both maps are keyed in.
+    femur_thickness = femur.calculate_thickness(tibia)
+    thinnest = locate_thinnest_points(tibia_thickness, femur_thickness, seg, label=label,
+                                      edge_margin_mm=edge_margin_mm,
+                                      min_thickness_mm=min_thickness_mm)
 
-    result = {'compartments': {c: compartment_row(femur, thinnest[c], seg.spacing)
+    result = {'compartments': {c: compartment_row(femur, thinnest[c], tibia_thickness,
+                                                  femur_thickness)
                                for c in COMPARTMENTS},
               # flagged, not fixed: the measurements above stand as computed
               'qc_flags': scan_qc_flags(seg, tibia, femur)}
@@ -276,7 +295,7 @@ def failed_case(qc_flags: str = '') -> dict:
         loaded but the thickness pipeline failed); ``''`` if none or unknown.
     :return: ``{'compartments': {compartment: all-NaN row}, 'qc_flags': qc_flags}``.
     """
-    return {'compartments': {c: compartment_row(None, None, None) for c in COMPARTMENTS},
+    return {'compartments': {c: compartment_row(None, None) for c in COMPARTMENTS},
             'qc_flags': qc_flags}
 
 
@@ -483,10 +502,12 @@ def main(args: argparse.Namespace):
             seg = None
             try:
                 seg = load_scan(path)
-                case = process_file(path, args.femur_label, args.tibia_label, args.method,
+                case = process_file(path, args.femur_label, args.tibia_label,
                                     want_objects=want_objects, label=label,
                                     tibia_bone_label=args.tibia_bone_label,
-                                    femur_bone_label=args.femur_bone_label, seg=seg)
+                                    femur_bone_label=args.femur_bone_label, seg=seg,
+                                    edge_margin_mm=args.edge_margin,
+                                    min_thickness_mm=args.min_thickness)
                 want_render = want_objects
             # Deliberately broad: a cohort run should survive any single pathological scan
             # (segmentation defects surface as varied exceptions from the thickness pipeline).
@@ -569,8 +590,18 @@ if __name__ == '__main__':
     parser.add_argument('--femur-bone-label', type=int, default=1,
                         help='Label of the femoral bone; the femoral subregions and the '
                              'femoral frame are derived from it (default: 1).')
-    parser.add_argument('--method', choices=['knn', 'mesh'], default='knn',
-                        help='Thickness computation method (default: knn).')
+    # Removed, but still accepted so that an old command line fails with an explanation
+    # instead of argparse's bare 'unrecognized arguments'.
+    parser.add_argument('--method', default=None, help=argparse.SUPPRESS)
+    parser.add_argument('--edge-margin', type=float, default=DEFAULT_EDGE_MARGIN_MM,
+                        help='Keep the thinnest-point search this many mm away from each '
+                             "bone's own cartilage map boundary (default: %(default)s, off). "
+                             'Read the warning on find_thinnest_area before changing it: no '
+                             'value can be chosen from the data, and a large one biases a '
+                             'flexion trend towards the null.')
+    parser.add_argument('--min-thickness', type=float, default=0.0,
+                        help='Require both bones to be at least this thick (mm) at the '
+                             'thinnest point (default: %(default)s, off).')
     parser.add_argument('-o', '--output', default=None,
                         help='Directory to write detail.csv (per-case) and summary.csv (per-series).')
     parser.add_argument('--visualize', action='store_true',
@@ -579,4 +610,12 @@ if __name__ == '__main__':
                         help='Directory to save a PNG per case (<subject>_<angle>_<load>.png).')
     parser.add_argument('--html', default=None,
                         help='Directory to save an interactive HTML per case.')
-    main(parser.parse_args())
+    parsed = parser.parse_args()
+    if parsed.method is not None:
+        parser.error(
+            "--method is gone: cartilage thickness is now the area-weighted surface distance "
+            "between the subchondral bone area and the articular surface (Wirth & Eckstein "
+            "2008, section II-C), the only definition there is. Drop the flag. The old "
+            "voxel-column methods ('mesh', 'knn') are only reachable from git history and "
+            "their numbers must not be pooled with the new ones.")
+    main(parsed)

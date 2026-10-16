@@ -27,26 +27,59 @@ def test_parse_filename():
 
 
 class _Femur:
-    def __init__(self, point_cloud):
-        self.point_cloud = point_cloud
+    """Stand-in exposing what ``articular_ap_fraction`` reads: a finished subdivision."""
+    def __init__(self, subdivision):
+        self.subdivision = subdivision
+
+
+def _flat_strip_subdivision():
+    """
+    A femoral subdivision whose tAB is a flat strip running anterior -> posterior.
+
+    The strip spans the A-P axis (world +y here) from -5 to +5 mm at constant height, and the
+    medial-lateral axis (world +x) from -2 to +2, so a sagittal cross-section of it is a
+    straight 10 mm segment and the arc-length fraction of a point is a linear function of its
+    A-P coordinate.
+    """
+    import pyvista as pv
+    from types import SimpleNamespace
+
+    grid = pv.Plane(center=(0, 0, 0), direction=(0, 0, 1), i_size=4, j_size=10,
+                    i_resolution=4, j_resolution=10).triangulate()
+    frame = SimpleNamespace(ml_axis=np.array([1.0, 0.0, 0.0]),
+                            ap_axis=np.array([0.0, 1.0, 0.0]),
+                            proximal_axis=np.array([0.0, 0.0, 1.0]))
+    return SimpleNamespace(mesh=grid, frame=frame)
 
 
 def test_articular_ap_fraction_anterior_and_posterior():
-    """A straight anterior->posterior articular surface gives fraction = y-position along it."""
-    # One sagittal column x=5; the tibia-facing surface runs y=0..10 at constant z (flat),
-    # so arc length is proportional to y and the fraction equals y / y_max.
-    pts = np.array([[5, y, 20] for y in range(11)], float)
-    femur = _Femur(pts)
-    spacing = (1.0, 1.0, 1.0)
-    assert mod.articular_ap_fraction(femur, (5.0, 0.0), spacing) == 0.0    # anterior end
-    assert mod.articular_ap_fraction(femur, (5.0, 10.0), spacing) == 1.0   # posterior end
-    assert mod.articular_ap_fraction(femur, (5.0, 5.0), spacing) == 0.5    # middle
+    """A straight anterior->posterior surface gives fraction = position along it, 0 anterior."""
+    femur = _Femur(_flat_strip_subdivision())
+    assert mod.articular_ap_fraction(femur, [0.0, 5.0, 0.0]) == pytest.approx(0.0)   # anterior
+    assert mod.articular_ap_fraction(femur, [0.0, -5.0, 0.0]) == pytest.approx(1.0)  # posterior
+    assert mod.articular_ap_fraction(femur, [0.0, 0.0, 0.0]) == pytest.approx(0.5, abs=0.06)
 
 
-def test_articular_ap_fraction_degenerate_returns_nan():
-    """Too few points in the column -> NaN (skipped downstream)."""
-    femur = _Femur(np.array([[5, 3, 20]], float))
-    assert np.isnan(mod.articular_ap_fraction(femur, (5.0, 3.0), (1.0, 1.0, 1.0)))
+def test_articular_ap_fraction_clamps_just_outside_and_nans_far_outside():
+    """Just past the medial-lateral edge the outermost cross-section is used; far past it NaN.
+
+    The thinnest tibiofemoral point can sit a hair outside the femoral surface's own
+    medial-lateral range, where an unclamped cut plane intersects nothing. Far outside, the
+    outermost cross-section is a near-degenerate sliver and the fraction is not comparable,
+    so it is dropped (and skipped downstream) -- as it is when there is no surface at all.
+    """
+    import pyvista as pv
+    from types import SimpleNamespace
+
+    femur = _Femur(_flat_strip_subdivision())      # the strip spans x = -2 .. 2
+    clamped = mod.articular_ap_fraction(femur, [2.5, 0.0, 0.0])
+    assert np.isfinite(clamped)
+    assert clamped == pytest.approx(mod.articular_ap_fraction(femur, [1.5, 0.0, 0.0]), abs=0.05)
+    assert np.isnan(mod.articular_ap_fraction(femur, [50.0, 0.0, 0.0]))
+
+    empty = _Femur(SimpleNamespace(mesh=pv.PolyData(np.zeros((1, 3))),
+                                   frame=_flat_strip_subdivision().frame))
+    assert np.isnan(mod.articular_ap_fraction(empty, [0.0, 0.0, 0.0]))
 
 
 # --- per-compartment bookkeeping ------------------------------------------------------
@@ -93,20 +126,20 @@ def test_locate_thinnest_points_isolates_compartment_failures(monkeypatch, capsy
 
 def test_compartment_row_nan_for_missing_result():
     """A missing (failed) compartment yields an all-NaN measurement row."""
-    row = mod.compartment_row(None, None, (1.0, 1.0, 1.0))
-    assert set(row) == {'thin_x', 'thin_y', 'ap_fraction', 'combined_thickness',
+    row = mod.compartment_row(None, None)
+    assert set(row) == {'thin_u', 'thin_v', 'ap_fraction', 'combined_thickness',
                         'center_thickness'}
     assert all(math.isnan(v) for v in row.values())
 
 
 def test_detail_rows_one_per_compartment():
     """``detail_rows`` emits one row per compartment in COMPARTMENTS order."""
-    nan_row = mod.compartment_row(None, None, (1.0, 1.0, 1.0))
+    nan_row = mod.compartment_row(None, None)
     case = {'compartments': {
-        'both': {'thin_x': 1.0, 'thin_y': 2.0, 'ap_fraction': 0.3,
+        'both': {'thin_u': 1.0, 'thin_v': 2.0, 'ap_fraction': 0.3,
                  'combined_thickness': 1.1, 'center_thickness': 1.2},
         'left': nan_row,
-        'right': {'thin_x': 5.0, 'thin_y': 6.0, 'ap_fraction': 0.7,
+        'right': {'thin_u': 5.0, 'thin_v': 6.0, 'ap_fraction': 0.7,
                   'combined_thickness': 2.1, 'center_thickness': 2.2},
     }}
     rows = mod.detail_rows('K1', 'belastet', 30, case)
@@ -197,7 +230,7 @@ def test_main_flags_scans_and_series(monkeypatch, tmp_path):
         if '_60_' in path:
             raise RuntimeError('broken scan')
         angle = int(pathlib.Path(path).name.split('_')[1])
-        row = {'thin_x': 1.0, 'thin_y': 2.0, 'ap_fraction': angle / 100,
+        row = {'thin_u': 1.0, 'thin_v': 2.0, 'ap_fraction': angle / 100,
                'combined_thickness': 1.0, 'center_thickness': 1.0}
         return {'compartments': {c: dict(row) for c in mod.COMPARTMENTS},
                 'qc_flags': mod.scan_qc_flags(seg)}
@@ -205,7 +238,8 @@ def test_main_flags_scans_and_series(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, 'process_file', fake_process)
     args = SimpleNamespace(input=str(tmp_path), femur_label=3, tibia_label=4,
                            femur_bone_label=1,
-                           tibia_bone_label=2, method='knn', output=str(tmp_path / 'out'),
+                           tibia_bone_label=2, output=str(tmp_path / 'out'),
+                           edge_margin=0.0, min_thickness=0.0,
                            visualize=False, screenshot=None, html=None)
     mod.main(args)
 

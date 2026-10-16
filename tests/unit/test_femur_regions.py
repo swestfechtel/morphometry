@@ -25,7 +25,8 @@ from morphometry.image_io import Segmentation
 from morphometry.cartilage import surface as S
 from morphometry.cartilage.femur_regions import (
     subdivide_femur, estimate_shaft_axis, posterior_condylar_axis, label_points_world,
-    find_trochlear_notch, arc_length_coordinate, anatomical_femur_names, rename_femur_regions,
+    find_trochlear_notch, arc_length_coordinate, articular_arc_fraction,
+    anatomical_femur_names, rename_femur_regions,
     CONDYLE_KEYS, FEMUR_REGION_KEYS,
 )
 from morphometry.cartilage.knee import Femur
@@ -444,24 +445,49 @@ def test_femur_labels_voxels_by_nearest_region():
         assert femur.classify_point(femur.point_cloud[i]) == femur.point_labels[i]
 
 
-def test_posterior_zone_thickness_axis_follows_the_femur():
-    """The posterior condyles' thickness runs along the *femur's* anterior-posterior axis.
+def test_articular_arc_fraction_runs_anterior_to_posterior():
+    """The A-P arc-length coordinate starts at 0 on the trochlea and grows posteriorly."""
+    sub = subdivide_femur(phantom())
+    frame = sub.frame
+    points = np.asarray(sub.mesh.points, dtype=float)
+    ap = points @ frame.ap_axis
+    middle = np.abs(points @ frame.ml_axis - 20.0) < 1.0     # one sagittal band of a condyle
+    anterior = points[middle][np.argmax(ap[middle])]
+    posterior = points[middle][np.argmin(ap[middle])]
+    fractions = articular_arc_fraction(sub, np.stack([anterior, posterior]))
+    assert fractions[0] == pytest.approx(0.0, abs=0.06)
+    # Not 1.0: the phantom's articular arc runs to 120 deg past distal, so the surface carries
+    # on curving proximally behind its most posterior *point* -- which is the whole reason the
+    # coordinate is an arc length and not an anterior-posterior coordinate.
+    assert 0.8 < fractions[1] < 1.0
+    # Monotone along the arc: sampling the band from anterior to posterior never goes back.
+    band = points[middle][np.argsort(-ap[middle])][::40]
+    values = articular_arc_fraction(sub, band)
+    assert np.isfinite(values).all()
+    assert np.corrcoef(np.arange(len(values)), values)[0, 1] > 0.9
 
-    In an extended knee that is the image's anterior-posterior axis, which is what the voxel
-    column method used to assume unconditionally; at 90 degrees of flexion it is the image's
-    superior-inferior axis instead.
+
+def test_articular_arc_fraction_clamps_just_outside_and_drops_far_outside():
+    """A point just past the medial-lateral edge is clamped; one well past it is NaN.
+
+    An unclamped cut plane through the very edge of the mesh intersects nothing, which would
+    make the coordinate NaN exactly where the tibiofemoral contact runs off the condyle. Far
+    outside, though, the outermost cross-section is a near-degenerate sliver, and a fraction
+    read off it is not comparable with one from a full contour.
     """
-    extended = Femur(phantom(), CARTILAGE)
-    extended.calculate_landmarks()
-    flexed = Femur(phantom(rotation=Rotation.from_euler('x', 90, degrees=True).as_matrix()),
-                   CARTILAGE)
-    flexed.calculate_landmarks()
-    assert extended.depth_axis('plf') == 1 and extended.depth_axis('prf') == 1
-    assert flexed.depth_axis('plf') == 2 and flexed.depth_axis('prf') == 2
-    # Every other region keeps the superior-inferior axis in both poses.
-    for femur in (extended, flexed):
-        for key in CONDYLE_KEYS + ('alf', 'arf'):
-            assert femur.depth_axis(key) == 2, key
+    sub = subdivide_femur(phantom())
+    across = np.asarray(sub.mesh.points, dtype=float) @ sub.frame.ml_axis
+    edge = np.asarray(sub.mesh.points, dtype=float)[int(np.argmax(across))]
+    just_outside = edge + 0.5 * sub.frame.ml_axis
+    inside = edge - 1.0 * sub.frame.ml_axis
+    clamped = articular_arc_fraction(sub, just_outside.reshape(1, 3))[0]
+    assert np.isfinite(clamped)
+    assert clamped == pytest.approx(articular_arc_fraction(sub, inside.reshape(1, 3))[0],
+                                    abs=0.1)
+    far = edge + 30.0 * sub.frame.ml_axis
+    assert np.isnan(articular_arc_fraction(sub, far.reshape(1, 3))[0])
+    # The cut-off is a parameter, so a caller that wants the old clamp can have it.
+    assert np.isfinite(articular_arc_fraction(sub, far.reshape(1, 3), max_outside_mm=100.0)[0])
 
 
 def test_transfer_qc_flags_cartilage_far_from_the_bone(caplog):

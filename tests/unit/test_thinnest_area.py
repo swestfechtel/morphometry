@@ -1,10 +1,12 @@
 """Unit tests for ``find_thinnest_area`` (robust thinnest-cartilage-area search).
 
-The function combines the tibial and femoral thickness maps on their overlapping
-axial coordinates, median-smooths the combined map to suppress single-voxel outliers,
-locates the thinnest *neighbourhood*, then refines to the actual thinnest voxel within a
-disc around that neighbourhood centre. These tests use synthetic thickness dicts where
-the correct answer is known, without needing real data.
+The function combines the tibial and femoral thickness maps on the in-plane positions they
+have in common, median-smooths the combined map to suppress single-cell outliers, locates the
+thinnest *neighbourhood* (whose window must lie wholly inside the overlap), then refines to
+the actual thinnest cell within a disc around that neighbourhood centre. Most of these tests
+use synthetic thickness dicts where the correct answer is known, without needing real data;
+such a dict carries no in-plane frame, so the search falls back to the image's voxel spacing
+as its step (the frame-aware path is covered in ``test_cartilage_thickness.py``).
 """
 import numpy as np
 import nibabel as nib
@@ -13,15 +15,19 @@ import pytest
 from morphometry.image_io import Segmentation
 from morphometry.cartilage.knee import (
     Tibia, find_thinnest_area, find_thinnest_area_by_compartment,
-    split_tibia_thickness_by_compartment, _thinnest_point_physical,
+    split_tibia_thickness_by_compartment, thinnest_point_position,
 )
+from morphometry.cartilage.thickness import KneeFrame, ThicknessMaps
 
 
-class _Bone:
-    """Minimal stand-in exposing the attributes _thinnest_point_physical reads."""
-    def __init__(self, point_cloud, image=None):
-        self.point_cloud = point_cloud
-        self.image = image
+def _frame(grid_mm=1.0):
+    """An axis-aligned in-plane frame at the origin, so cell (u, v) sits at world (u, v, 0)."""
+    return KneeFrame(origin=np.zeros(3), axes=np.eye(3), grid_mm=grid_mm, source='tibia')
+
+
+def _maps(positions, frame=None):
+    """A ThicknessMaps carrying only the per-cell articular-surface positions."""
+    return ThicknessMaps({}, frame=frame or _frame(), positions=positions)
 
 
 def _image(spacing=(1.0, 1.0, 1.0)):
@@ -95,23 +101,96 @@ def test_kernel_size_is_odd_and_scaled_by_spacing():
 
 
 def test_marker_is_contact_midpoint():
-    """The 3D marker sits at the midpoint of the femur/tibia contact surfaces at (x,y)."""
-    image = _image()  # identity affine -> physical coords equal index coords
-    # femur at column (5,5) spans z 10..12 (tibia-facing surface = max z = 12);
-    # tibia at (5,5) spans z 16..17 (femur-facing surface = min z = 16); midpoint z = 14.
-    femur = _Bone(np.array([[5, 5, 10], [5, 5, 11], [5, 5, 12]], float))
-    tibia = _Bone(np.array([[5, 5, 16], [5, 5, 17]], float), image=image)
-    marker = _thinnest_point_physical(tibia, femur, (5.0, 5.0))
+    """The 3D marker sits midway between the two bones' articular surfaces at that cell."""
+    # The two bones recorded their articular surface of cell (5, 5) at z = 12 (femur) and
+    # z = 16 (tibia); the joint contact is halfway between them.
+    femur = _maps({(5, 5): np.array([5.0, 5.0, 12.0])})
+    tibia = _maps({(5, 5): np.array([5.0, 5.0, 16.0])})
+    marker = thinnest_point_position(tibia, femur, (5.0, 5.0))
     assert np.allclose(marker, [5.0, 5.0, 14.0])
 
 
-def test_marker_falls_back_to_available_bone():
-    """If only one bone has voxels at (x,y), the marker uses that bone's surface."""
-    image = _image()
-    femur = _Bone(np.array([[5, 5, 10], [5, 5, 12]], float))
-    tibia = _Bone(np.empty((0, 3)), image=image)  # no tibial voxels at (5,5)
-    marker = _thinnest_point_physical(tibia, femur, (5.0, 5.0))
-    assert np.allclose(marker, [5.0, 5.0, 12.0])  # femur tibia-facing surface
+def test_marker_falls_back_to_available_bone_then_to_the_frame():
+    """With one surface recorded the marker uses it; with none, the cell's in-plane centre."""
+    femur = _maps({(5, 5): np.array([5.0, 5.0, 12.0])})
+    tibia = _maps({})
+    assert np.allclose(thinnest_point_position(tibia, femur, (5.0, 5.0)), [5.0, 5.0, 12.0])
+    # No surface at all: the frame still places the cell in its own plane (z = 0 here).
+    assert np.allclose(thinnest_point_position(_maps({}), _maps({}), (5.0, 5.0)),
+                       [5.0, 5.0, 0.0])
+    # Without any frame the point cannot be placed at all.
+    with pytest.raises(ValueError, match='no in-plane frame'):
+        thinnest_point_position({}, {}, (5.0, 5.0))
+
+
+def test_edge_margin_keeps_the_search_off_each_bones_own_rim():
+    """A thin band at one bone's map edge must not win once the edge margin is on.
+
+    This is the rim artefact :func:`find_thinnest_area` warns about: a cartilage map stops
+    rather than fades, so a band of its last cells reads near zero. The always-on full-window
+    rule only protects the outermost cell of that band, which is why the margin exists. Here
+    the femoral map's last three columns are the rim and the genuine thin patch is at (4, 4).
+    """
+    tibia = _uniform_map(1.0, size=12)
+    femur = _uniform_map(1.0, size=12)
+    for x in (9, 10, 11):                     # the femoral map's rim band, reading ~0
+        for y in range(12):
+            femur['c'][(float(x), float(y))] = 0.05
+    for x in (3, 4, 5):                       # a genuine thin patch, well inside both maps
+        for y in (3, 4, 5):
+            tibia['c'][(float(x), float(y))] = 0.6
+            femur['c'][(float(x), float(y))] = 0.6
+
+    rim = find_thinnest_area(tibia, femur, _image(), neighbourhood_mm=3.0, edge_margin_mm=0.0)
+    assert rim['point'][0] >= 9.0, 'without a margin the rim band wins'
+
+    # The margin is a distance to the first cell *outside* the map, so clearing a band three
+    # cells deep needs a little more than 3 mm here.
+    inside = find_thinnest_area(tibia, femur, _image(), neighbourhood_mm=3.0,
+                                edge_margin_mm=3.5)
+    px, py = inside['point']
+    assert 3 <= px <= 5 and 3 <= py <= 5, f'expected the real patch, got {inside["point"]}'
+    assert inside['femoral_thickness'] == pytest.approx(0.6)
+
+
+def test_minimum_thickness_floor_excludes_implausibly_thin_cells():
+    """``min_thickness_mm`` attacks the same artefact from the thickness side."""
+    tibia = _uniform_map(1.0, size=12)
+    femur = _uniform_map(1.0, size=12)
+    for x in (5, 6, 7):                       # implausibly thin, but deep inside both maps
+        for y in (5, 6, 7):
+            femur['c'][(float(x), float(y))] = 0.1
+    for x in (2, 3, 4):                       # plausible cartilage, merely the thinnest of it
+        for y in (2, 3, 4):
+            femur['c'][(float(x), float(y))] = 0.6
+    thin = find_thinnest_area(tibia, femur, _image(), neighbourhood_mm=3.0)
+    assert thin['femoral_thickness'] == pytest.approx(0.1)
+    kept = find_thinnest_area(tibia, femur, _image(), neighbourhood_mm=3.0,
+                              min_thickness_mm=0.5)
+    assert kept['femoral_thickness'] == pytest.approx(0.6)
+
+
+def test_edge_margin_measures_each_bones_own_boundary_not_the_overlap():
+    """A cell deep in the overlap can still be at one bone's own edge; the margin sees that."""
+    # The tibia covers x 0..11, the femur only x 0..7, so the femur's own rim band (x 5..7)
+    # lies inside the tibial map. Only a per-bone margin can see it.
+    tibia = _uniform_map(1.0, size=12)
+    femur = {'c': {(float(x), float(y)): 1.0 for x in range(8) for y in range(12)}}
+    for x in (5, 6, 7):
+        for y in range(12):
+            femur['c'][(float(x), float(y))] = 0.05
+    assert find_thinnest_area(tibia, femur, _image(), edge_margin_mm=0.0)['point'][0] >= 5.0
+    assert find_thinnest_area(tibia, femur, _image(), edge_margin_mm=3.5)['point'][0] < 5.0
+
+
+def test_falls_back_and_warns_when_nothing_survives(caplog):
+    """An over-strict restriction searches the whole overlap rather than dropping the scan."""
+    tibia = _uniform_map(1.0, size=6)
+    femur = _uniform_map(1.0, size=6)
+    with caplog.at_level('WARNING', logger='morphometry'):
+        result = find_thinnest_area(tibia, femur, _image(), edge_margin_mm=50.0)
+    assert np.isfinite(result['combined_thickness'])
+    assert any('falling back' in r.getMessage() for r in caplog.records)
 
 
 # --- per-compartment (patient-side) search -------------------------------------------
@@ -231,6 +310,10 @@ def test_real_tibia_high_x_plateau_is_patient_left():
     affine (``-I``, as after ``transform_coordinate_system``) and a tibial bone block
     (label 2) under the cartilage, on whose surface the subregions are defined (index z
     grows inferiorly, so the bone is at higher z than the cartilage).
+
+    The thickness maps are keyed in the shared in-plane frame, whose ``u`` axis points to the
+    patient's **right** from the midpoint of the two plates, so the patient-left compartment
+    must come back at negative ``u`` and the patient-right one at positive ``u``.
     """
     array = np.zeros((80, 40, 24), np.uint8)
     array[1:79, 1:39, 12:22] = 2
@@ -239,13 +322,16 @@ def test_real_tibia_high_x_plateau_is_patient_left():
         array[((X - cx) / 14.0) ** 2 + ((Y - 20) / 16.0) ** 2 <= 1, 9:12] = 4
     seg = Segmentation.from_nibabel(nib.Nifti1Image(array, np.diag([-1.0, -1.0, -1.0, 1.0])))
 
-    split = split_tibia_thickness_by_compartment(Tibia(seg, 4).calculate_thickness('knn'))
+    thickness = Tibia(seg, 4).calculate_thickness()
+    split = split_tibia_thickness_by_compartment(thickness)
 
-    left_x = [coord[0] for subregion in split['left'].values() for coord in subregion]
-    right_x = [coord[0] for subregion in split['right'].values() for coord in subregion]
-    assert left_x and right_x
-    assert min(left_x) >= 44, 'patient-left compartment must be the high-x plateau (x 44..72)'
-    assert max(right_x) <= 32, 'patient-right compartment must be the low-x plateau (x 4..32)'
+    left_u = [coord[0] for subregion in split['left'].values() for coord in subregion]
+    right_u = [coord[0] for subregion in split['right'].values() for coord in subregion]
+    assert left_u and right_u
+    assert max(left_u) < 0, 'patient-left compartment must be at negative u (towards -world x)'
+    assert min(right_u) > 0, 'patient-right compartment must be at positive u'
+    # The per-compartment subsets keep the frame, so they are still overlappable.
+    assert split['left'].frame.matches(thickness.frame)
 
 
 def test_by_compartment_rejects_unknown_subregion_keys():

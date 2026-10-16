@@ -18,10 +18,16 @@ whole-leg CT, plus a FastAPI service and batch-processing scripts.
   - Region modules at the package root (`hip.py`, `femur.py`, `knee.py`,
     `tibia.py`, `ankle.py`, `whole_leg.py`, `cartilage/`) hold the landmark /
     reference-line helpers (`get_*`) the measurements build on.
-    `cartilage/` holds the knee cartilage subregions after Wirth & Eckstein 2008
-    (`surface.py` = bone-surface geometry in world mm, `tibia_regions.py` and
-    `femur_regions.py` = the per-bone subdivisions, `knee.py` = the `Tibia` /
-    `Femur` classes and the thickness maps).
+    `cartilage/` holds the knee cartilage subregions and thickness after Wirth &
+    Eckstein 2008 (`surface.py` = bone-surface geometry in world mm,
+    `tibia_regions.py` and `femur_regions.py` = the per-bone subdivisions,
+    `thickness.py` = the area-weighted surface thickness and the in-plane frame
+    both bones' maps are keyed in, `knee.py` = the `Tibia` / `Femur` classes).
+    Thickness is the area-weighted Euclidean distance between each bone's
+    subchondral bone area and its articular cartilage surface, in both
+    directions; there is no choice of "method" any more (the old voxel-column
+    `mesh` / `knn` values raise), and rows measured with the old definition must
+    not be pooled with the new ones.
   - Infrastructure: `image_io.py` (the `Image` / `Segmentation` wrapper),
     `geometry.py`, `constants.py`, `utils.py`, `bresenham.py`.
 - **`api/`** — a FastAPI service that ingests DICOM uploads / Orthanc callbacks
