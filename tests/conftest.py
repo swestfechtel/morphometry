@@ -85,6 +85,71 @@ def nako_sample():
         return _load_seg(files[0])
 
 
+def _load_knee_seg(path: Path) -> Segmentation:
+    """Load a ``dfg_knees`` knee segmentation exactly as the knee scripts do.
+
+    Unlike :func:`_load_seg` this does **not** call ``remove_outliers()``: the knee cartilage
+    scripts load and reorient only by default (``compute_knee_cartilage_thickness.py`` has an
+    opt-in ``--remove-outliers``; ``analyse_thinnest_point_flexion.py`` and
+    ``report_knee_cartilage_cohort.py`` never call it), and ``Tibia`` / ``Femur`` clean their
+    own cartilage masks anyway (``outlier_ratio``). Loading differently here would pin numbers
+    no default run produces.
+
+    :param path: Path to the segmentation NIfTI.
+    :return: The LPI-oriented ``Segmentation``.
+    """
+    seg = Segmentation("nibabel")
+    seg.read_image(str(path))
+    seg.transform_coordinate_system()
+    return seg
+
+
+@pytest.fixture
+def dfg_knees_dir():
+    """The ``dfg_knees`` segmentation directory, or skip if it is absent.
+
+    :return: ``Path`` of the directory holding ``K<subject>_<angle>_<load>.nii.gz``
+        (override with ``MORPH_DFG_KNEES_DIR``).
+    """
+    d = data_paths.DFG_KNEES_DIR
+    if not d.exists():
+        pytest.skip(f"dfg_knees segmentation dir not found at {d} (set MORPH_DFG_KNEES_DIR)")
+    return d
+
+
+@pytest.fixture
+def dfg_knee_file(dfg_knees_dir):
+    """A locator for one ``dfg_knees`` scan file, skipping when that scan is absent.
+
+    :return: A function ``path(name) -> Path`` for the *raw* file (not loaded), e.g.
+        ``path('K1_0_belastet')``.
+    """
+
+    def path(name: str) -> Path:
+        p = data_paths.dfg_knee_path(name)
+        if not p.exists():
+            pytest.skip(f"dfg_knees scan {name} not found at {p}")
+        return p
+
+    return path
+
+
+@pytest.fixture
+def dfg_knee(dfg_knee_file):
+    """A loader for one ``dfg_knees`` scan, LPI-oriented (no outlier removal).
+
+    :return: A function ``load(name) -> Segmentation`` that skips the test when the scan is
+        absent (see :func:`_load_knee_seg` for why outliers are kept).
+    """
+
+    def load(name: str) -> Segmentation:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return _load_knee_seg(dfg_knee_file(name))
+
+    return load
+
+
 @pytest.fixture
 def ct_whole_leg():
     """A whole-leg CT segmentation, or skip if MORPH_CT_SAMPLE is not set."""

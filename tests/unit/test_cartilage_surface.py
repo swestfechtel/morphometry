@@ -5,9 +5,6 @@ by cartilage (cAB), fills enclosed denuded holes (tAB) and splits meshes exactly
 are synthetic: anisotropic voxels and an oblique, reflecting direction matrix, so any place
 where index space leaks into the result shows up as a wrong position or area.
 """
-import os
-from pathlib import Path
-
 import nibabel as nib
 import SimpleITK as sitk
 import numpy as np
@@ -99,17 +96,12 @@ def test_simpleitk_backend_matches_nibabel():
     assert S.triangle_areas(mesh_itk).sum() == pytest.approx(S.triangle_areas(mesh_nib).sum(), rel=1e-6)
 
 
-DFG_SAMPLE = Path(os.environ.get(
-    'MORPH_DFG_KNEES_SAMPLE',
-    '/home/simon/Data/dfg_knees/monai_segmentations/labels/original/K1_0_belastet.nii.gz'))
-
-
-def test_backends_agree_on_a_real_file():
+@pytest.mark.needs_dfg_knees
+def test_backends_agree_on_a_real_file(dfg_knee_file):
     """The same NIfTI read by nibabel and by SimpleITK gives the same RAS geometry and labels."""
-    if not DFG_SAMPLE.exists():
-        pytest.skip(f'dfg_knees sample not found at {DFG_SAMPLE} (set MORPH_DFG_KNEES_SAMPLE)')
-    nib_seg = Segmentation.from_nibabel(nib.load(DFG_SAMPLE))
-    itk_seg = Segmentation.from_sitk(sitk.ReadImage(str(DFG_SAMPLE)))
+    sample = dfg_knee_file('K1_0_belastet')
+    nib_seg = Segmentation.from_nibabel(nib.load(sample))
+    itk_seg = Segmentation.from_sitk(sitk.ReadImage(str(sample)))
     assert np.allclose(S.index_to_world_affine(itk_seg), S.index_to_world_affine(nib_seg), atol=1e-4)
     assert np.array_equal(np.asarray(S.label_array_xyz(itk_seg)), np.asarray(S.label_array_xyz(nib_seg)))
 

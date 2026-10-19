@@ -4,12 +4,15 @@ Reference: W. Wirth and F. Eckstein, "A Technique for Regional Analysis of Femor
 Cartilage Thickness Based on Quantitative Magnetic Resonance Imaging", *IEEE TMI* 27(6),
 737–744, 2008 (`Wirth_Eckstein_2008.pdf`, repo root, untracked).
 
-Status (2026-10-16): analysis and steps 0-4 done. Step 1 (shared bone-surface geometry) is
+Status (2026-10-19): analysis and steps 0-5 done. Step 1 (shared bone-surface geometry) is
 `morphometry/cartilage/surface.py`; step 2 (tibia) is `morphometry/cartilage/tibia_regions.py`
 and step 3 (femur) `morphometry/cartilage/femur_regions.py`; step 4 (the area-weighted surface
 thickness and the shared in-plane frame) is `morphometry/cartilage/thickness.py`. All four are
 wired into `Tibia` / `Femur` (`morphometry/cartilage/knee.py`). The voxel-column thickness
-("mesh" / "knn") is gone; `method=` rejects every value.
+("mesh" / "knn") is gone; `method=` rejects every value. Step 5 (tests) is the
+`needs_dfg_knees` fixture, the 14 knee-cartilage goldens in
+`tests/characterization/test_knee_cartilage.py` and the cohort report
+`scripts/report_knee_cartilage_cohort.py`, which re-derives every cohort number quoted below.
 
 ## 1. Where the current code departs from the paper
 
@@ -95,7 +98,11 @@ geometry helpers `index_to_world_affine`, `label_array_xyz`, `voxel_spacing`,
   uncovered components, K12_60_belastet femur 688, one of them 4 mm²).
 - World coordinates are RAS for both image backends (SimpleITK's LPS is converted).
   Tibial tAB 1876-2370 mm² (both plates), femoral tAB (whole femoral cartilage incl.
-  trochlea) 4472-6051 mm².
+  trochlea) 4472-6051 mm² — the knees step 1 was developed on. Step 5's cohort run
+  (`scripts/report_knee_cartilage_cohort.py`, all 93 clean knees) gives wider ranges:
+  tibial tAB 2179 ± 307 mm² (1802-2801), femoral 5225 ± 668 (4266-6445). Note the tibial
+  figure is not the whole tibial tAB but the two plates' (step 2 fills holes per plate and
+  drops covered islands outside both plates).
 - Small covered islands away from the articular surface are kept (0.1 mm² specks on
   K1_0_belastet); assigning patches to plates/condyles is left to steps 2-3.
 
@@ -155,7 +162,10 @@ tests `tests/unit/test_tibia_regions.py`). Decisions and deviations:
   c 20.0/20.0, e 16.9 (0.8)/15.9 (0.7), i 15.6 (1.4)/14.1 (1.2), a 23.8 (1.1)/25.0 (0.9),
   p 23.8 (1.0)/25.0 (0.9) (paper Table I, MT/LT: e 16.0/17.7, i 15.6/17.5, a 24.2/22.6,
   p 24.1/22.2). Loaded vs unloaded (46 pairs): median |delta share| 0.14 pp, max 1.3; within a
-  subject/load across flexion angles (24 series): median SD 0.21 pp.
+  subject/load across flexion angles (24 series): median SD 0.21 pp. All of these reproduce
+  from `scripts/report_knee_cartilage_cohort.py` (step 5) to the decimal shown, on its default
+  93-scan clean set as well as on this 94-scan one
+  (`--include-flagged --exclude K7_90_belastet K11_90_belastet`).
 
 Open issues after step 4, in order of importance:
 
@@ -169,24 +179,43 @@ Open issues after step 4, in order of importance:
    the higher of the two, which is what a convex surface gives. So the central femoral
    cartilage really is that thick **in these label maps** (MONAI predictions, not reader
    segmentations); whether it is in the knees is another question.
-2. **cAB reaches past the cartilage edge, which is what produces the 0 mm minima.**
+2. **cAB reaches past the cartilage edge, which is what makes the peripheral minima small.**
    `cartilage_coverage` is a distance test with a 0.52 mm tolerance, so a fraction of a
    millimetre of bone *beside* rather than *under* the cartilage counts as cAB, and such a
-   triangle's nearest AC point is the edge of the AC sheet at roughly its own height. That is
-   why mean ThC.tAB.aMin is 0.00-0.15 mm in every peripheral subregion -- which happens to
-   reproduce the paper's remark about peripheral minima, but for a different reason than the
-   paper's (whose cartilage reconstruction tapers to zero at the plate edge). A normal probe
-   for cAB (the documented alternative in `surface.cartilage_coverage`) would change the region
-   shares as well as the thickness, so it was not touched here.
+   triangle's nearest AC point is the edge of the AC sheet at roughly its own height.
+   The evidence for that is the **cAB** minimum, not the tAB one: over the 93 clean knees the
+   peripheral subregions' mean ThC.cAB.aMin has a median of 0.156 mm (min 0.003, max 0.702;
+   only 2.0% of the 1488 scan x region values below 0.05 mm), i.e. half an in-plane voxel of
+   0.31 mm -- consistent with a triangle reading the height of the AC rim beside it, and far
+   below the 1.3-2.5 mm of real peripheral cartilage. **The tAB minima are not evidence**:
+   74.5% of those 1488 values are exactly 0.0 and `alf` / `arf` / `prf` are 0.0 in every scan,
+   which is the denuded-as-0.0 mm *convention* (`thickness.py`: one denuded triangle in a
+   region sets its tAB minimum to zero), not a measurement of thin cartilage. The step-4
+   bullet above quotes the tAB figures 0.00-0.15 mm for that reason; read with the cAB twins
+   (1.59-2.41 mm central, 0.11-0.23 peripheral) they say the same thing about the mechanism
+   without resting on the convention. The resemblance to the paper's remark about peripheral
+   minima is still a coincidence of mechanism: the paper's cartilage reconstruction tapers to
+   zero at the plate edge, ours does not. A normal probe for cAB (the documented alternative in
+   `surface.cartilage_coverage`) would change the region shares as well as the thickness, so it
+   was not touched here.
 3. The laterality of the `dfg_knees` knees is still not recorded anywhere (the patient-right
-   plate is the larger in 79/94, which would make them mostly left knees if the medial plate is
-   the larger one -- to be confirmed, not assumed), so the cohort tables above are patient-side
-   and cannot be read as medial/lateral.
+   plate is the larger in 79 of the 94 knees whose tibia subdivides -- step 5 re-derived that
+   count -- which would make them mostly left knees if the medial plate is the larger one; to
+   be confirmed, not assumed), so the cohort tables above are patient-side and cannot be read
+   as medial/lateral. Nothing in the code or the data can settle it: it needs the acquisition
+   records. Until then the paper's Table I / Table II values can only be compared with ours
+   as a set, not column by column, which is how `scripts/report_knee_cartilage_cohort.py`
+   prints them (its own rows carry no `paper` value; the paper's are separate rows).
 4. **Flexion spread is dominated by the labels, not by the geometry.** The extension zones
    still have the loosest *area* across a flexion series (CV 6.5-7.8%, step 3) because how far
    the trochlear cartilage is labelled varies between acquisitions; in *thickness* the loosest
-   are the tibial anterior and central regions (`art` CV 15.6%, `alt` 9.8%, `crt` 9.7% across
-   the four angles of one subject+load, against 2-5% for the femoral thirds), and at least part
+   are the tibial anterior and central regions (`art` CV 15.6%, `alt` 9.8%, `crt` 9.7%, median
+   over the 24 flexion series, against 4.1-8.4% for the femoral thirds — step 5's cohort report
+   reproduces the three tibial figures exactly and corrects the femoral range, which was quoted
+   as 2-5%. Only **21** of the 24 series hold all four angles: the three flagged
+   `*_90_belastet` scans are dropped, so their series have three. Over those 21 alone the
+   femoral thirds give 4.04-8.45% and `crt` 10.24%, so the series set is worth stating), and at
+   least part
    of that is the tibial label itself shrinking with flexion -- K1 loses 33% of its tibial
    cartilage voxels from 0 to 90 deg. Whether the cartilage really thins under flexion or the
    segmentation loses it cannot be told from these label maps.
@@ -203,9 +232,20 @@ Open issues after step 4, in order of importance:
    swept on the cohort. `aMav` / `aMiv` use the paper's 1% without a cross-check, and the
    dilution of the AC->cAB direction by the denuded area fraction is our reading of a step the
    paper does not spell out.
-7. `notebooks/cartilage_thickness.ipynb` still calls the voxel-column API (it has been broken
-   since step 3 redefined the femoral subregions, and step 4 removed the methods it calls).
-   Left alone: it is an exploratory notebook with no tests and no callers.
+
+**Closed since this list was written** (nothing else on it has moved):
+
+- *(was 7)* `notebooks/cartilage_thickness.ipynb` called the voxel-column API and had been
+  broken since step 3. Step 5 rewrote it against the current API (`Tibia` / `Femur`,
+  `plot_regions` / `plot_knee_segments` / `plot_knee_thickness`, `find_thinnest_area`,
+  `scan_qc_flags`) and ran it end to end on its original Duesseldorf scan
+  (`PYTHONPATH=<repo> PYVISTA_OFF_SCREEN=true python -m nbconvert --to notebook --execute`,
+  run from the repo root with the venv's own interpreter -- the notebook's `kernelspec` is the
+  generic `python3`, so without `PYTHONPATH` the kernel starts in `notebooks/` and cannot
+  import `morphometry`, and without `PYVISTA_OFF_SCREEN` the plotting cells block). It is still an
+  exploratory notebook with no tests and no callers, so it can break again silently.
+- *(not on the list, but the step-5 gap)* there was no committed reference value for any knee
+  cartilage number. There are 14 golden files now; see step 5 below.
 
 K7/K8/K11 orientation (flagged, not fixed): three of the 96 `dfg_knees` scans do not land
 in LPI after `transform_coordinate_system` -- K7_90_belastet (raw IAR -> LSP), K8_90_belastet
@@ -222,7 +262,9 @@ between two anatomical axes (K7's first axis: 0.706 S-I vs 0.703 A-P), nibabel's
 voxel-axis-ordered `io_orientation` resolves the tie differently once the axes are
 permuted. The reorientation is left unchanged (the user attributes these scans to a scanner
 misconfiguration); `Image.orientation_ok` / `achieved_axcodes` record it, and both knee
-scripts write `non_lpi_orientation:<codes>` (plus `tibia_transfer_far:<fraction>`, K7: 0.494)
+scripts write `non_lpi_orientation:<codes>` (plus `tibia_transfer_far:<fraction>`, K7: 0.494,
+and `femur_transfer_far`, K7: 0.124, K11: 0.022 -- step 5's cohort run lists the full flag
+strings of all three)
 into a `qc_flags` column. K11_90_belastet is a separate defect that the orientation flag
 catches only by coincidence: 1 mm isotropic with 344 slices and a 512 mm FOV (every other
 scan is 0.31 x 0.31 x 0.75 mm, 172 slices), its tibial cartilage is 9.4k voxels scattered
@@ -307,9 +349,13 @@ tests `tests/unit/test_femur_regions.py`). Decisions and deviations:
   notch-to-posterior extent 30.1 ± 3.4 mm, trochlea 1209/1103 mm², posterior condyle
   882/942 mm², whole femoral tAB 5225 mm² (4266–6445). Across the four flexion angles of one
   subject+load (24 series): CV of cF tAB 1.9–3.0% median against a 1.7% floor from the whole
-  femoral tAB (i.e. the segmentation's own variability), SD of each third's share 0.05–0.23 pp;
+  femoral tAB (i.e. the segmentation's own variability), SD of each third's share 0.07–0.22 pp;
   the extension zones are looser (6.5–7.8%) because how far the trochlea is labelled is not
-  flexion-invariant. Loaded vs unloaded (45 pairs): cF tAB median |Δ| 1.0/1.3%.
+  flexion-invariant. Loaded vs unloaded (45 pairs): cF tAB median |Δ| 0.93/1.22%. (Step 5's
+  report reproduces all of these. Two were quoted differently before: the flexion SD of each
+  third's share as 0.05–0.23 pp (it is a plain SD of the four shares, in percentage points, not
+  normalised by anything) and the loaded-vs-unloaded cF tAB difference as 1.0/1.3% (that one is
+  the relative difference `100 × |a − b| / mean(a, b)`).)
 - Validation: the femur-tibia sagittal angle (the femoral frame against a tibial shaft axis
   fitted the same way) tracks the nominal flexion — median −32.9 / −13.8 / +19.2 / +43.7° at
   0/30/60/90°, Spearman ρ 0.956, strictly increasing in all 21 complete series, fit
@@ -434,10 +480,19 @@ tests `tests/unit/test_femur_regions.py`). Decisions and deviations:
   is excluded by its failure, so n = 93): ThC.cAB.aMe mean (SD) mm -- tibia c 2.30 (0.48) / 2.26 (0.53), i 1.90/1.89,
   e 1.55/1.55, a 1.69/1.79, p 1.91/1.65 (patient-left / patient-right plate); femur cc
   3.15 (0.42) / 3.05 (0.50), ic 2.25/2.35, ec 2.17/1.99, trochlea 2.26/2.31, posterior condyle
-  2.46/2.38. Whole-bone aMe 1.81-1.87 mm (tibia) / 2.33-2.40 mm (femur) at 0/30/60/90 deg.
-  Mean aMin is 1.2-2.2 mm in the four central regions and 0.00-0.15 mm everywhere else, which
-  reproduces the paper's remark -- here through cAB reaching a fraction of a millimetre sideways
-  past the cartilage edge, not through a tapering cartilage reconstruction. Loaded vs unloaded:
+  2.46/2.38. Whole-bone aMe **1.80-1.87 mm (tibia) / 2.34-2.41 mm (femur)** at 0/30/60/90 deg
+  (tibia 1.798/1.853/1.868/1.825, femur 2.408/2.398/2.367/2.337). These were quoted as
+  1.81-1.87 / 2.33-2.40, from a cAB-area-weighted mean of the subregion `aMe`s; the union's
+  `aMe` is exact only if each *direction* keeps its own weights (`cMe` by cAB, `bMe` by AC
+  area), which is what `scripts/report_knee_cartilage_cohort.py` now does -- worth up to
+  0.025 mm (1.3%) on a whole bone, and enough to move three of these four bounds.
+  Mean ThC.**tAB**.aMin is 1.2-2.2 mm in the four central regions and 0.00-0.15 mm everywhere
+  else, which reproduces the paper's remark -- here through cAB reaching a fraction of a
+  millimetre sideways past the cartilage edge, not through a tapering cartilage reconstruction.
+  (Those two figures are the tAB family, i.e. 0 wherever a region holds any denuded bone, even
+  though every other statistic in this bullet is cAB; step 5's run confirms them --
+  1.22-2.23 mm central, 0.000-0.149 peripheral -- and gives the cAB twins as 1.59-2.41 mm
+  central and 0.11-0.23 mm peripheral, which are *not* near zero.) Loaded vs unloaded:
   median |delta aMe| 0.085 mm (p90 0.278, max 1.13, n = 900 pairs); across the four flexion
   angles of one subject+load: median SD 0.117 mm (p90 0.296, max 0.769), median CV 5.7% --
   spread, not precision (the paper's test-retest rms SD is 19-84 um; these are not repeats).
@@ -485,13 +540,140 @@ tests `tests/unit/test_femur_regions.py`). Decisions and deviations:
 - Real data (`dfg_knees`): tables like the paper's Tables I/II (cT ≈ 20.0%, thirds ≈ 33.3%,
   peripheral sizes), old-vs-new thickness per region, a knee-cartilage golden.
 
-*Done* for steps 1-4 in `tests/unit/test_cartilage_surface.py`,
+*Implemented.* The phantom and invariance tests are in `tests/unit/test_cartilage_surface.py`,
 `tests/unit/test_tibia_regions.py`, `tests/unit/test_femur_regions.py` and
 `tests/unit/test_cartilage_thickness.py` (thickness: a 2 mm layer on a flat plate and on a
 cylindrical condyle read to within a few per cent, a wedge reads its volume-over-area mean,
 denuded bone dilutes `tab_aMe` by exactly its area fraction, the statistics on a known
 weighted distribution, area weighting unchanged by refining half a mesh, invariance under
 pose / voxel size / oblique sampling / SimpleITK / mirroring, and the shared frame keeping the
-tibiofemoral overlap at 0-90 deg of flexion where a femoral frame loses it). No knee-cartilage
-*golden* file yet: the thickness has no committed reference values, only phantoms and the
-cohort tables in this document.
+tibiofemoral overlap at 0-90 deg of flexion where a femoral frame loses it). Step 5 added the
+three real-data pieces that were missing: a data fixture, the goldens and a cohort report.
+
+**A `dfg_knees` fixture and marker**, in the house pattern of `needs_augsburg` / `needs_nako` /
+`needs_ct`: the marker `needs_dfg_knees` (registered in `pyproject.toml`), the directory in
+`tests/data_paths.py` (`DFG_KNEES_DIR`, env override `MORPH_DFG_KNEES_DIR`, scan names through
+`dfg_knee_path`, the two golden scans as `DFG_KNEES_GOLDEN_SCAN{,_FLEXED}`) and the fixtures
+`dfg_knees_dir` / `dfg_knee_file` / `dfg_knee` in `tests/conftest.py`, which **skip** when the
+data is absent. The local skip in `test_cartilage_surface.py` (env `MORPH_DFG_KNEES_SAMPLE`,
+now gone) was migrated to it. `dfg_knee` loads a scan the way the knee scripts do -- LPI,
+**no** `remove_outliers()`, the bones clean their own cartilage masks -- so the goldens pin
+what production produces; `conftest`'s generic `_load_seg` would not. Checked on a machine
+without the data: `MORPH_DFG_KNEES_DIR=/nonexistent pytest -m "not needs_ct"` gives
+1260 passed, 16 skipped.
+
+**Knee cartilage goldens** (`tests/characterization/test_knee_cartilage.py`, 14 files in
+`tests/golden/`, compared at the harness's default tolerances rtol 1e-4 / atol 1e-3, captured
+with `MORPH_UPDATE_GOLDEN=1`). Everything is pinned on **`K1_0_unbelastet`** -- a clean,
+unloaded, extended knee with no QC flag, and the scan this document already quotes its
+old-vs-new thickness comparison on (`clt` 1.800 -> 2.487 mm, `cclf` 1.976 -> 3.236 mm, both
+reproduced by the goldens):
+
+- `knee_tibia_region_shares` (10), `knee_tibia_region_areas` (10 + the area dropped outside
+  both plates) and `knee_tibia_plate_frames` (52: per plate S, the three principal axes, the
+  variances, the internal and anterior directions, rho*, the semi-axes and the tAB / cAB
+  areas). The two in-plane variances are 90.5 vs 43.9 mm² (patient-left) and 133.8 vs 61.1
+  (patient-right), so the eigenvector order is not a near tie.
+- `knee_femur_region_shares` (6 thirds), `knee_femur_region_areas` (10, incl. trochlea and
+  posterior condyle) and `knee_femur_frame` (30: the three axes, the trochlear-notch point and
+  its A-P coordinate, the condyle divider, the shaft-fit residual and bin count, the whole
+  femoral tAB, and per condyle the posterior and 60% borders, cF tAB / cAB and the trochlea and
+  posterior-zone areas).
+- `knee_tibia_thickness_statistics` and `knee_femur_thickness_statistics` (200 each): all 20
+  statistics of `thickness.STATISTIC_KEYS` for each of the 10 subregions -- both ThC families,
+  the cAB / tAB / AC areas and the denuded fraction.
+- `knee_thinnest_point` (30): the whole knee and both patient-side compartments, each with the
+  thinnest cell, the neighbourhood centre, the smoothed and raw combined thickness, the two
+  per-bone contributions, the kernel size and the point's arc fraction along the femoral
+  articular surface.
+
+A second, cheaper set is pinned on **`K1_90_unbelastet`**, the 90° scan of the same subject and
+load: `knee90_region_shares` (16), `knee90_region_areas` (20), `knee90_femur_frame` (30),
+`knee90_thickness_mean` (20 × `aMe`) and `knee90_thinnest_point` (24 -- the thinnest cells and
+their thicknesses, but **not** the neighbourhood centres, see below). It costs ~15 s and
+earns it: at 90° of flexion the femoral frame, the posterior-condyle zones,
+`_restrict_to_contact_cluster` and the shared in-plane frame all do work an extended knee never
+exercises (the posterior zones hold 76% of the tibiofemoral overlap there against 9% at 0°),
+and the axis switch recorded in step 3 moved exactly those numbers. Both scans are measured
+once per module run and cached (~15 s each on a 32-core workstation; the whole module is ~31 s).
+
+Left out of the goldens deliberately, each for a stated reason:
+
+- `n_tab_triangles` / `n_ac_triangles`: integer mesh counts with no tolerance to give -- a
+  `scikit-image` or VTK upgrade would fail them without any measurement having changed, and the
+  areas already cover what they would catch.
+- `CondyleFrame.n_slices`, the same argument: it counts how many 0.5 mm cross-sections fit in
+  the weight-bearing A-P window, i.e. quantises a continuous length, and the window has only
+  0.049 mm of headroom at 0° (0.139 at 90°) -- a twentieth of a millimetre, a sixth of an
+  in-plane voxel, flips 31 to 30 for nothing. Over the cohort it takes 13 distinct values
+  (29-43), so it is genuinely mobile. `FemoralFrame.shaft_bins` *is* pinned: it is 10 on all 96
+  scans.
+- the **neighbourhood centre** of the flexed scan's thinnest-point search. On
+  `K1_90_unbelastet` the smoothed minimum is attained *bitwise identically* at six cells
+  spanning 2.5 mm (both the whole knee and the patient-right compartment; the patient-left one
+  is a two-way tie 3.5e-3 mm away), so which one is reported is decided by the C-order grid
+  traversal, not by the data. The refined `point` inside the disc around it is stable and stays
+  pinned, as does the 0° scan's centre (single-cell minima there, runner-up +0.073 / +0.18 mm).
+- the transferred region voxel clouds: they move with the fragment-removal safety net (open
+  issue 5) and no measurement reads them.
+
+Sensitivity, measured rather than assumed, by perturbing a scratch copy of the package:
+
+| perturbation | result |
+|---|---|
+| `surface.default_coverage_tolerance` 0.6 -> 0.6006 × the voxel diagonal (+0.1%) | 8 of 15 tests fail (both bones' areas and frames, both thickness blocks) |
+| the same, 0.6 -> 0.62 (+3%) | 11 of 15 fail (every area, frame, thickness and thinnest-point golden) |
+| `Tibia(central_fraction=)` 0.2 -> 0.205 and `Femur(weightbearing_fraction=)` 0.6 -> 0.61 | 12 of 15 fail, this time including the three share goldens |
+
+The share goldens surviving the first perturbation is the point of them: the central region
+holds 20% and the thirds 33.3% of their own tAB *by construction*, whatever the coverage rule
+does to the areas. The two thinnest-point goldens survive the second: that search runs on the
+union of the regions, not on their boundaries.
+
+**A cohort report script**, `scripts/report_knee_cartilage_cohort.py`, so the numbers quoted in
+this document and in `CLAUDE.md` are re-derivable instead of trusted. House style of
+`compute_knee_cartilage_thickness.py`: `-i` takes files and/or directories, `-o` a directory,
+`--workers` fans out over the CPUs, every scan is measured in a try/except so one bad scan
+cannot abort the cohort, and the scan's `scan_qc_flags` string rides along in a `qc_flags`
+column. By default the statistics cover the scans that measured *and* carry no QC flag (93 of
+the 96 `dfg_knees`); `--include-flagged` and `--exclude <scan> ...` reproduce an older set
+(the tibial table above was computed over 94 scans:
+`--include-flagged --exclude K7_90_belastet K11_90_belastet`). It writes four files:
+`scan_metrics.csv` (long: one row per scan × bone × region, plus the aggregates `plate_left` /
+`plate_right` / `cf_left` / `cf_right` / `whole`), `scan_geometry.csv` (long: one row per scan ×
+geometry or QC scalar), `cohort_summary.csv` (long: one row per statistic -- `table, scope,
+region, unit, n, mean, sd, min, max, p50, p90, paper`, every number in the report among them)
+and `report.md` (the Table I / Table II analogues against the paper's published values, the
+area and thickness tables, the reproducibility tables and a QC section). Reproducibility is
+reported as **spread, not precision**, with that stated in the output: loaded vs unloaded is
+one pair per subject and angle (45), the flexion spread the SD across the angles of one subject
+and load (24 series), and the knee is repositioned and reloaded between them -- the paper's
+19-84 µm test-retest rms SD is a different quantity. The pooled rows cover the 20 subregions
+only (pooling the aggregates too would double-count them), which is the convention the figures
+in this document use -- 45 pairs × 20 subregions = the 900 `aMe` differences quoted in step 4.
+Its aggregation half is unit-tested without any data in
+`tests/unit/test_knee_cohort_report_script.py`.
+
+**What the full run found** (all 96 scans, 14 workers, ~3.5 minutes). Everything in this
+document and in `CLAUDE.md` reproduced, to the decimal quoted, except six items, all now
+corrected in place above: the whole-bone `aMe` per flexion angle (1.81-1.87 / 2.33-2.40 ->
+**1.80-1.87 / 2.34-2.41**, because an aggregate's `aMe` has to weight each direction by its
+own area -- see the step-4 bullet), the femoral thirds' thickness CV across a flexion series
+(quoted 2-5%, actually 4.1-8.4%), the loaded-vs-unloaded cF tAB difference
+(1.0/1.3% -> 0.93/1.22%), the flexion SD of each third's share (0.05-0.23 pp -> 0.07-0.22),
+step 1's tAB ranges (measured on a handful of knees, not the cohort) and step 4's `aMin`
+sentence (correct, but it is the **tAB** family in a bullet whose other names are cAB, and the
+tAB zeros are a convention rather than evidence -- see open issue 2). Per-scan timings are machine-dependent
+and not a discrepancy: this workstation does a subdivision in 1.2 s (tibia) / 1.9 s (femur) and
+a whole knee including both thickness measurements in ~15 s single-process, against the ~3 s
+and ~20 s recorded earlier. Confirmed unchanged, among others: the tibial Table I shares and
+their SDs, the femoral thirds, cF tAB 548 ± 101 / 542 ± 82 mm², the notch-to-posterior extent
+30.1 ± 3.4 mm, the trochlea and posterior-condyle areas, the whole femoral tAB 5225 (4266-6445),
+every subregion's `aMe` mean and SD, the 900-pair
+loaded-vs-unloaded `aMe` median 0.085 mm / p90 0.278 / max 1.13, the flexion `aMe` SD median
+0.117 mm and CV 5.7%, the extension zones' 6.5-7.8% area CV, the QC counts and distances
+(K7_90_belastet 49% of its tibial cartilage beyond 6 mm, max 45 mm; its tibial cartilage 26% of
+the unloaded scan's; 15 mm² of dropped islands against a cohort median of 0.15), the smallest
+plate ratio 0.614 (`K1_90_belastet`, on the covered areas `find_plates` compares; 0.636 on the
+filled tAB), the minimum anterior-direction |cos| 0.805, the patient-right plate being the
+larger in 79 of 94, and K1 losing 33% of its tibial cartilage voxels from 0 to 90°.

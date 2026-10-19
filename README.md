@@ -33,7 +33,14 @@ whole-leg CT, plus a FastAPI service and batch-processing scripts.
 - **`api/`** — a FastAPI service that ingests DICOM uploads / Orthanc callbacks
   and dispatches inference + measurement jobs to docker images.
 - **`scripts/`** — self-contained batch-processing scripts (hard-coded data
-  paths; adapt before running elsewhere).
+  paths; adapt before running elsewhere). A few are proper CLIs, e.g.
+  `compute_knee_cartilage_thickness.py` (per-subregion knee cartilage thickness
+  + 3D renderings) and `report_knee_cartilage_cohort.py`, which regenerates the
+  `dfg_knees` cohort tables quoted in `CLAUDE.md` and
+  `docs/wirth_eckstein_2008_plan.md` (Wirth & Eckstein Table I / II analogues,
+  region areas, thickness per subregion, loaded-vs-unloaded and across-flexion
+  spread, QC summary) into CSVs plus a markdown report and a `.meta.json`
+  recording the commit it was produced at.
 - **`frontend/`** — the Next.js 15 / React 19 web UI for the API (DICOM upload,
   job dispatch, and interactive landmark editing of results). The torsion viewer
   uses **Cornerstone3D** to render the NIfTI volumes directly (see "Running the
@@ -54,7 +61,10 @@ MORPH_UPDATE_GOLDEN=1 pytest      # (re)capture golden baselines
 ```
 
 Tests skip cleanly when sample data is absent. Data paths can be overridden via
-`MORPH_AUGSBURG_PA000001`, `MORPH_NAKO_SAMPLE_DIR`, `MORPH_CT_SAMPLE`.
+`MORPH_AUGSBURG_PA000001`, `MORPH_AUGSBURG_READER_STUDY`, `MORPH_NAKO_SAMPLE_DIR`,
+`MORPH_CT_SAMPLE`, `MORPH_DFG_KNEES_DIR` (the knee cartilage goldens; marker
+`needs_dfg_knees`). The data-requiring markers are `needs_augsburg`,
+`needs_augsburg_reader_study`, `needs_nako`, `needs_ct` and `needs_dfg_knees`.
 
 ## Running the stack
 
