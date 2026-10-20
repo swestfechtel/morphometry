@@ -182,3 +182,71 @@ unsampled), and a slice through the axis — only 18 of 200 rays fall in it, rea
 40.2° / 44.9°, which is why cone edges drawn from in-slice rays in
 `plot_subchondral_2d.py` look narrower than 45° even with no rays lost. The GIF places
 the rays one at a time.
+
+## Knee cartilage subregions (real data): `plot_knee_zones.py`
+
+The Wirth & Eckstein 2008 subregions (`docs/wirth_eckstein_2008_plan.md` steps 1-5)
+rendered on real `dfg_knees` segmentations, using the library's own plotting API
+(`Tibia.plot_regions` / `Femur.plot_regions` / `plot_knee_segments` /
+`plot_knee_thickness` / `plot_thinnest_point`) and its own colour tables
+(`TIBIA_SUBREGIONS` / `FEMUR_SUBREGIONS`), so a figure cannot disagree with the
+numbers. Every tunable the figures depend on — the central share, the
+weight-bearing fraction, the bone labels — is read off the library signatures.
+
+```bash
+python docs/illustrations/plot_knee_zones.py            # all figures -> out/knee_zones/
+python docs/illustrations/plot_knee_zones.py --figures tibia femur --no-html
+python docs/illustrations/plot_knee_zones.py --scan K2_0_unbelastet --flexion-scan K2_90_unbelastet
+python docs/illustrations/plot_knee_zones.py --animate   # + turntable GIF/MP4 per figure
+```
+
+`--data-dir` (or `MORPH_DFG_KNEES_DIR`) points at the segmentations, `-o/--out`
+at the output directory (default `out/knee_zones`, which is gitignored — these are
+regenerable renders, like the subchondral ones above), `--size W H` sets the PNG
+size (default 1600x1200 for the whole figure), `--no-html` skips the interactive
+exports and `--allow-flagged` permits the three QC-flagged scans
+(`K7_90_belastet`, `K8_90_belastet`, `K11_90_belastet`), which are refused by
+default because a figure drawn from one of them illustrates the defect.
+
+| `--figures` | shows |
+| --- | --- |
+| `tibia` | the tibial tAB from superior (paper Fig. 5A), both plates, with the central ellipse, the two ±45° wedge planes, the internal (blue) / anterior (red) directions and one label per region |
+| `femur` | the femoral tAB from inferior (paper Fig. 6A) and from posterior, with the femoral frame's axes, the trochlear notch, the notch plane and each condyle's 60% posterior border |
+| `both` | both bones in one scene: the labelled tAB next to the cartilage voxels the labels were transferred to |
+| `thickness` | each tAB face-on as a thickness heatmap on one shared 0–max mm scale, plus a second figure painting the 0 mm (denuded / rim) triangles magenta |
+| `flexion` | the same knee at 0° and 90°: the raw pose, then both subdivisions in their own bone frames with the region shares printed — the visual proof that the regions no longer move with flexion |
+| `thinnest` | the thinnest-point arrows for the whole knee and both compartments |
+
+Every panel carries the RAS orientation marker (R = patient right), and the
+region keys are the **patient-side** ones the code uses (`clt` … `prt`, `iclf` …
+`prf`). They are not relabelled medial/lateral: the `dfg_knees` laterality is
+unrecorded (plan open issue 3). `--laterality left|right` passes an explicit
+assumption to the library, which then adds the paper's medial/lateral names in
+brackets; the figure titles mark it as an assumption.
+
+The script also prints the numbers the figures must agree with — each tibial
+central region is exactly 20% of its plate's tAB, each femoral third ~33.3% of
+its condyle's weight-bearing tAB, and the patient-left plate is the one with the
+smaller RAS world x — plus the region-transfer QC and `scan_qc_flags`.
+
+Scenes that are a single renderer are also written as self-contained rotatable
+HTML (same mechanism as `compute_knee_cartilage_thickness.py --html`). PyVista's
+HTML exporter carries one renderer, so a multi-panel figure cannot be exported as
+one interactive scene; the two comparison figures instead re-draw each panel on
+its own (`flexion_*_<scan>.html`, at the panel's shared magnification) and write a
+`flexion_*.html` that puts them side by side in iframes. Every run also writes an
+**`index.html`** gallery of that run — still, turntable and links per figure — so
+the output is one page to open rather than a directory listing.
+
+`--animate` additionally films a turntable of every figure drawn: each panel spins
+a full revolution **about its own anatomical up vector**, not about a shared world
+axis, because the panels of a comparison figure are posed in their own bone frames
+and a common axis would swing them out of step. The focal point, distance and
+parallel scale are held, so the anatomy neither drifts nor changes size as it
+turns — and the 0° / 90° comparison then holds up through the whole rotation, not
+just at the one viewpoint the still was taken from. `--frames` (default 48) and
+`--fps` (default 16) set the revolution; each figure gets a `.gif` (half linear
+size, since a full-size 48-frame GIF runs to tens of MB for no extra legibility)
+and, where `ffmpeg` is on `PATH`, a full-size inter-frame-compressed `.mp4`.
+`ffmpeg` is called as a subprocess rather than through `imageio-ffmpeg`, which is
+not in `requirements.txt`. A full `--animate` run is ~12 min and ~160 MB.

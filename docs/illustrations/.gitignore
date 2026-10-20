@@ -9,3 +9,32 @@ subchondral_axis_comparison_*.html
 
 # Batch case gallery (render_case_gallery.py) — inspection artifacts, regenerable
 cases/
+
+# plot_knee_zones.py writes to out/knee_zones/ (gitignored at the repo root), but
+# keep a guard here in case someone points --out at this directory.
+knee_regions*.png
+knee_regions*.html
+knee_thickness*.png
+knee_thickness*.html
+knee_thinnest*.png
+knee_thinnest*.html
+tibia_regions_*.png
+tibia_regions_*.html
+femur_regions_*.png
+femur_regions_*.html
+flexion_*.png
+flexion_*.html
+# --animate turntables and the per-run gallery
+knee_regions*.gif
+knee_regions*.mp4
+knee_thickness*.gif
+knee_thickness*.mp4
+knee_thinnest*.gif
+knee_thinnest*.mp4
+tibia_regions_*.gif
+tibia_regions_*.mp4
+femur_regions_*.gif
+femur_regions_*.mp4
+flexion_*.gif
+flexion_*.mp4
+index.html
