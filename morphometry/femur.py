@@ -2,7 +2,7 @@ import math
 import numpy as np
 import nibabel as nib
 from matplotlib import pyplot as plt
-from scipy.ndimage import center_of_mass
+from scipy.ndimage import center_of_mass, label
 from scipy.optimize import curve_fit
 from skimage.measure import find_contours
 from morphometry.hip import get_femoral_head_center, get_femoral_head_center_ct
@@ -10,7 +10,7 @@ from morphometry.utils import rotate_mask_dorsal_points, find_notch, transform_p
     get_contour, circle_fit, draw_circle, draw_line, extract_connected_components_2d
 from morphometry.image_io import Image, Segmentation, reflect_image_left_right, split_ct_image
 from morphometry import constants as C
-from morphometry.geometry import mirror_index_x
+from morphometry.geometry import mirror_index_x, validate_in_plane_isotropy
 from typing import Tuple
 
 
@@ -369,13 +369,23 @@ def get_femoral_neck_base(hip_image: Image, femoral_head_centre: np.ndarray, seg
     level reads +5.6 degrees high with ICC2 0.85, against 0-5 mm levels (bias -1.2 to +2.2, ICC2 up to
     0.94) -- the raters place the point just above the trochanter, as described. The Augsburg hips cannot
     tell offsets up to 10 mm apart, since they all select the same slice there.
+
+    Two kinds of broken neck geometry are rejected here outright, because they leave no angle to
+    measure: a level at or above the femoral head centre (the existing
+    ``C.MURPHY_NECK_BASE_MIN_HEAD_DISTANCE_MM`` gate) and a head-to-base axis whose axial-plane
+    projection is shorter than one in-plane voxel, i.e. the two landmarks are not even resolved
+    apart in the plane whose direction *is* the measurement. Everything else that merely looks
+    wrong -- a short (ill-conditioned) axis, a base level inside the fitted head sphere, a base
+    centroid outside the bone, a base slice made of several pieces -- is left to
+    :func:`murphy_neck_base_qc`, which flags it without changing the number.
     :param hip_image: An Image object of the hip segmentation mask.
     :param femoral_head_centre: The centre of the femoral head (voxel index).
     :param segmentation_label: The label of the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
     :return: The centre of the base of the femoral neck, ``(x, y, layer)`` with ``x`` and ``y`` continuous.
     :raises RuntimeError: If the level is less than ``C.MURPHY_NECK_BASE_MIN_HEAD_DISTANCE_MM`` below the
-        head centre (a mis-detected trochanter), or holds no femur.
+        head centre (a mis-detected trochanter), holds no femur, or lies less than one in-plane voxel
+        from the head centre in the axial plane (no in-plane direction is resolved).
     """
     _, superior_layer = _find_trochanter_minor(hip_image=hip_image, femoral_head_centre=femoral_head_centre,
                                                segmentation_label=segmentation_label, isotropic=isotropic)
@@ -393,7 +403,242 @@ def get_femoral_neck_base(hip_image: Image, femoral_head_centre: np.ndarray, seg
         raise RuntimeError('No femur on the neck-base slice above the trochanter minor.')
 
     center = center_of_mass(array[:, :, level])
-    return np.array([center[0], center[1], float(level)])
+    base = np.array([center[0], center[1], float(level)])
+
+    # The torsion is the in-plane *direction* of head centre -> neck base, so a projection shorter
+    # than one voxel carries no direction at all: the two landmarks are the same point at the
+    # sampling resolution. This is a distance in the index grid, so it needs no isotropy
+    # assumption, and it is independent of the gate above, which is on the z drop -- a perfectly
+    # vertical neck clears that gate and lands here. On the 1887 measurable Augsburg / NaKo image
+    # halves it never fires (shortest axis 6.4 voxels); it is untested on CT (no data available).
+    if float(np.hypot(base[0] - femoral_head_centre[0], base[1] - femoral_head_centre[1])) < 1.0:
+        raise RuntimeError('The femoral head centre and the neck base are less than one in-plane '
+                           'voxel apart in the axial plane; the neck axis has no direction.')
+    return base
+
+
+def _significant_components(section: np.ndarray, ratio: float = 0.1) -> int:
+    """Count the connected pieces of a binary slice, ignoring specks.
+
+    Full (8-)connectivity, and only components worth at least ``ratio`` of the largest count --
+    the rule ``scripts/process_nmdid.py::qc_flags`` uses on whole bones: a single stray voxel
+    diagonally off the cortex is a labelling speck and moves no centroid, whereas a piece worth a
+    tenth of the section is a second lump of bone.
+    :param section: A binary 2D slice.
+    :param ratio: Minimum size of a counted component as a fraction of the largest one.
+    :return: The number of components at or above that size (0 for an empty slice).
+    """
+    labelled, count = label(section, np.ones((3, 3), dtype=bool))
+    if count <= 1:
+        return int(count)
+    sizes = np.bincount(labelled.ravel())[1:]
+    return int(np.count_nonzero(sizes >= ratio * sizes.max()))
+
+
+def murphy_neck_base_qc(hip_image: Image, femoral_head_centre: np.ndarray, neck_base: np.ndarray,
+                        head_radius: float | None = None, segmentation_label: int = 1) -> dict:
+    """
+    Describe how trustworthy one Murphy neck-base landmark is, without changing it.
+
+    Murphy's femoral-torsion axis is short (~30 mm in the axial plane on the Augsburg hip MRI,
+    ~29 mm on the NaKo hips), so a neck base a few millimetres out of place is a large angular
+    error, and the measurement looks perfectly plausible when it happens.
+    :func:`get_femoral_neck_base` rejects only the two geometries that leave no angle to measure
+    at all (a level at or above the head centre, and an axis shorter than one in-plane voxel);
+    this function reports the degenerate geometries that still produce a number, so a cohort run
+    can mark the row instead of silently trusting it. Nothing here is repaired: a flagged neck is
+    still measured, and the returned landmark is the one the measurement used.
+
+    The flags, in the ``name:value`` / ``;``-joined format of ``scripts/process_nmdid.py``'s
+    ``qc_flags`` column:
+
+    * ``murphy_axis_short:<mm>`` -- the axial-plane head-to-base axis is shorter than
+      ``1 / tan(C.MURPHY_AXIS_ANGLE_TOLERANCE_DEG)`` in-plane voxels, i.e. one voxel of landmark
+      error would tilt the axis by more than that tolerance (see the constant for the derivation
+      and its disclosure). ``<mm>`` is the axis length.
+    * ``murphy_base_in_head:<mm>`` -- the neck base lies inside the fitted femoral head sphere,
+      which no femoral neck base does: the trochanter was found far too proximal. The test is the
+      full 3-D distance from the head centre (in mm, all three spacings) against ``head_radius``,
+      not the superior-inferior drop alone: a horizontal neck (coxa valga, a large in-plane offset
+      and a small drop) is well outside the sphere and must not be flagged for it. ``<mm>`` is how
+      far inside the sphere the base sits. Skipped when no ``head_radius`` is given.
+    * ``murphy_base_outside_bone:<mm>`` -- the base centroid does not fall on a femur voxel, so
+      the base slice's section is not one compact cross-section the centroid can represent.
+      ``<mm>`` is the distance to the nearest femur voxel centre on that slice.
+    * ``murphy_base_slice_multipart:<n>`` -- the femur on the base slice is ``n`` disconnected
+      pieces (:func:`_significant_components`, so a one-voxel speck does not count), and the
+      centroid is then an average over disjoint bone rather than a neck centre. A real neck in two
+      pieces (a hole in the segmentation) can still have its centroid near the neck centre, so
+      this flags rather than raises.
+
+    :param hip_image: The Image the landmark was found in (the Murphy ``hip_image``; for CT the
+        hip crop :func:`get_proximal_reference_line_ct` builds, which shares the femur image's
+        geometry). Only its spacing and the base slice of its array are read.
+    :param femoral_head_centre: The femoral head centre as a (continuous) voxel index.
+    :param neck_base: The neck base as returned by :func:`get_femoral_neck_base`.
+    :param head_radius: The fitted femoral head radius in in-plane voxels (the ``r_fh`` of
+        :func:`get_proximal_reference_line`), or ``None`` to skip ``murphy_base_in_head``.
+    :param segmentation_label: The label of the femur in the segmentation mask.
+    :return: ``{'axis_length_mm', 'axis_length_voxels', 'angle_per_voxel_deg', 'head_clearance_mm',
+        'base_distance_to_bone_mm', 'base_in_bone', 'base_slice_components', 'flags'}``, where
+        ``head_clearance_mm`` is the base's distance outside the head sphere (negative = inside it,
+        ``None`` without a ``head_radius``) and ``flags`` is the ``;``-joined flag string (``''``
+        when the neck looks sound). Every entry is a scalar invariant under the left-right mirror,
+        except that the ``base_in_bone`` lookup breaks an exactly half-integer centroid towards
+        ``+x`` on both sides (``floor(x + 0.5)``; the mirror of that rule would be
+        ``ceil(x - 0.5)``), so a centroid landing exactly on a voxel boundary *at the edge of the
+        mask* could in principle read differently in the mirrored frame. Otherwise the dict may be
+        computed in the reflected frame a right image half is measured in.
+    :raises ValueError: If the image's two in-plane voxel edges differ -- the axis length and the
+        flag threshold are in in-plane voxels, which is only a length if those agree (and on such
+        a dataset the torsion itself is refused, see
+        :func:`morphometry.geometry.validate_in_plane_isotropy`) -- or if the base slice holds no
+        femur at all (``neck_base`` cannot be a centroid of it; :func:`get_femoral_neck_base`
+        rejects that case before returning).
+    """
+    validate_in_plane_isotropy(hip_image.spacing, 'hip image (Murphy neck-base QC)')
+    spacing = np.abs(np.asarray(hip_image.spacing, dtype=float))
+    head = np.asarray(femoral_head_centre, dtype=float)
+    base = np.asarray(neck_base, dtype=float)
+    level = int(round(float(base[2])))
+
+    # in-plane voxels: equal x/y spacing is guaranteed above, so this is a length in voxel edges
+    axis_voxels = float(np.hypot(base[0] - head[0], base[1] - head[1]))
+    metrics = {
+        'axis_length_mm': axis_voxels * float(spacing[0]),
+        'axis_length_voxels': axis_voxels,
+        # how far one in-plane voxel of landmark error turns the axis
+        'angle_per_voxel_deg': float(np.degrees(np.arctan2(1.0, axis_voxels))),
+        'head_clearance_mm': None,
+    }
+    if head_radius is not None:
+        # the full 3-D distance in mm, so a neck that runs sideways rather than down is not
+        # mistaken for one that starts inside the head
+        offset_mm = (base - head) * spacing
+        metrics['head_clearance_mm'] = float(np.linalg.norm(offset_mm)) - float(head_radius) * float(spacing[0])
+
+    array = np.where(hip_image.array == segmentation_label, 1, 0)
+    section = array[:, :, level]
+    points = np.argwhere(section)
+    if not len(points):
+        raise ValueError('The Murphy neck-base slice holds no femur, so the given neck base is '
+                         'not its centroid; the QC has nothing to describe.')
+    index = (int(np.floor(base[0] + .5)), int(np.floor(base[1] + .5)))
+    metrics['base_in_bone'] = bool(0 <= index[0] < section.shape[0] and 0 <= index[1] < section.shape[1]
+                                   and section[index])
+    metrics['base_distance_to_bone_mm'] = float(np.min(np.hypot(
+        (points[:, 0] - base[0]) * spacing[0], (points[:, 1] - base[1]) * spacing[1])))
+    metrics['base_slice_components'] = _significant_components(section)
+
+    flags = []
+    if axis_voxels < 1.0 / math.tan(math.radians(C.MURPHY_AXIS_ANGLE_TOLERANCE_DEG)):
+        flags.append(f"murphy_axis_short:{metrics['axis_length_mm']:.2f}")
+    if metrics['head_clearance_mm'] is not None and metrics['head_clearance_mm'] < 0:
+        flags.append(f"murphy_base_in_head:{-metrics['head_clearance_mm']:.2f}")
+    if not metrics['base_in_bone']:
+        flags.append(f"murphy_base_outside_bone:{metrics['base_distance_to_bone_mm']:.2f}")
+    if metrics['base_slice_components'] > 1:
+        flags.append(f"murphy_base_slice_multipart:{metrics['base_slice_components']}")
+    metrics['flags'] = ';'.join(flags)
+    return metrics
+
+
+#: Reason codes for ``murphy_landmark_failed``, matched against the exception message in order.
+#: All of the Murphy landmark's own failures are ``RuntimeError``, so the type alone says nothing,
+#: and this is the flag family with the highest rate by far: 241 of the 2128 Augsburg / NaKo image
+#: halves have no Murphy landmark at all, as ``trochanter_implausible`` (109),
+#: ``trochanter_no_components`` (69), ``base_at_head_level`` (36, the
+#: ``MURPHY_NECK_BASE_MIN_HEAD_DISTANCE_MM`` gate), ``shaft_not_found`` (21) and 6 missing files.
+#: The codes carry no ``,`` or ``;``, so they are safe in the CSV columns.
+_LANDMARK_FAILURE_REASONS = (
+    ('no two components found', 'trochanter_no_components'),
+    ('components too small', 'trochanter_components_too_small'),
+    ('no plausible candidates', 'trochanter_implausible'),
+    ('plausible trochanter minor', 'trochanter_not_found'),
+    ('Could not find the femoral shaft', 'shaft_not_found'),
+    ('too close to', 'base_at_head_level'),
+    ('one in-plane voxel', 'axis_unresolved'),
+    ('lies above the image', 'level_above_image'),
+    ('No femur on the neck-base slice', 'no_femur_on_level'),
+    ('holds no femur', 'no_femur_on_level'),
+    ('in-plane voxel spacing', 'anisotropic_in_plane'),
+)
+
+
+def _landmark_failure_flag(exc: BaseException) -> str:
+    """Turn a failed Murphy landmark search into one ``murphy_landmark_failed`` flag.
+
+    :param exc: The exception the landmark search raised.
+    :return: ``murphy_landmark_failed:<reason>``, where ``<reason>`` is the matching code from
+        :data:`_LANDMARK_FAILURE_REASONS` or, for anything unrecognised, the exception's type name
+        (so a new failure mode is still visible, just unnamed).
+    """
+    message = str(exc)
+    for marker, reason in _LANDMARK_FAILURE_REASONS:
+        if marker in message:
+            return f'murphy_landmark_failed:{reason}'
+    return f'murphy_landmark_failed:{type(exc).__name__}'
+
+
+def get_murphy_neck_qc(hip_image: Image, side: str = 'left', segmentation_label: int = 1,
+                       x_ratio: float = 1., isotropic: bool = False) -> str:
+    """
+    QC flags for the Murphy femoral-neck landmarks of one hip MRI image half.
+
+    The entry point the batch scripts use: it resolves the Murphy reference line exactly as
+    :func:`morphometry.measurements.femur.calculate_femoral_torsion` and
+    :func:`morphometry.measurements.hip.calculate_anteversion` do (so the flags describe the neck
+    those measurements actually used) and hands the landmarks to :func:`murphy_neck_base_qc`. The
+    reference line is resolved a second time rather than threaded through the measurement
+    functions, which keeps their signatures and return types untouched; the cost is one extra
+    femoral-head fit and trochanter search per image half.
+
+    A right image half is measured as the left-right reflection of a left one, and every quantity
+    :func:`murphy_neck_base_qc` reports is mirror-invariant, so the flags are the same whichever
+    frame they are computed in.
+    :param hip_image: An Image object of the proximal-femur segmentation mask (one image half).
+    :param side: Side of the image (not patient!), either 'left' or 'right'.
+    :param segmentation_label: The label of the femur in the segmentation mask.
+    :param x_ratio: Correction factor for slice thickness (as passed to the measurement).
+    :param isotropic: Whether the image has isotropic voxels.
+    :return: The ``;``-joined flag string, ``''`` when the neck looks sound, or
+        ``murphy_landmark_failed:<reason>`` when the landmark search itself failed (the measurement
+        is then NaN too; see :func:`_landmark_failure_flag` for the reason codes).
+    """
+    try:
+        start, end, r_fh = get_proximal_reference_line(hip_image, side=side, method='murphy',
+                                                       segmentation_label=segmentation_label,
+                                                       x_ratio=x_ratio, isotropic=isotropic)
+        return murphy_neck_base_qc(hip_image, start, end, head_radius=r_fh,
+                                   segmentation_label=segmentation_label)['flags']
+    except Exception as exc:
+        # a QC helper must never cost its caller a measurement, and two call sites
+        # (the Augsburg scripts, compute_torsion.py) run it outside any try block
+        return _landmark_failure_flag(exc)
+
+
+def get_murphy_neck_qc_ct(femur_image: Segmentation, side: str = 'left', segmentation_label: int = 1) -> str:
+    """
+    QC flags for the Murphy femoral-neck landmarks of one whole-leg CT image half.
+
+    The CT counterpart of :func:`get_murphy_neck_qc`: it repeats the proximal-femur crop and
+    landmark search of :func:`get_proximal_reference_line_ct` (through the shared
+    :func:`_ct_proximal_landmarks`) so the flags describe the neck
+    :func:`morphometry.measurements.femur.calculate_femoral_torsion_ct` measured.
+    :param femur_image: A Segmentation object of the femur (whole-leg) mask, one image half.
+    :param side: Side of the image (not patient!), either 'left' or 'right'.
+    :param segmentation_label: The label of the femur in the segmentation mask.
+    :return: The ``;``-joined flag string, ``''`` when the neck looks sound, or
+        ``murphy_landmark_failed:<reason>`` (see :func:`_landmark_failure_flag`). Never raises.
+    """
+    try:
+        image = reflect_image_left_right(femur_image) if side == 'right' else femur_image
+        hip_image, fhc, r_fh, base = _ct_proximal_landmarks(image, segmentation_label)
+        return murphy_neck_base_qc(hip_image, fhc, base, head_radius=r_fh,
+                                   segmentation_label=segmentation_label)['flags']
+    except Exception as exc:
+        return _landmark_failure_flag(exc)
+
 
 def get_trochanter_major_center(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1) -> Tuple[np.ndarray, float]:
     """
@@ -477,6 +722,39 @@ def get_proximal_reference_line(hip_image: Image, side: str = 'left',
     start: np.ndarray = np.array([center[0], center[1], center[2]])
     return (start, end, r_fh, r_tm) if method == 'tomczak' else (start, end, r_fh)
 
+def _ct_proximal_landmarks(femur_image: Segmentation, segmentation_label: int = 1) -> Tuple[Segmentation, np.ndarray, float, np.ndarray]:
+    """
+    Resolve the proximal-femur crop and the Murphy landmarks of a left CT image half.
+
+    Shared by :func:`get_proximal_reference_line_ct` and :func:`get_murphy_neck_qc_ct` so the QC
+    flags describe exactly the landmark the measurement used. Written for a left image half, like
+    everything the femoral torsion builds on; callers reflect a right half first.
+    :param femur_image: A Segmentation object of the femur (whole-leg) mask, one image half.
+    :param segmentation_label: The label of the femur in the segmentation mask.
+    :return: ``(hip_image, femoral_head_centre, head_radius, neck_base)`` -- the proximal 30% of
+        the femur as its own Segmentation (same geometry as ``femur_image``), the head centre as a
+        continuous voxel index, the head radius in in-plane voxels, and the Murphy neck base.
+    """
+    r_fh, fhc = get_femoral_head_center_ct(femur_image, segmentation_label, 'left')
+    tmp = fhc + np.array([r_fh, 0, 0])  # rationale: point on the surface of the femoral head in arbitrary direction
+
+    fhc = femur_image.transform_physical_point_to_index(fhc)
+    tmp = femur_image.transform_physical_point_to_index(tmp)  # transform that point to index space
+    r_fh = np.linalg.norm(fhc - tmp)  # recalculate radius in index space
+
+    hip_start = np.min(np.argwhere(femur_image.array == segmentation_label)[:, 2])
+    femur_end = np.max(np.argwhere(femur_image.array == segmentation_label)[:, 2])
+    num_femur_slices = femur_end - hip_start + 1
+    hip_end = hip_start + int(num_femur_slices * 0.30)  # take 30% of the femur length to find the femoral neck base
+
+    mask = np.where(femur_image.array == segmentation_label, 1, 0)
+    mask[:, :, :hip_start] = 0
+    mask[:, :, hip_end:] = 0
+
+    hip_image = Segmentation.from_nibabel(nib.Nifti1Image(mask, femur_image.affine, femur_image.header))
+    return hip_image, fhc, float(r_fh), get_femoral_neck_base(hip_image, fhc, segmentation_label, False)
+
+
 def get_proximal_reference_line_ct(femur_image: Segmentation, side: str = 'left', segmentation_label: int = 1) -> Tuple[np.ndarray, np.ndarray]:
     """
     Get the proximal reference line of a CT femur segmentation for calculating the femoral torsion.
@@ -501,24 +779,7 @@ def get_proximal_reference_line_ct(femur_image: Segmentation, side: str = 'left'
                                                     segmentation_label=segmentation_label)
         return mirror_index_x(start, width), mirror_index_x(end, width)
 
-    r_fh, fhc = get_femoral_head_center_ct(femur_image, segmentation_label, side)
-    tmp = fhc + np.array([r_fh, 0, 0])  # rationale: point on the surface of the femoral head in arbitrary direction
-
-    fhc = femur_image.transform_physical_point_to_index(fhc)
-    tmp = femur_image.transform_physical_point_to_index(tmp)  # transform that point to index space
-    r_fh = np.linalg.norm(fhc - tmp)  # recalculate radius in index space
-
-    hip_start = np.min(np.argwhere(femur_image.array == segmentation_label)[:, 2])
-    femur_end = np.max(np.argwhere(femur_image.array == segmentation_label)[:, 2])
-    num_femur_slices = femur_end - hip_start + 1
-    hip_end = hip_start + int(num_femur_slices * 0.30)  # take 30% of the femur length to find the femoral neck base
-
-    mask = np.where(femur_image.array == segmentation_label, 1, 0)
-    mask[:, :, :hip_start] = 0
-    mask[:, :, hip_end:] = 0
-
-    hip_image = Segmentation.from_nibabel(nib.Nifti1Image(mask, femur_image.affine, femur_image.header))
-    end = get_femoral_neck_base(hip_image, fhc, segmentation_label, False)
+    _, fhc, _, end = _ct_proximal_landmarks(femur_image, segmentation_label)
 
     start: np.ndarray = np.array([fhc[0], fhc[1], fhc[2]])
     return start, end

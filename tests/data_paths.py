@@ -29,6 +29,17 @@ AUGSBURG_READER_STUDY = Path(
     )
 )
 
+# The Augsburg large-cohort directory: one ``<patient>/{hip,knee,ankle}_seg.nii.gz`` folder per
+# patient (the same layout as AUGSBURG_PA000001, which lives inside it). Used by the Murphy
+# neck-base QC characterization, whose degenerate cases (PA001127, PA000308) are in this cohort
+# but not in the 50-patient reader study.
+AUGSBURG_LARGE_DIR = Path(
+    os.environ.get(
+        "MORPH_AUGSBURG_LARGE_DIR",
+        "/home/simon/Data/Augsburg_large/preprocessed",
+    )
+)
+
 # Directory of NaKo hip MRI segmentations (isotropic; femur=1, cartilage=2,
 # acetabulum=3 — both image sides present in one mask).
 NAKO_SAMPLE_DIR = Path(

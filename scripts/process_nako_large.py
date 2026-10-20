@@ -5,7 +5,9 @@ mask) is stored in chunks ``<input-root>/chunk_<N>_segmentations``. For each cas
 halves are measured (CCD, Murphy antetorsion, alpha angle, acetabular anteversion, centre-edge
 angle, projected femoral offset, cartilage thickness) and written to
 ``<output-dir>/results_chunk_<N>.csv`` in the layout of the original cohort tables: one row per
-(Patient, Side), where Side is the PATIENT side (the image-left half is the patient's right).
+(Patient, Side), where Side is the PATIENT side (the image-left half is the patient's right), plus
+an appended ``qc_flags`` column holding the Murphy femoral-neck QC flags of that hip
+(:func:`morphometry.femur.murphy_neck_base_qc`; empty when the neck looks sound).
 A ``results_chunk_<N>.meta.json`` next to it records the git commit, date and arguments, so every
 table is traceable to the code that produced it. An existing chunk CSV is never overwritten unless
 ``--overwrite`` is given. Failures are caught per measurement and written as NaN.
@@ -37,6 +39,7 @@ import numpy as np
 from morphometry.measurements.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
     calculate_alpha_angle, calculate_acetabular_depth, calculate_center_edge_angle, \
     calculate_cartilage_thickness_knn, calculate_femoral_offset, calculate_femoral_offset_projected
+from morphometry.femur import get_murphy_neck_qc
 from morphometry.image_io import Segmentation, split_image_left_right
 
 DEFAULT_INPUT_ROOT = '/hpcwork/p0021834/workspace_simon/nako'
@@ -56,7 +59,8 @@ def _nan_result(patient_id: str, load_failed: bool = False) -> dict:
     return {'patient': patient_id, 'load_failed': load_failed, 'ccd_left': np.nan, 'ccd_right': np.nan, 'fat_left': np.nan, 'fat_right': np.nan,
             'aa_left': nan2, 'aa_right': nan2, 'aav_left': np.nan, 'aav_right': np.nan,
             'cea_left': np.nan, 'cea_right': np.nan, 'offset_left': np.nan, 'offset_right': np.nan,
-            'cartilage_thickness_left': nan4, 'cartilage_thickness_right': nan4}
+            'cartilage_thickness_left': nan4, 'cartilage_thickness_right': nan4,
+            'murphy_qc_left': '', 'murphy_qc_right': ''}
 
 
 def f(patient):
@@ -148,10 +152,21 @@ def f(patient):
         print(f"Error calculating cartilage thickness for right side of patient {patient.name}: {e}")
         cartilage_thickness_right = (np.nan, np.nan, np.nan, np.nan)
 
+    # QC of the Murphy neck landmarks behind AT_murphy: a short or mis-placed neck axis is a large
+    # angular error that the angle itself does not reveal. Flagged hips keep their measurement.
+    murphy_qc = {}
+    for side, half in (('left', mask_left), ('right', mask_right)):
+        try:
+            murphy_qc[f'murphy_qc_{side}'] = get_murphy_neck_qc(half, side, 1, isotropic=True)
+        except Exception as e:
+            print(f"Error QC-ing the Murphy neck for the {side} side of patient {patient.name}: {e}")
+            murphy_qc[f'murphy_qc_{side}'] = ''
+
     return {'patient': patient.name.split('.')[0], 'ccd_left': ccd_left, 'ccd_right': ccd_right,'fat_left': fat_left, 'fat_right': fat_right,
             'aa_left': aa_left, 'aa_right': aa_right, 'aav_left': aav[0], 'aav_right': aav[1],
             'cea_left': cea[0], 'cea_right': cea[1], 'offset_left': offset_left, 'offset_right': offset_right,
-            'cartilage_thickness_left': cartilage_thickness_left,'cartilage_thickness_right': cartilage_thickness_right}
+            'cartilage_thickness_left': cartilage_thickness_left,'cartilage_thickness_right': cartilage_thickness_right,
+            **murphy_qc}
 
 
 def build_table(results: list, patients: list) -> pd.DataFrame:
@@ -160,6 +175,12 @@ def build_table(results: list, patients: list) -> pd.DataFrame:
     One row per (Patient, Side) with Side the PATIENT side: the image-left half (``*_left``) is the
     patient's right. Values are rounded to one decimal. The bare ``Cartilage_thickness`` column is
     kept (empty) because the original files have it.
+
+    A ``qc_flags`` column is appended after those historical columns: the ``;``-separated
+    ``name:value`` flags of :func:`morphometry.femur.murphy_neck_base_qc` for that hip's Murphy
+    neck landmarks (empty when the neck looks sound). ``AT_murphy`` is written whether or not the
+    hip is flagged -- the flag says the antetorsion of that row should not be trusted without
+    looking at the mask, not that it was changed.
     :param results: Dicts as returned by :func:`f`.
     :param patients: Patient ids in row order.
     :return: The table, indexed by (Patient, Side).
@@ -191,6 +212,13 @@ def build_table(results: list, patients: list) -> pd.DataFrame:
         df.loc[(patient, 'left'), 'Cartilage_thickness (min)'] = round(x['cartilage_thickness_right'][2], 1)
         df.loc[(patient, 'right'), 'Cartilage_thickness (max)'] = round(x['cartilage_thickness_left'][3], 1)
         df.loc[(patient, 'left'), 'Cartilage_thickness (max)'] = round(x['cartilage_thickness_right'][3], 1)
+
+    # appended after the original columns so the historical layout is untouched up to here
+    df['qc_flags'] = ''
+    for x in results:
+        patient = x['patient']
+        df.loc[(patient, 'right'), 'qc_flags'] = x.get('murphy_qc_left', '')
+        df.loc[(patient, 'left'), 'qc_flags'] = x.get('murphy_qc_right', '')
 
     return df
 

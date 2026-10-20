@@ -4,6 +4,7 @@ import json
 import nibabel as nib
 import numpy as np
 
+from morphometry.femur import get_murphy_neck_qc
 from morphometry.image_io import Segmentation, split_image_left_right
 from morphometry.measurements.femur import calculate_femoral_torsion, get_femoral_torsion_landmarks
 from morphometry.measurements.tibia import calculate_tibial_torsion, get_tibial_torsion_landmarks
@@ -99,6 +100,19 @@ if __name__ == '__main__':
         landmarks_final['femur']['Murphy']['right']['knee_start'] = [0, 0, 0]
         landmarks_final['femur']['Murphy']['right']['knee_end'] = [0, 0, 0]
 
+    # QC of the Murphy neck landmarks, in the ';'-joined name:value format the batch scripts use
+    # (morphometry.femur.murphy_neck_base_qc): empty when the neck looks sound, otherwise the
+    # corresponding femoral_torsion_*_murphy is still reported but should not be trusted without
+    # looking at the mask. These keys are written to results.json but NOTHING IN THE API READS
+    # THEM: api/schemas/docker_io.py::ResultsModel has extra="ignore", and api/tasks/torsion.py
+    # reads results.json inside a TemporaryDirectory and persists only model_dump(), while the Job
+    # record carries no result payload at all -- so on the API path the flags are computed and
+    # discarded. They are only visible when this container is run by hand with a mounted output
+    # dir. Surfacing them in GET /jobs/{id} needs an API schema and DB change.
+    # get_murphy_neck_qc never raises (it reports a failed landmark as a flag), which is why these
+    # two calls can sit outside the try blocks without risking the whole container.
+    results['femoral_torsion_right_murphy_qc_flags'] = get_murphy_neck_qc(left_hip, side='left', x_ratio=x_ratio)
+
     try:
         torsion = calculate_femoral_torsion(right_hip, right_knee, side='right', method='lee', x_ratio=x_ratio,
                                             knee_spacing=knee_spacing)
@@ -148,6 +162,8 @@ if __name__ == '__main__':
         landmarks_final['femur']['Murphy']['left']['hip_end'] = [0, 0, 0]
         landmarks_final['femur']['Murphy']['left']['knee_start'] = [0, 0, 0]
         landmarks_final['femur']['Murphy']['left']['knee_end'] = [0, 0, 0]
+
+    results['femoral_torsion_left_murphy_qc_flags'] = get_murphy_neck_qc(right_hip, side='right', x_ratio=x_ratio)
 
     try:
         torsion = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2,

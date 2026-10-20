@@ -44,6 +44,7 @@ from scipy.ndimage import label as connected_components
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from morphometry.femur import get_murphy_neck_qc_ct
 from morphometry.image_io import Segmentation, split_ct_image, split_image_left_right
 from morphometry.measurements.femur import calculate_femoral_torsion_ct
 from morphometry.measurements.hip import (calculate_acetabular_anteversion, calculate_ccd_ct,
@@ -66,6 +67,9 @@ PELVIS_LABEL = 7
 # exact value between 1.2 and 1.6; the rim sits at roughly one radius by construction.
 ACETABULUM_RADIUS_FACTOR = 1.4
 
+# ``qc_flags`` carries both the segmentation-integrity flags of ``qc_flags()`` (a label in several
+# pieces, a missing bone) and the Murphy femoral-neck flags of ``murphy_qc()``; a flagged case is
+# measured and written as usual.
 FIELDNAMES = ['case', 'side', 'femoral_torsion', 'tibial_torsion', 'ccd', 'ccd_projected',
               'femur_length', 'tibia_length', 'femoral_offset', 'mechanical_axis_deviation',
               'hip_knee_ankle_angle', 'center_edge_angle', 'acetabular_version',
@@ -195,6 +199,28 @@ def qc_flags(array: np.ndarray) -> str:
     return ';'.join(flags)
 
 
+def murphy_qc(leg: Segmentation, side: str) -> str:
+    """QC-flag the Murphy femoral-neck landmarks of one leg, never raising.
+
+    Appended to this row's ``qc_flags``. A flag marks the femoral torsion of that row as
+    untrustworthy (the Murphy neck base is degenerate); it never changes the measured value, and
+    an unflagged row is bit-identical to one produced before the flags existed.
+    ``get_murphy_neck_qc_ct`` already reports a failed landmark search as a flag rather than
+    raising, so reaching the handler here means the QC itself is broken. That is logged at WARNING,
+    not debug: an empty ``qc_flags`` column must not be able to mean "the QC never ran".
+    :param leg: One cleaned single-leg Segmentation.
+    :param side: The image side, 'left' or 'right'.
+    :return: The ``;``-separated flag string, empty when the neck looks sound.
+    """
+    try:
+        return get_murphy_neck_qc_ct(leg, side=side, segmentation_label=FEMUR_LABEL)
+    except Exception as exc:  # QC must never cost a row
+        log.warning('Murphy neck QC itself failed (%s side): %s: %s -- qc_flags for this row is '
+                    'empty because the QC did not run, not because the neck is sound',
+                    side, type(exc).__name__, exc)
+        return ''
+
+
 def split_legs(seg: Segmentation) -> tuple:
     """Split a both-legs mask into cleaned left / right image halves and their union.
 
@@ -294,7 +320,11 @@ def measure_case(path: Path) -> list:
         row['center_edge_angle'] = both.get(f'center_edge_angle_{side}', np.nan)
         row['acetabular_version'] = both.get(f'acetabular_version_{side}', np.nan)
 
-        row['qc_flags'] = flags[side]
+        # Murphy's femoral-torsion axis is short, so a neck-base landmark a few millimetres out of
+        # place is a large angular error that looks perfectly plausible in the number. The flags say
+        # the femoral torsion of this row should not be trusted without looking at the mask; the
+        # value is still measured and written (see morphometry.femur.murphy_neck_base_qc).
+        row['qc_flags'] = ';'.join(f for f in (flags[side], murphy_qc(leg, side)) if f)
         row['failed'] = ';'.join(sorted(set(failures)))
         row['status'] = 'ok' if not failures else 'partial'
         row['seconds'] = round(time.time() - started, 1)

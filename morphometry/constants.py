@@ -118,6 +118,36 @@ FEMORAL_HEAD_CONSENSUS_MAX_ITERATIONS = 100
 #: or above 11 mm; 5 and 10 mm reject the same legs.
 MURPHY_NECK_BASE_MIN_HEAD_DISTANCE_MM = 10.0
 
+#: Angular tolerance, in degrees, that sets how short Murphy's head-to-base axis may become before
+#: the neck is flagged as ill-conditioned (``murphy_axis_short``, see
+#: :func:`morphometry.femur.murphy_neck_base_qc`). The torsion is the *direction* of that axis in
+#: the axial plane, so displacing either landmark by one in-plane voxel tilts it by
+#: ``atan(voxel / axis length)``; requiring that tilt to stay below this tolerance makes the
+#: minimum axis length ``1 / tan(tolerance)`` in-plane voxels (14.30 voxels at 4 degrees, i.e.
+#: 15.6 mm on the 1.09 mm Augsburg hip MRI, 14.3 mm on the 1 mm NaKo hips, 11.4 mm on 0.8 mm CT).
+#:
+#: **The threshold was placed using these cohorts' own axis-length distribution, so their flag rate
+#: is not an unbiased estimate of it.** What the data show: measured in in-plane voxels (the unit
+#: the landmark error is in), the Augsburg large cohort's shortest axes are 6.37, 11.67, 13.67,
+#: then 16.66, 16.84, 16.94 -- a 3.0-voxel gap -- so *every* tolerance from 3.44 to 4.18 degrees
+#: flags exactly those three halves and nothing more. 4 degrees sits in the middle of that window
+#: rather than at an arbitrary point. Pooled over all three cohorts the gap is not empty: the two
+#: NaKo halves at 14.50 and 15.95 voxels fall inside it, and both are the same hip, which
+#: ``murphy_base_in_head`` flags independently. Rates and specificity (Augsburg halves, against the
+#: 3.7% base rate of ``|z| > 2`` on the Murphy angle itself, mean 25.1, SD 15.6): 5 degrees flags
+#: 1 of 1887 halves at 26.8x enrichment, **4 degrees 3 at 17.9x**, 3 degrees 26 at 8.5x, 2.5
+#: degrees 161 at 3.2x. At 4 degrees two of the three are the two halves of PA001127 (Murphy -67.1
+#: and -31.8 degrees, ``|z|`` 5.9 and 3.7, the cohort's most negative values) and one is a
+#: plausible false alarm (PA000445 right, 20.2 degrees, ``|z|`` 0.3).
+#:
+#: **Zero reader-study halves are flagged at any tolerance >= 3 degrees** (their axis minimum is
+#: 20.28 voxels), and PA001127 is in the large cohort, not the 50-case reader set -- so **this gate
+#: cannot be adjudicated against the human readers at all**. 4 degrees is also about a quarter of
+#: the cohort spread of the angle itself and several times the systematic landmark effects this
+#: package has had to care about (1-2 degrees from the neck-base slice choice, ~1.1 degrees from
+#: the femoral-head centre).
+MURPHY_AXIS_ANGLE_TOLERANCE_DEG = 4.0
+
 # --- Subchondral / cartilage -------------------------------------------------
 #: Outer radius factor of the sphere shell used to find femoral-head surface points
 #: facing the acetabulum (minimum-distance measurement).

@@ -8,6 +8,7 @@ structure the REST layer consumes. Guards the swethfechtel/torsion:latest rebuil
 import numpy as np
 import pytest
 
+from morphometry.femur import get_murphy_neck_qc
 from morphometry.image_io import split_image_left_right
 from morphometry.measurements.femur import calculate_femoral_torsion, get_femoral_torsion_landmarks
 from morphometry.measurements.tibia import calculate_tibial_torsion, get_tibial_torsion_landmarks
@@ -40,6 +41,9 @@ def test_compute_torsion_pipeline(augsburg_pa000001):
                                                                         knee_spacing=knee_spacing)
     landmarks_final['femur']['Murphy']['right'] = get_femoral_torsion_landmarks(left_hip, left_knee, side='left', method='murphy', x_ratio=x_ratio,
                                                                                 knee_spacing=knee_spacing)
+    # the Murphy neck-base QC flag string the container reports beside that angle
+    results['femoral_torsion_right_murphy_qc_flags'] = get_murphy_neck_qc(left_hip, side='left',
+                                                                          x_ratio=x_ratio)
 
     # femoral, image-right half (stored as patient-left), with the sagittal shift
     results['femoral_torsion_left'] = calculate_femoral_torsion(right_hip, right_knee, side='right', method='lee', x_ratio=x_ratio,
@@ -56,10 +60,15 @@ def test_compute_torsion_pipeline(augsburg_pa000001):
     landmarks_final['tibia']['right'] = get_tibial_torsion_landmarks(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left',
                                                                      knee_spacing=knee_spacing, ankle_spacing=ankle_spacing)
 
-    # results dict shape + finiteness
+    # results dict shape + finiteness (the QC entries are flag strings, not angles)
     assert set(results) == {'femoral_torsion_right', 'femoral_torsion_right_murphy',
-                            'femoral_torsion_left', 'tibial_torsion_right'}
+                            'femoral_torsion_left', 'tibial_torsion_right',
+                            'femoral_torsion_right_murphy_qc_flags'}
     for key, value in results.items():
+        if key.endswith('_qc_flags'):
+            # PA000001's neck is sound, so the flag string is empty -- but it is always present
+            assert value == '', f'{key} is not empty'
+            continue
         assert np.isfinite(value), f'{key} is not finite'
 
     # femoral landmark dicts carry the 4 expected keys as length-3 coordinates

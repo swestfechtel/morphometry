@@ -19,9 +19,12 @@ _spec = importlib.util.spec_from_file_location('process_nako_large', _SCRIPT)
 mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mod)
 
-#: The header of the original results_chunk_*.csv / results.csv files.
+#: The header of the original results_chunk_*.csv / results.csv files, with the ``qc_flags``
+#: column (the Murphy femoral-neck QC flags) appended after them -- see
+#: ``tests/unit/test_murphy_qc_scripts.py`` for what goes into it.
 HEADER = ('Patient,Side,CCD,AT_murphy,AA_anterior,AA_posterior,AAV,CE,Offset,Cartilage_thickness,'
-          'Cartilage_thickness (mean),Cartilage_thickness (std),Cartilage_thickness (min),Cartilage_thickness (max)')
+          'Cartilage_thickness (mean),Cartilage_thickness (std),Cartilage_thickness (min),'
+          'Cartilage_thickness (max),qc_flags')
 
 
 def _result(patient: str, base: float) -> dict:
@@ -149,7 +152,9 @@ def test_an_unreadable_case_becomes_all_nan_rows(tmp_path, capsys):
     result = mod.f(broken)
     assert result['patient'] == 'zzz_broken'
     row = mod.build_table([result], ['zzz_broken'])
-    assert row.drop(columns='Cartilage_thickness').isna().all().all() and len(row) == 2
+    # every measurement is NaN; qc_flags is an (empty) string, not NaN, so it is checked apart
+    assert row.drop(columns=['Cartilage_thickness', 'qc_flags']).isna().all().all() and len(row) == 2
+    assert (row['qc_flags'] == '').all()
     assert 'zzz_broken' in capsys.readouterr().out
 
 

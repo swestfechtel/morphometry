@@ -13,6 +13,7 @@ from morphometry.measurements.knee import calculate_knee_rotation_angle
 from morphometry.measurements.whole_leg import calculate_bone_length
 from morphometry.measurements.ankle import calculate_pma_angle
 from morphometry.measurements.hip import calculate_ccd
+from morphometry.femur import get_murphy_neck_qc
 from morphometry.image_io import Segmentation, split_image_left_right
 from matplotlib import pyplot as plt
 from tqdm import tqdm
@@ -87,6 +88,12 @@ def process_patient(patient):
         print(patient, f'Failed to calculate femoral torsion (murphy) for the right side.', e)
         # print(traceback.format_exc())
         at_murphy_right = np.nan
+
+    # QC of the Murphy neck landmarks: the head-to-base axis is ~29 mm in the axial plane here, so a
+    # neck base a few mm out of place is a large angular error that AT (Murphy) does not reveal. A
+    # flagged leg keeps its measurement; the flags only mark it as needing a look at the mask.
+    murphy_qc_left = get_murphy_neck_qc(left_hip, 'left', x_ratio=x_ratio)
+    murphy_qc_right = get_murphy_neck_qc(right_hip, 'right', x_ratio=x_ratio)
 
     try:
         fig, ax = plt.subplots(1, 2)
@@ -202,7 +209,32 @@ def process_patient(patient):
     mld_right = np.nan
 
     return {'patient': patient, 'at_lee_left': at_lee_left, 'at_lee_right': at_lee_right, 'at_murphy_left': at_murphy_left, 'at_murphy_right': at_murphy_right, 'tt_left': tt_left, 'tt_right': tt_right, 'ccd_left': ccd_left, 'ccd_right': ccd_right,
-            'kra_left': kra_left, 'kra_right': kra_right, 'll_left': ll_left, 'll_right': ll_right, 'fl_left': fl_left, 'fl_right': fl_right, 'tl_left': tl_left, 'tl_right': tl_right, 'mld_left': mld_left, 'mld_right': mld_right}
+            'kra_left': kra_left, 'kra_right': kra_right, 'll_left': ll_left, 'll_right': ll_right, 'fl_left': fl_left, 'fl_right': fl_right, 'tl_left': tl_left, 'tl_right': tl_right, 'mld_left': mld_left, 'mld_right': mld_right,
+            'murphy_qc_left': murphy_qc_left, 'murphy_qc_right': murphy_qc_right}
+
+
+def add_qc_flags(df, results: list) -> None:
+    """Append the Murphy femoral-neck QC flags to the result table, in place.
+
+    The flags (``;``-separated ``name:value`` items from
+    :func:`morphometry.femur.murphy_neck_base_qc`, empty when the neck looks sound) go into a
+    ``qc_flags`` column added after the measurement columns, so the historical layout is
+    unchanged up to there. They are added after the rounding, which only takes numbers. A flag
+    marks AT (Murphy) -- and the CCD, which shares the femoral head centre -- as needing a look at
+    the mask; no value is changed or dropped.
+
+    Side is the PATIENT side, so the image-left half (``murphy_qc_left``) lands on 'right'.
+    :param df: The result table, indexed by (Patient, Side) with Side in {'right', 'left'}.
+    :param results: The per-patient dicts returned by :func:`process_patient`; one without
+        ``murphy_qc_left`` (a patient whose files were missing) is skipped.
+    :return: None; ``df`` is modified.
+    """
+    df['qc_flags'] = ''
+    for r in results:
+        if 'murphy_qc_left' not in r:
+            continue
+        df.loc[(r['patient'], 'right'), 'qc_flags'] = r['murphy_qc_left']
+        df.loc[(r['patient'], 'left'), 'qc_flags'] = r['murphy_qc_right']
 
 
 if __name__ == '__main__':
@@ -245,5 +277,6 @@ if __name__ == '__main__':
         df.loc[(patient, 'right'), 'MLD'] = r['mld_left']
 
     df = df.apply(lambda x: np.round(x, 1))
+    add_qc_flags(df, res)
     df.to_excel('/home/simon/Data/Augsburg_large/results_no_finetuning.xlsx')
     print(f'{df.shape[0] - df.dropna().shape[0]} patients have missing values.')
