@@ -181,3 +181,4 @@ cython_debug/
 
 # Third-party reference paper, kept locally (not ours to redistribute)
 Wirth_Eckstein_2008.pdf
+.claude/

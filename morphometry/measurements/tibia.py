@@ -31,10 +31,11 @@ def _tibial_torsion_points(knee_mask: np.ndarray, ankle_mask: np.ndarray, tibia_
     (:func:`morphometry.geometry.mirror_index_x`, each point with its own mask's width, condylar
     endpoints re-ordered in the target frame). The result is mirror-equivariant by construction,
     which the landmark search is not: the knee condylar search rotates the slice about the image
-    centre and rounds, and the ``find_notch`` fallback can pick a different fallback on a half and
-    on its reflection. Measuring the two sides directly disagreed by a median 0.8-1.1 degrees on
+    centre and rounds. Measuring the two sides directly disagreed by a median 0.8-1.1 degrees on
     the Augsburg hip/knee/ankle MRI and 1.7 degrees on the NMDID whole-leg CT, with a tail into the
-    tens of degrees on the legs whose notch search fails.
+    tens of degrees on the legs whose notch search fails -- that tail belonged to the old no-notch
+    fallback, which chose its frame from the section's longest contour chord and could pick a
+    different one on a half and on its reflection (see ``knee.get_condylar_divider``).
     :param knee_mask: A 3D segmentation mask of the knee.
     :param ankle_mask: A 3D segmentation mask of the ankle.
     :param tibia_label_knee: The label of the tibia at knee level.

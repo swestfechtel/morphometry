@@ -14,7 +14,8 @@ that, the two sides disagreed through landmark code that is not mirror-symmetric
 shell sampling for the CCD, the knee condylar search (which rotates the slice about the image centre
 and rounds) for the tibial torsion -- by a median 0.16-0.23 degrees on the Augsburg MRI CCD, 0.85-1.02
 on the CT CCD, 0.8-1.1 on the Augsburg tibial torsion and 1.7 on the CT tibial torsion, the last with
-a tail into the tens of degrees on the legs whose notch search fails.
+a tail into the tens of degrees on the legs whose notch search fails (that tail belonged to the old
+no-notch condylar fallback, since replaced -- see ``tests/characterization/test_condylar_fallback.py``).
 
 The CCD and the tibial torsion are angles between two landmark-derived vectors, so a reflection of
 the anatomy cannot change them; only the landmark search is mirrored.
