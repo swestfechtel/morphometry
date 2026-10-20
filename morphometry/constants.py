@@ -40,6 +40,29 @@ MRI_HIP = MRIHipLabels()
 #: Default label set for whole-leg CT segmentations.
 CT_WHOLE_LEG = WholeLegCTLabels()
 
+# --- Axial-plane angle composition ------------------------------------------
+#: Relative tolerance on the equality of the two in-plane (x, y) voxel spacings, checked by
+#: :func:`morphometry.geometry.validate_in_plane_isotropy` before any angle that is composed
+#: from voxel *indices* in the axial plane (femoral torsion, tibial torsion, knee rotation and
+#: the femoral anteversion's neck angle).
+#: Such a composition maps a physical direction ``(cos t, sin t)`` to the index direction
+#: ``(cos t / sx, sin t / sy)``, i.e. to the index angle ``atan2(k sin t, cos t)`` with
+#: ``k = sx / sy``; the angle between two lines therefore comes out *sheared* by an amount
+#: that depends on how the limb happens to lie in the slice, not only on ``k``. Worst case
+#: over all limb orientations, for a true angle of 15 / 30 / 45 degrees:
+#: ``k`` 1.001 -> 0.01 / 0.03 / 0.04, 1.01 -> 0.15 / 0.29 / 0.40, 1.05 -> 0.7 / 1.4 / 2.0,
+#: 1.1 -> 1.5 / 2.8 / 4.0, 1.2 -> 3.0 / 5.6 / 7.9, 1.5 -> 7.3 / 13.8 / 18.7,
+#: 2.0 -> 14.5 / 26.4 / 34.3, 2.4 -> 20.1 / 35.5 / 44.7 degrees (at ``k`` >= 3 a 45 degree
+#: angle can even be folded to the other side of the (-90, 90] seam). The error grows with the
+#: true angle, so those columns are not the worst case: at ``k`` = 1.001 the supremum over all
+#: true angles is 0.0573 degrees, approached as the true angle tends to 90 (where the folded
+#: angle can also cross the (-90, 90] seam). 1e-3 is therefore the
+#: point at which the shear is numerically irrelevant (at most 0.06 degrees) while still
+#: admitting the float noise real headers carry: every cohort in reach stores its two in-plane
+#: zooms bit-identically (Augsburg 1.09375, NaKo 1.0), so nothing legitimate sits near the
+#: threshold -- the only measured violation is ``dfg_knees``, at ``k = 2.4``.
+IN_PLANE_SPACING_RTOL = 1e-3
+
 # --- Femoral head / neck -----------------------------------------------------
 #: Outer radius factor of the hollow sphere shell used to sample femoral-neck points.
 FEMORAL_NECK_SPHERE_OUTER_FACTOR = 1.2

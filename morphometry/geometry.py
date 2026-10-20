@@ -15,10 +15,12 @@ axis 1 = anterior-posterior (toward Posterior), axis 2 = superior-inferior
 (toward Inferior). "left"/"right" everywhere refers to the *image* side, not the
 patient side.
 """
-from typing import Literal, Tuple
+from typing import Literal, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.ndimage import center_of_mass
+
+from morphometry import constants as C
 
 Side = Literal["left", "right"]
 
@@ -26,6 +28,69 @@ Side = Literal["left", "right"]
 def validate_side(side: str) -> None:
     """Assert that ``side`` is one of the allowed image-side values."""
     assert side in ("left", "right"), 'Side must be either "left" or "right"'
+
+
+def validate_in_plane_isotropy(spacing: Optional[Sequence[float]], source: str) -> None:
+    """Refuse an image whose two in-plane (x, y) voxel edges differ, for index-space angles.
+
+    :func:`signed_axial_angle` -- and with it the femoral torsion, the tibial torsion and the
+    knee rotation angle -- composes its angle from voxel *indices* in the axial plane, as does
+    the femoral anteversion's neck angle against the image x-axis
+    (``measurements.hip.calculate_anteversion`` via ``measurements.femur._proximal_angle``;
+    being a single-line angle it takes the shear directly, without the partial cancellation a
+    two-line angle gets). That is
+    only the anatomical angle if the two in-plane axes have the same voxel edge length: at
+    spacing ``(sx, sy)`` a physical direction ``(cos t, sin t)`` has the index direction
+    ``(cos t / sx, sin t / sy)``, so the index angle is ``atan2(k sin t, cos t)`` with
+    ``k = sx / sy``, and the angle between two such lines is *sheared* by an amount that
+    depends on how the limb happens to lie in the slice. At the ``k = 2.4`` of the
+    ``dfg_knees`` cohort (0.75 x 0.3125 mm in plane after the LPI reorientation, 95 of its 96
+    scans) a true 15 degree angle reads anywhere between 6.3 and 35.1 degrees
+    (see :data:`morphometry.constants.IN_PLANE_SPACING_RTOL` for the full error table).
+
+    Rather than return such a value silently, the measurements call this check wherever the
+    voxel spacing is known to them, so an in-plane anisotropic dataset fails loudly. It is a
+    ``ValueError``, which the batch scripts' and ``compute_torsion.py``'s per-measurement
+    handler already catches and records as ``NaN``, so one unsuitable dataset does not abort
+    a cohort run.
+
+    :param spacing: The voxel spacing of the image the landmarks were found in, as
+        ``(sx, sy, sz)`` (longer sequences are allowed; only the first two entries are read).
+        ``None`` means the caller holds no geometry -- the check is then skipped and the
+        precondition rests on that caller (see the ``*_spacing`` arguments of
+        :func:`morphometry.measurements.tibia.calculate_tibial_torsion` and
+        :func:`morphometry.measurements.knee.calculate_knee_rotation_angle`).
+    :param source: Human-readable name of the image being checked, used in the error message
+        (e.g. ``'hip image'``).
+    :raises ValueError: If ``spacing`` does not hold two readable in-plane entries, if either is
+        not finite and positive (a malformed header: the index-to-physical map is degenerate and
+        the shear is undefined), or if
+        ``abs(sx - sy) > IN_PLANE_SPACING_RTOL * max(sx, sy)``. Every rejection is a
+        ``ValueError`` and nothing else -- the whole point of the check is that it is caught by
+        the per-measurement handlers, so a malformed header must not escape as an
+        ``IndexError``, a ``ZeroDivisionError`` or a silently accepted ``nan``.
+    :return: ``None``.
+    """
+    if spacing is None:
+        return
+    try:
+        sx, sy = float(abs(spacing[0])), float(abs(spacing[1]))
+    except (IndexError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f'{source}: voxel spacing {spacing!r} does not provide two readable '
+                         f'in-plane entries (expected at least (sx, sy)).') from exc
+    if not (np.isfinite(sx) and np.isfinite(sy) and sx > 0.0 and sy > 0.0):
+        raise ValueError(f'{source}: in-plane voxel spacing is not usable (x {sx:.6g} mm, '
+                         f'y {sy:.6g} mm); both entries must be finite and positive. The header '
+                         f'is malformed, so whether the axial-plane angle is sheared cannot be '
+                         f'decided.')
+    if abs(sx - sy) > C.IN_PLANE_SPACING_RTOL * max(sx, sy):
+        raise ValueError(
+            f'{source}: in-plane voxel spacing is anisotropic (x {sx:.6g} mm, y {sy:.6g} mm, '
+            f'ratio {max(sx, sy) / min(sx, sy):.6g}). Axial-plane angles (femoral torsion, '
+            f'tibial torsion, knee rotation, femoral anteversion) are composed from voxel '
+            f'indices and assume equal x and y spacing; on this dataset the angle would be '
+            f'sheared by that ratio in a way that depends on the limb orientation in the '
+            f'slice. Resample the mask to equal in-plane spacing before measuring.')
 
 
 def fold_to_acute(angle: float) -> float:
@@ -63,8 +128,16 @@ def signed_axial_angle(reference_line: np.ndarray, direction: np.ndarray, side: 
     condylar line) and of external tibial torsion (distal tibia -> fibula line turned lateral ->
     posterior relative to the posterior tibial condylar line). Only the directions of the two lines
     enter, so the angle is invariant to an in-plane rotation of the whole limb. The reference line is
-    undirected (the fold makes its endpoint order irrelevant). The angle is computed from voxel
-    indices, so it assumes equal in-plane x/y spacing.
+    undirected (the fold makes its endpoint order irrelevant).
+
+    **Precondition: equal in-plane x/y voxel spacing.** The angle is composed from voxel
+    *indices*, which is the anatomical angle only if the two in-plane voxel edges are the same
+    length; otherwise it is sheared (see :func:`validate_in_plane_isotropy`, which the callers
+    invoke wherever they know the spacing -- this helper is given bare vectors and cannot check
+    it itself). Measured status: Augsburg MRI 1.09375 x 1.09375 mm, NaKo 1.0 x 1.0 mm and
+    whole-leg CT 0.8 x 0.8 mm all satisfy it exactly; the ``dfg_knees`` knee MRI does not --
+    its 0.75 mm sagittal slice axis becomes an *in-plane* axis under the LPI reorientation
+    (0.75 x 0.3125 mm, ratio 2.4, on 95 of its 96 scans).
     :param reference_line: A vector along the reference line (only x and y are used).
     :param direction: The measured direction vector (only x and y are used).
     :param side: Image side, 'left' or 'right'.

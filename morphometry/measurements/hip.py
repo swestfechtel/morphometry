@@ -300,10 +300,17 @@ def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmenta
         centre became a consensus fit in millimetres, ``x_ratio`` only bounds the femoral-head slab
         walk, and that bound does not bite on the Augsburg (10 mm) or NaKo (isotropic) hips.
     :param plot: A pair of matplotlib Axes to draw the reference line on, or False.
+    :raises ValueError: If the image's in-plane voxel spacing is anisotropic. The neck angle is a
+        pure axial-plane *index* angle (``_proximal_angle`` after the z coordinates are aligned),
+        so unequal in-plane voxel edges shear it -- and, unlike the two-line torsion angles, a
+        single-line angle against the image x-axis takes that shear with no cancellation at all.
+        See :func:`morphometry.geometry.validate_in_plane_isotropy`; every dataset this has run
+        on (NaKo 1.0 mm isotropic, Augsburg 1.09375 mm square) satisfies it.
     :return: The anteversion angle in degrees.
     """
     # TODO revise: the anteversion convention here is provisional.
     G.validate_side(side)
+    G.validate_in_plane_isotropy(segmentation_mask.spacing, 'anteversion hip image')
 
     spacing = np.abs(np.asarray(segmentation_mask.spacing, dtype=float))
     if x_ratio is None:

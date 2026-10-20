@@ -331,6 +331,27 @@ class Segmentation(Image):
             raise NotImplementedError('SimpleITK not implemented yet.')
 
 
+def mask_and_spacing(mask):
+    """
+    Accept either an ``Image`` / ``Segmentation`` or a bare mask array, and return both.
+
+    Several measurement entry points historically take a bare ``np.ndarray`` mask (the knee and
+    ankle masks of the torsion family, the knee-rotation mask). A bare array carries no geometry,
+    so those functions cannot check preconditions that depend on the voxel spacing -- notably the
+    equal in-plane x/y spacing their index-space angle composition assumes
+    (:func:`morphometry.geometry.validate_in_plane_isotropy`). Passing the ``Image`` instead lets
+    them do it with no extra argument; passing an array keeps the old behaviour exactly.
+
+    :param mask: An ``Image`` / ``Segmentation``, or a mask array (anything without an ``array``
+        attribute is returned unchanged and reported as having no spacing).
+    :return: ``(array, spacing)`` -- the label array, and the voxel spacing or ``None`` when the
+        caller handed over a bare array.
+    """
+    if isinstance(mask, Image):
+        return mask.array, mask.spacing
+    return mask, None
+
+
 def _crop_axis(source, axis: int, start: int, end: int):
     """
     Crop an Image / Segmentation to the index range ``[start, end)`` along one index axis.

@@ -32,6 +32,14 @@ if __name__ == '__main__':
     left_ankle = ankle_mask.array[:ankle_mask.array.shape[0] // 2]
     right_ankle = ankle_mask.array[ankle_mask.array.shape[0] // 2:]
 
+    # The knee and ankle halves are bare arrays, so they carry no geometry of their own; pass the
+    # parent images' spacing so the torsion measurements can check the equal-in-plane-spacing
+    # precondition of their index-space angle composition (the hip halves are Images and are
+    # checked automatically). An in-plane anisotropic acquisition is refused with a ValueError,
+    # which the per-measurement handlers below record as an error instead of aborting the run.
+    knee_spacing = knee_mask.spacing
+    ankle_spacing = ankle_mask.spacing
+
     results = dict()
     landmarks_final = {
         'femur': {
@@ -52,8 +60,10 @@ if __name__ == '__main__':
     errors = list()
 
     try:
-        torsion = calculate_femoral_torsion(left_hip, left_knee, side='left', method='lee', x_ratio=x_ratio)
-        landmarks = get_femoral_torsion_landmarks(left_hip, left_knee, side='left', method='lee', x_ratio=x_ratio)
+        torsion = calculate_femoral_torsion(left_hip, left_knee, side='left', method='lee', x_ratio=x_ratio,
+                                            knee_spacing=knee_spacing)
+        landmarks = get_femoral_torsion_landmarks(left_hip, left_knee, side='left', method='lee', x_ratio=x_ratio,
+                                                  knee_spacing=knee_spacing)
         results['femoral_torsion_right'] = torsion
 
         for k, v in landmarks.items():
@@ -70,8 +80,10 @@ if __name__ == '__main__':
         landmarks_final['femur']['Lee']['right']['knee_end'] = [0, 0, 0]
 
     try:
-        torsion = calculate_femoral_torsion(left_hip, left_knee, side='left', method='murphy', x_ratio=x_ratio)
-        landmarks = get_femoral_torsion_landmarks(left_hip, left_knee, side='left', method='murphy', x_ratio=x_ratio)
+        torsion = calculate_femoral_torsion(left_hip, left_knee, side='left', method='murphy', x_ratio=x_ratio,
+                                            knee_spacing=knee_spacing)
+        landmarks = get_femoral_torsion_landmarks(left_hip, left_knee, side='left', method='murphy', x_ratio=x_ratio,
+                                                  knee_spacing=knee_spacing)
         results['femoral_torsion_right_murphy'] = torsion
 
         for k, v in landmarks.items():
@@ -88,8 +100,10 @@ if __name__ == '__main__':
         landmarks_final['femur']['Murphy']['right']['knee_end'] = [0, 0, 0]
 
     try:
-        torsion = calculate_femoral_torsion(right_hip, right_knee, side='right', method='lee', x_ratio=x_ratio)
-        landmarks = get_femoral_torsion_landmarks(right_hip, right_knee, side='right', method='lee', x_ratio=x_ratio)
+        torsion = calculate_femoral_torsion(right_hip, right_knee, side='right', method='lee', x_ratio=x_ratio,
+                                            knee_spacing=knee_spacing)
+        landmarks = get_femoral_torsion_landmarks(right_hip, right_knee, side='right', method='lee', x_ratio=x_ratio,
+                                                  knee_spacing=knee_spacing)
         landmarks['hip_start'][0] += left_hip.array.shape[0]  # shift to the right image side
         landmarks['hip_end'][0] += left_hip.array.shape[0]
         landmarks['knee_start'][0] += left_knee.shape[0]
@@ -111,8 +125,10 @@ if __name__ == '__main__':
         landmarks_final['femur']['Lee']['left']['knee_end'] = [0, 0, 0]
 
     try:
-        torsion = calculate_femoral_torsion(right_hip, right_knee, side='right', method='murphy', x_ratio=x_ratio)
-        landmarks = get_femoral_torsion_landmarks(right_hip, right_knee, side='right', method='murphy', x_ratio=x_ratio)
+        torsion = calculate_femoral_torsion(right_hip, right_knee, side='right', method='murphy', x_ratio=x_ratio,
+                                            knee_spacing=knee_spacing)
+        landmarks = get_femoral_torsion_landmarks(right_hip, right_knee, side='right', method='murphy', x_ratio=x_ratio,
+                                                  knee_spacing=knee_spacing)
         landmarks['hip_start'][0] += left_hip.array.shape[0]  # shift to the right image side
         landmarks['hip_end'][0] += left_hip.array.shape[0]
         landmarks['knee_start'][0] += left_knee.shape[0]
@@ -134,8 +150,12 @@ if __name__ == '__main__':
         landmarks_final['femur']['Murphy']['left']['knee_end'] = [0, 0, 0]
 
     try:
-        torsion = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left')
-        landmarks = get_tibial_torsion_landmarks(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='left')
+        torsion = calculate_tibial_torsion(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2,
+                                           side='left',
+                                           knee_spacing=knee_spacing, ankle_spacing=ankle_spacing)
+        landmarks = get_tibial_torsion_landmarks(left_knee, left_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2,
+                                                 side='left',
+                                                 knee_spacing=knee_spacing, ankle_spacing=ankle_spacing)
         results['tibial_torsion_right'] = torsion
 
         for k, v in landmarks.items():
@@ -152,8 +172,12 @@ if __name__ == '__main__':
         landmarks_final['tibia']['right']['ankle_end'] = [0, 0, 0]
 
     try:
-        torsion = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right')
-        landmarks = get_tibial_torsion_landmarks(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2, side='right')
+        torsion = calculate_tibial_torsion(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2,
+                                           side='right',
+                                           knee_spacing=knee_spacing, ankle_spacing=ankle_spacing)
+        landmarks = get_tibial_torsion_landmarks(right_knee, right_ankle, tibia_label_knee=2, tibia_label_ankle=1, fibula_label=2,
+                                                 side='right',
+                                                 knee_spacing=knee_spacing, ankle_spacing=ankle_spacing)
         landmarks['knee_start'][0] += left_knee.shape[0]
         landmarks['knee_end'][0] += left_knee.shape[0]
         landmarks['ankle_start'][0] += left_ankle.shape[0]

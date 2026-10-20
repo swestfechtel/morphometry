@@ -4,11 +4,13 @@ The posterior-condylar reference lines are computed by ``get_knee_reference_line
 in ``morphometry.knee``; this module combines them into angles. "left"/"right"
 refers to the image side, not the patient side.
 """
+from typing import Optional, Sequence
+
 import numpy as np
 from matplotlib import pyplot as plt
 from scipy.ndimage import center_of_mass
 
-from morphometry.image_io import Segmentation
+from morphometry.image_io import Image, Segmentation, mask_and_spacing
 from morphometry.knee import get_knee_reference_line
 from morphometry.utils import calculate_angle_between_vectors, extract_connected_components_2d
 from morphometry import geometry as G
@@ -58,7 +60,11 @@ def _knee_rotation_angle(femur_start: np.ndarray, femur_end: np.ndarray,
     that choice.
 
     The angle is computed from voxel indices, so it assumes equal in-plane x/y spacing (as did the
-    former composition; true for the Augsburg MRI and typical CT).
+    former composition; true for the Augsburg MRI and typical CT, but **not** for the
+    ``dfg_knees`` knee MRI, whose LPI in-plane spacing is 0.75 x 0.3125 mm). The precondition is
+    checked by :func:`morphometry.geometry.validate_in_plane_isotropy` whenever the caller passes
+    ``spacing`` to :func:`calculate_knee_rotation_angle`, which is the only level that can know it
+    -- this function is handed bare landmark points.
     :param femur_start: One posterior femoral condyle reference point.
     :param femur_end: The other posterior femoral condyle reference point.
     :param tibia_start: One posterior tibial condyle reference point.
@@ -72,8 +78,9 @@ def _knee_rotation_angle(femur_start: np.ndarray, femur_end: np.ndarray,
     return KNEE_ROTATION_POSITIVE_SIGN * G.signed_axial_angle(femoral_line, tibial_line, side)
 
 
-def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: int, tibia_label: int,
-                                  side: str = 'left', plot: bool | plt.Axes = False) -> float:
+def calculate_knee_rotation_angle(segmentation_mask: Image | np.ndarray, femur_label: int, tibia_label: int,
+                                  side: str = 'left', plot: bool | plt.Axes = False,
+                                  spacing: Optional[Sequence[float]] = None) -> float:
     """
     Calculate the knee rotation angle.
 
@@ -82,16 +89,35 @@ def calculate_knee_rotation_angle(segmentation_mask: np.ndarray, femur_label: in
     external rotation of the tibia relative to the femur (see :func:`_knee_rotation_angle` for the
     sign derivation and the convention it replaced, and :data:`KNEE_ROTATION_POSITIVE_SIGN` for the
     single place the direction is decided -- backlog task #16).
-    :param segmentation_mask: A 3D segmentation mask of the knee.
+    :param segmentation_mask: A 3D segmentation mask of the knee, either as an ``Image`` /
+        ``Segmentation`` (preferred: its voxel spacing is then checked against the index-space
+        angle's equal-in-plane-spacing precondition without any further argument) or as a bare
+        ``np.ndarray`` (then see ``spacing``).
     :param femur_label: The segmentation label of the femur.
     :param tibia_label: The segmentation label of the tibia.
     :param side: Side of the image (not patient!), either 'left' or 'right'. A right half holds the
         mirror-image knee, so it is composed in the mirrored convention and a knee and its mirror
         twin give the same angle.
     :param plot: A sequence of two matplotlib Axes to draw the reference lines on, or False.
+    :param spacing: Voxel spacing of ``segmentation_mask`` (a bare array carries no geometry), e.g.
+        ``knee_segmentation.spacing``. Only needed when ``segmentation_mask`` is a bare array:
+        pass the ``Segmentation`` instead and the spacing is taken from it. Given either way, it is
+        checked for the equal in-plane x/y spacing that the index-space angle composition assumes;
+        a bare array with no ``spacing`` leaves it unchecked and the precondition then rests on the
+        caller. An explicit ``spacing`` wins over an ``Image``'s own. **Worth supplying**: the
+        ``dfg_knees`` knee MRI in this project's test data has 0.75 x 0.3125 mm in-plane voxels
+        after the LPI reorientation, where removing the shear moves this angle by a median 3.75
+        degrees (p90 14.87, and four of the 95 flexed scans land on the other side of the
+        (-90, 90] fold seam). No such scan has ever been measured with it -- the shear is what
+        *would* happen; see :func:`morphometry.geometry.validate_in_plane_isotropy`.
+    :raises ValueError: If the resolved spacing is in-plane anisotropic or malformed (see
+        :func:`morphometry.geometry.validate_in_plane_isotropy`).
     :return: The knee rotation angle in degrees, in (-90, 90].
     """
     G.validate_side(side)
+    segmentation_mask, image_spacing = mask_and_spacing(segmentation_mask)
+    G.validate_in_plane_isotropy(spacing if spacing is not None else image_spacing,
+                                 'knee rotation angle segmentation')
 
     femur_mask = np.where(segmentation_mask == femur_label, 1, 0)
     proximal_layer, femur_start, femur_end = get_knee_reference_line(femur_mask, 'femur')

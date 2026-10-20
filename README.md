@@ -49,7 +49,14 @@ whole-leg CT, plus a FastAPI service and batch-processing scripts.
 Measurements operate on masks placed in **LPI** orientation; load with
 `Segmentation(...).read_image(path)` then call `transform_coordinate_system()`.
 The `side` argument everywhere refers to the **image** side, not the patient
-side. See `CLAUDE.md` for the full architecture and conventions, and
+side. The axial-plane angles (femoral torsion, tibial torsion, knee rotation, femoral
+anteversion) are composed from voxel indices and therefore need **equal in-plane
+x/y voxel spacing**; that precondition is checked wherever the function holds the
+image geometry. The knee/ankle entry points that historically took a bare
+`np.ndarray` accept an `Image` too (preferred — the spacing then comes for free),
+or take it explicitly via `spacing=` / `knee_spacing=` / `ankle_spacing=`. An
+in-plane anisotropic mask raises `ValueError` instead of returning a sheared angle.
+See `CLAUDE.md` for the full architecture and conventions, and
 `docs/reader_measurement_guide.md` for anatomic descriptions of each measurement.
 
 ## Tests
