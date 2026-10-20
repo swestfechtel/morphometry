@@ -130,15 +130,23 @@ posterior condylar line of the proximal tibia (rotational femoro-tibial mismatch
 Captures rotational alignment of the knee joint itself; relevant to patellofemoral
 tracking and to component rotation in arthroplasty planning. &
 (1) \textbf{Femoral line} as in femoral torsion \S1.2. (2) \textbf{Tibial line} as in
-tibial torsion \S2.1, both taken at the knee. (3) Transverse-plane angle between them,
-folded to 0--90\textdegree{} and combined by AP tilt direction; an exact 180\textdegree{}
-result is reset to 0\textdegree{}. &
+tibial torsion \S2.1, both taken at the knee. (3) \textbf{Signed} transverse-plane angle
+from the femoral to the tibial line, folded into $(-90, 90]$ --- both lines are
+undirected, so neither endpoint order matters, and only their two directions enter, so
+the value does not depend on how the knee is rotated in the scanner. Until 2026-10 this
+step instead folded each line to an acute angle against the \emph{image} x-axis and added
+or subtracted the two by the signs of their AP tilts, which returned the negated angle
+whenever the medial end of the femoral line lay anterior to its lateral end in the
+image. &
 No standardized normative range for this exact bony pairing exists in the literature;
 the posterior condylar lines are near-parallel in extension, so the isolated angle is
 small (single-digit degrees). Nearest published surrogates (different reference lines):
 EOS femoro-tibial rotation 2.3\textdegree{}$\pm$7.2\textdegree{}; CT tibiofemoral
 rotation ${\sim}4.1$\textdegree{}$\pm$5.3\textdegree{}. State your reference lines
-explicitly. [5][6] \\
+explicitly. \textbf{Sign:} positive = external rotation of the tibia relative to the
+femur (the same rotation sense as positive tibial torsion) --- \textbf{provisional},
+chosen for internal consistency with the torsion measurements, not from data; see
+CLAUDE.md (task \#16). [5][6] \\
 \midrule
 
 % --- 4. CCD angle ----------------------------------------------------------
