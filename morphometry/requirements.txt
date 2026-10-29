@@ -1,11 +1,68 @@
-deprecated==1.2.18
-matplotlib==3.10.3
-nibabel==5.3.2
-numpy>=2.0.0
-pandas==2.3.0
-pydicom==3.0.1
-pyvista==0.45.2
-scikit_learn==1.7.0
-scipy==1.15.0
-SimpleITK==2.5.2
-scikit-image
+# Pinned dependency set for the torsion computation image (swestfechtel/torsion).
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# The image used to `pip3 install` an unpinned list straight from the Dockerfile, so every
+# rebuild resolved whatever was current on PyPI -- NumPy 2 in the 2026-06 build, against the
+# `numpy==1.26.4` the research venv pins in the repo-root requirements.txt. The image and the
+# environment the measurements are developed and golden-tested in were therefore not the same
+# code path. Every version below is exactly the version the repo-root requirements.txt holds,
+# so a container built from this file runs the identical library stack as the venv.
+#
+# WHAT IS IN IT
+# -------------
+# NOT the research environment: the torsion image is pure-Python computation on masks and needs
+# none of torch / nnunetv2 / TotalSegmentator / fastapi. The ten direct dependencies are the
+# real import closure of `morphometry/docker/compute_torsion.py`, i.e. of
+#   morphometry.{femur,hip,knee,tibia,image_io,geometry,utils,constants,bresenham}
+#   + morphometry.measurements.{femur,tibia}
+# and are listed first with the module that needs them. The rest of the file is their own
+# transitive closure, pinned as well so that a rebuild cannot drift underneath them either.
+#
+# KEEPING IT IN SYNC
+# ------------------
+# When a version here changes, change the matching line in the repo-root requirements.txt too
+# (and vice versa) -- they must stay equal, that is the whole point of the file. The
+# base image is pinned to `python:3.10.16-bookworm`, the venv's exact interpreter.
+
+# --- direct imports of the torsion code path -------------------------------------------------
+nibabel==5.3.2          # image_io, femur, hip, utils, compute_torsion: NIfTI I/O
+numpy==1.26.4           # everywhere
+scipy==1.14.1           # femur, geometry, hip, image_io, knee, tibia, utils: ndimage / optimize
+SimpleITK==2.4.0        # image_io: the second (ITK) backend of Image / Segmentation
+pydicom==3.0.1          # image_io: DICOM series reading
+scikit-image==0.24.0    # femur, hip, tibia, utils: measure / morphology
+scikit-learn==1.5.1     # hip (KMeans, PCA), knee (PCA) -- still imported, do not drop
+matplotlib==3.9.2       # femur, hip, knee, tibia, measurements.*: the `plot=` overlays
+pandas==2.2.3           # hip: pd.Series in the subchondral-distance statistics
+pyvista==0.44.1         # hip: pv.SolidSphere / pv.Sphere shell sampling for the neck centre
+
+# --- transitive closure of the above, pinned to the same versions as requirements.txt ---------
+certifi==2024.8.30
+charset-normalizer==3.3.2
+contourpy==1.3.0
+cycler==0.12.1
+fonttools==4.53.1
+idna==3.8
+imageio==2.35.1
+importlib_resources==6.4.5
+joblib==1.4.2
+kiwisolver==1.4.7
+lazy_loader==0.4
+networkx==3.3
+packaging==24.1
+pillow==10.4.0
+platformdirs==4.3.2
+pooch==1.8.2
+pyparsing==3.1.4
+python-dateutil==2.9.0.post0
+pytz==2024.2
+requests==2.32.3
+scooby==0.10.0
+six==1.16.0
+threadpoolctl==3.5.0
+tifffile==2024.8.30
+typing_extensions==4.12.2
+tzdata==2024.2
+urllib3==2.2.2
+vtk==9.3.1
