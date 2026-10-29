@@ -60,7 +60,13 @@ def calculate_ccd(hip_image: Image, knee_image: Image = None, side: str = 'left'
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
-    :param x_ratio: Correction factor for slice thickness.
+    :param x_ratio: Slice-axis scale factor passed on to the head-centre and neck-centre
+        landmarks. **The CCD is the one measurement this value materially decides**, through
+        ``hip.get_femoral_neck_center``'s shell sampling -- moving it from the pipelines'
+        ``spacing_z / 2 * spacing_x`` to the true slice aspect changes the CCD by a median 4-5.5
+        degrees (max 19) on the Augsburg reader study and makes it worse, both against the readers
+        and in reader-free left/right agreement. It is an empirical conditioning parameter, not a
+        unit conversion; backlog task #6, ``docs/ccd_x_ratio.md``.
     :param debug: Whether to display debug messages.
     :param plot: Whether to plot the results.
     :return: The actual and projected CCD angle.
@@ -347,7 +353,11 @@ def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', seg
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
-    :param x_ratio: Correction factor for slice thickness.
+    :param x_ratio: Slice-axis scale factor for the head and neck landmarks (see
+        ``hip.get_femoral_neck_center``; backlog task #6). This function takes a bare array, so it
+        cannot know the real spacing: on anisotropic data the head centre falls back to
+        ``(1, 1, x_ratio)`` voxels and can sit ~5 mm (max 14) in z from the spacing fit. Harmless
+        in production only because the alpha angle's callers are the isotropic NaKo scripts.
     :param plot: Whether to plot the reference lines.
     :return: The alpha angle.
     """

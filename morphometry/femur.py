@@ -599,7 +599,8 @@ def get_murphy_neck_qc(hip_image: Image, side: str = 'left', segmentation_label:
     :param hip_image: An Image object of the proximal-femur segmentation mask (one image half).
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
-    :param x_ratio: Correction factor for slice thickness (as passed to the measurement).
+    :param x_ratio: Slice-axis scale factor, as passed to the measurement (inert on this
+        path -- see ``measurements.femur.calculate_femoral_torsion`` and backlog task #6).
     :param isotropic: Whether the image has isotropic voxels.
     :return: The ``;``-joined flag string, ``''`` when the neck looks sound, or
         ``murphy_landmark_failed:<reason>`` when the landmark search itself failed (the measurement
@@ -685,7 +686,8 @@ def get_proximal_reference_line(hip_image: Image, side: str = 'left',
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param method: The method to use for determining the reference line.
     :param segmentation_label: The label of the segmentation mask.
-    :param x_ratio: Correction factor for slice thickness.
+    :param x_ratio: Slice-axis scale factor for the femoral-head landmark (inert on this path;
+        see ``measurements.femur.calculate_femoral_torsion`` and backlog task #6).
     :param isotropic: Whether the image has isotropic voxels.
     :return: The start and end points of the reference line (voxel indices of ``hip_image``), the radius of the
     femoral head centre and the radius of the trochanter major if method is tomczak.

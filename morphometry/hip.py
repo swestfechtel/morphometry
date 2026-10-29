@@ -226,7 +226,15 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
     :param return_layers: Whether to return layer_high and layer_low.
-    :param x_ratio: Correction factor for slice thickness.
+    :param x_ratio: Slice-axis scale factor, in in-plane voxels per slice. On the non-isotropic
+        path it reaches only the femoral-head slab bound (the consensus fit itself uses
+        ``spacing``), and that bound is inert on every dataset measured -- identical results at 1,
+        5.47 and 9.14. Where it still decides a result is ``get_femoral_neck_center``; see its
+        docstring and backlog task #6 before changing how callers compute it. On the isotropic
+        path, and in the ``spacing``-less fallback of the consensus fit, it does scale the
+        geometry, so an array-only caller on anisotropic data gets a centre up to ~14 mm out in z
+        -- latent only, since the array-only callers (alpha angle, acetabular depth) run on
+        isotropic NaKo.
     :param isotropic: Whether the image has isotropic voxels.
     :param spacing: Voxel spacing in mm along the three index axes (e.g. ``Image.spacing``). Used by
         the non-isotropic sphere fit; ``None`` derives the geometry from ``x_ratio``.
@@ -266,8 +274,9 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
         # truncation it was validated with.
         com_high = (int(np.floor(centroid[0] + .5)) if side == 'left' else int(np.ceil(centroid[0] - .5)),
                     com_high[1])
-    # the walk works in index space, so the length unit is the in-plane voxel and the
-    # slice spacing in that unit is exactly the slice-thickness correction x_ratio
+    # the walk works in index space, so the length unit is the in-plane voxel and x_ratio is how
+    # many of those the caller says a slice is worth. The pipelines' x_ratio is not the true
+    # aspect (task #6), but this bound is inert either way: identical at 1, 5.47 and 9.14.
     layer_max = _femoral_head_slab_bound(segmentation_mask, com_high, layer_high, (1., 1., x_ratio))
     layer_low = layer_high + 1
     while layer_low < layer_max and segmentation_mask[com_high[0], com_high[1], layer_low] != 0:
@@ -413,7 +422,17 @@ def get_femoral_neck_center(segmentation_mask: np.ndarray, femoral_head_center: 
     :param femoral_head_center: The radius and center of the femoral head.
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param segmentation_label: The label of the femur in the segmentation mask.
-    :param x_ratio: Correction factor for slice thickness.
+    :param x_ratio: The factor the point cloud's slice axis is scaled by before the neck shell is
+        sampled. **It is not a slice aspect ratio, despite reading like one** (backlog task #6):
+        it sets how far the sphere shell reaches in *slices*, and on thick-slice data that reach
+        is what decides the landmark. The torsion pipelines pass
+        ``spacing_z / 2 * spacing_x``, which is dimensionally ``mm / 2 x mm`` and is **not** the
+        true aspect ``spacing_z / spacing_x``; correcting it to the true aspect measurably
+        degrades the CCD, because on the 10 mm Augsburg hips the correctly-scaled shell leaves 30
+        of 100 image halves with a neck point cloud spanning two slices or fewer, so the
+        centroid's z is quantised to one or two sample positions. See ``docs/ccd_x_ratio.md`` and
+        ``scripts/analyse_ccd_x_ratio.py``; treat the value as an empirical conditioning
+        parameter of this landmark and do not "fix" it without replacing the landmark.
     :return: The points constituting the femoral neck and the endpoint of the femoral neck axis.
     """
     G.validate_side(side)

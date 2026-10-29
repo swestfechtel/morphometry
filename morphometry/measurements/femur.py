@@ -178,7 +178,11 @@ def calculate_femoral_torsion(hip_image: Image, knee_mask: Image | np.ndarray, s
     :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param method: Proximal reference line method ('lee', 'murphy' or 'tomczak').
     :param segmentation_label: The label of the femur in the segmentation mask.
-    :param x_ratio: Correction factor for slice thickness.
+    :param x_ratio: Slice-axis scale factor for the femoral-head landmark. **Inert here**:
+        measured over the 100 Augsburg reader-study image halves, Lee and Murphy are bit-identical
+        (max difference 0.000e+00 degrees) between the pipelines' ``spacing_z / 2 * spacing_x``
+        and the true slice aspect, because on this path it only bounds the head slab walk. See
+        backlog task #6 and ``docs/ccd_x_ratio.md``; it is the CCD that the value decides.
     :param isotropic: Whether the image has isotropic voxels.
     :param plot: A sequence of (at least two) matplotlib Axes to draw the reference lines on, or False.
     :param knee_spacing: Voxel spacing of ``knee_mask``. Only needed when ``knee_mask`` is a bare
