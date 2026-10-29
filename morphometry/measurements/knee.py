@@ -19,12 +19,19 @@ from morphometry import geometry as G
 #: external rotation of the tibia relative to the femur (the tibial condylar line turned from
 #: lateral towards posterior relative to the femoral one), which is the same rotation sense as
 #: positive tibial torsion in :func:`morphometry.measurements.tibia._tibial_torsion_angle` and
-#: positive femoral antetorsion. **This direction is PROVISIONAL**: it was chosen for internal
-#: consistency with the two torsion measurements, *not* because the available data prefer it
-#: (backlog task #16; the evidence, such as it is, is summarised in CLAUDE.md, Core data flow
-#: item 3). Flipping the convention is this constant plus a re-capture of the
-#: ``knee_rotation_angle_left`` golden -- nothing else reads the sign, and the magnitude,
-#: the rotation invariance and the mirror equivariance are all unaffected by it.
+#: positive femoral antetorsion, so all three agree. **This is the published convention** for
+#: this measurement, which the literature calls the tibiofemoral rotation (TFR) angle -- "this
+#: measurement is positive if the tibia is externally rotated compared to the femur" (Anzillotti
+#: et al., J Exp Orthop 2026;13(2):e70708, following the standard technique of Diederichs et al.,
+#: Am J Sports Med 2013;41:51-57) -- and the literature, not the internal consistency, is the
+#: reason for it (backlog task #16, settled 2026-10-29; the evidence that could NOT settle it is
+#: in CLAUDE.md, Core data flow item 3). Only the *sign* carries over from that literature, never
+#: the magnitude: the published technique picks both of its slices differently (femoral line
+#: through the posterior condylar CARTILAGE at the widest A-P diameter, tibial line at the first
+#: slice below the menisci), and the same paper measures a 6.18 degree mean gap between CT and
+#: MRI on one set of knees. Flipping the convention would still be this constant plus a
+#: re-capture of the ``knee_rotation_angle_left`` golden -- nothing else reads the sign, and the
+#: magnitude, the rotation invariance and the mirror equivariance are all unaffected by it.
 KNEE_ROTATION_POSITIVE_SIGN = +1
 
 
@@ -54,10 +61,12 @@ def _knee_rotation_angle(femur_start: np.ndarray, femur_end: np.ndarray,
     supplement instead of the folded angle. It also ignored ``side``: negating both y-offsets
     leaves their relative sign unchanged, so the right-side branch cancelled out.
 
-    **Which direction counts as positive is provisional** and is decided in exactly one place,
-    :data:`KNEE_ROTATION_POSITIVE_SIGN`; see that constant and backlog task #16. Everything else
-    here -- the magnitude, the rotation invariance, the mirror equivariance -- is independent of
-    that choice.
+    Which direction counts as positive is decided in exactly one place,
+    :data:`KNEE_ROTATION_POSITIVE_SIGN`, and follows the convention this measurement is published
+    under as the tibiofemoral rotation angle: positive = the tibia externally rotated relative to
+    the femur. See that constant for the citation and for why only the sign, not the magnitude,
+    is comparable with the published values. Everything else here -- the magnitude, the rotation
+    invariance, the mirror equivariance -- is independent of that choice.
 
     The angle is computed from voxel indices, so it assumes equal in-plane x/y spacing (as did the
     former composition; true for the Augsburg MRI and typical CT, but **not** for the
@@ -70,8 +79,8 @@ def _knee_rotation_angle(femur_start: np.ndarray, femur_end: np.ndarray,
     :param tibia_start: One posterior tibial condyle reference point.
     :param tibia_end: The other posterior tibial condyle reference point.
     :param side: Image side (not patient!), 'left' or 'right'.
-    :return: The signed knee rotation angle in degrees, in (-90, 90]; with the provisional
-        convention, positive = external tibial rotation relative to the femur.
+    :return: The signed knee rotation angle in degrees, in (-90, 90]; positive = external tibial
+        rotation relative to the femur (:data:`KNEE_ROTATION_POSITIVE_SIGN`).
     """
     femoral_line = np.asarray(femur_end, dtype=float) - np.asarray(femur_start, dtype=float)
     tibial_line = np.asarray(tibia_end, dtype=float) - np.asarray(tibia_start, dtype=float)
@@ -85,10 +94,11 @@ def calculate_knee_rotation_angle(segmentation_mask: Image | np.ndarray, femur_l
     Calculate the knee rotation angle.
 
     The signed axial-plane angle from the line connecting the posterior femoral condyles to the
-    line connecting the posterior tibial condyles, with the **provisional** convention positive =
-    external rotation of the tibia relative to the femur (see :func:`_knee_rotation_angle` for the
-    sign derivation and the convention it replaced, and :data:`KNEE_ROTATION_POSITIVE_SIGN` for the
-    single place the direction is decided -- backlog task #16).
+    line connecting the posterior tibial condyles, positive = external rotation of the tibia
+    relative to the femur, which is how the published tibiofemoral rotation (TFR) angle is signed
+    (see :func:`_knee_rotation_angle` for the sign derivation and the composition it replaced, and
+    :data:`KNEE_ROTATION_POSITIVE_SIGN` for the single place the direction is decided, with the
+    citation and the caveat that only the sign is comparable with published values).
     :param segmentation_mask: A 3D segmentation mask of the knee, either as an ``Image`` /
         ``Segmentation`` (preferred: its voxel spacing is then checked against the index-space
         angle's equal-in-plane-spacing precondition without any further argument) or as a bare

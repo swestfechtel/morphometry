@@ -1,9 +1,10 @@
 """Rotation invariance, sign and mirror symmetry of the knee-rotation composition (pure, no image data).
 
 The knee rotation angle is the signed angle, in the axial plane, from the posterior FEMORAL
-condylar line to the posterior TIBIAL condylar line: with the provisional convention
-(``measurements.knee.KNEE_ROTATION_POSITIVE_SIGN``, backlog task #16), external rotation of the
-tibia relative to the femur (its lateral aspect turned posteriorly) is positive. In the LPI index
+condylar line to the posterior TIBIAL condylar line: external rotation of the tibia relative to
+the femur (its lateral aspect turned posteriorly) is positive, which is the convention the
+measurement is published under as the tibiofemoral rotation angle and is decided in one constant
+(``measurements.knee.KNEE_ROTATION_POSITIVE_SIGN``; backlog task #16, settled 2026-10-29). In the LPI index
 frame x increases towards the patient's left and y posteriorly, so a left image half holds a
 patient-right knee with lateral = -x and posterior = +y. The tests below pin the *invariances*,
 which hold under either direction; the one test that depends on the direction says so.
@@ -114,7 +115,14 @@ def test_endpoint_order_is_irrelevant(rotation_angle):
 
 
 def test_sign_is_external_tibial_rotation():
-    """A tibia whose lateral aspect is turned posteriorly relative to the femur reads positive."""
+    """A tibia whose lateral aspect is turned posteriorly relative to the femur reads positive.
+
+    This is the published sign convention for the measurement (the tibiofemoral rotation angle):
+    "this measurement is positive if the tibia is externally rotated compared to the femur"
+    (Anzillotti et al., J Exp Orthop 2026;13(2):e70708). It is the one test here that would fail
+    if ``KNEE_ROTATION_POSITIVE_SIGN`` were flipped, which is deliberate -- it is the assertion
+    that pins the convention to the literature rather than to our own internal consistency.
+    """
     # left image half = patient-right knee: lateral = -x, posterior = +y
     femur_start, femur_end = np.array([130., 120., 10.]), np.array([70., 120., 10.])
     # tibial line with its lateral (-x) end displaced posteriorly (+y) -> external rotation
@@ -135,9 +143,11 @@ def test_parallel_lines_read_zero():
 def test_direction_convention_is_isolated_in_one_constant(monkeypatch, rotation_angle):
     """Flipping ``KNEE_ROTATION_POSITIVE_SIGN`` negates the value and changes nothing else.
 
-    The clinical direction is provisional (backlog task #16), so it must be decided in exactly one
-    place: negating that constant must negate every reported angle while leaving the magnitude, the
-    rotation invariance and the mirror equivariance intact.
+    The direction itself is settled (backlog task #16, see
+    :func:`test_sign_is_external_tibial_rotation`), but it must stay decided in exactly one place:
+    negating that constant must negate every reported angle while leaving the magnitude, the
+    rotation invariance and the mirror equivariance intact. That keeps a convention change a
+    one-line change, and keeps every other invariance here independent of the convention.
     """
     points = _synthetic_landmarks(rotation_angle, 23.)
     base = K._knee_rotation_angle(*points, 'left')
