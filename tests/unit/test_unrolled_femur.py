@@ -247,7 +247,7 @@ def test_condyle_lowest_anterior_of_notch_keeps_the_crossing(lowest_in_front_mm)
     assert np.allclose(arc, radius * (theta_notch - theta), atol=0.05)
 
 
-def _side_wall_reference():
+def _side_wall_reference(side_wall=lambda x: x >= 0, extent=10.0, wall_centre=-12.0):
     """
     A two-part bone along world x (ml = +x, ap = +y, proximal = +z, notch plane ``y = 0``),
     reproducing the outer edge of a real condyle (K1_30_unbelastet, patient-right, 33.5-36 mm
@@ -263,15 +263,22 @@ def _side_wall_reference():
       profile for a 20 mm chord.
 
     Voxelised at 0.5 mm, contoured and Taubin-smoothed like a real bone surface.
+
+    :param side_wall: Function of the x coordinate selecting the side-wall part (default
+        ``x >= 0``); e.g. ``|x| <= 3`` puts it in the middle, between two normal condyle parts.
+    :param extent: Half-length of the bone along x (mm).
+    :param wall_centre: ``y`` of the side-wall part's condyle centre (radius 10, so ``<= -10``
+        keeps its distal arc behind the notch plane).
     """
     step = 0.5
-    x = np.arange(-12.0, 12.01, step)
+    x = np.arange(-extent - 2.0, extent + 2.01, step)
     y = np.arange(-26.0, 12.01, step)
     z = np.arange(-14.0, 19.01, step)
     xx, yy, zz = np.meshgrid(x, y, z, indexing='ij')
-    inner = (np.abs(xx) <= 10) & (xx < 0) & ((yy + 5) ** 2 + zz ** 2 <= 100)
-    outer = (xx >= 0) & (xx <= 10) & (((yy + 12) ** 2 + zz ** 2 <= 100)
-                                       | ((yy >= -12) & (yy <= 8) & (zz >= 6) & (zz <= 15)))
+    wall = side_wall(xx) & (np.abs(xx) <= extent)
+    inner = (np.abs(xx) <= extent) & ~wall & ((yy + 5) ** 2 + zz ** 2 <= 100)
+    outer = wall & (((yy - wall_centre) ** 2 + zz ** 2 <= 100)
+                    | ((yy >= wall_centre) & (yy <= 8) & (zz >= 6) & (zz <= 15)))
     image = pv.ImageData(dimensions=xx.shape, spacing=(step,) * 3,
                          origin=(x[0], y[0], z[0]))
     image.point_data['mask'] = (inner | outer).astype(float).ravel(order='F')
@@ -306,3 +313,27 @@ def test_level_anchored_on_a_side_wall_is_not_used():
     assert np.isfinite(arc).all()
     # voxelised and smoothed: the surface is within a fraction of a voxel of the circle
     assert np.allclose(arc, 10.0 * (theta_notch - theta), atol=0.8)
+
+
+def test_a_gap_of_unused_levels_is_not_bridged():
+    """
+    Regression: a run of unused (side-wall) levels inside the M-L range used to be filled by a
+    linear blend of the two kept levels either side, however far apart. Here the side wall
+    spans |x| <= 4 (8 mm of unused levels) between two normal condyle parts; its condyle sits
+    5.5 mm further back, so its lowest point is within ``max_distance_mm`` of the kept levels'
+    profiles and the blend used to give it an arc. A vertex more than one slice into the gap now
+    has no coordinate; one within a slice of a kept level, and the condyle either side, keep
+    theirs.
+    """
+    mesh, frame = _side_wall_reference(side_wall=lambda x: np.abs(x) <= 4.0, extent=12.0,
+                                       wall_centre=-10.5)
+    unrolled = UnrolledFemur.from_reference(mesh, frame)
+    lowest = np.array([[u, -10.5, -10.0] for u in (-2.0, 0.0, 2.5)])
+    assert np.isnan(unrolled.coordinates(lowest)).all()
+    theta = np.radians(np.array([0.0, -45.0, -90.0]))
+    theta_notch = np.arcsin(5.0 / 10.0)
+    for u in (-8.0, 8.0):
+        normal = np.stack([np.full_like(theta, u), -5 + 10 * np.sin(theta),
+                           -10 * np.cos(theta)], axis=1)
+        arc = unrolled.coordinates(normal)[:, 1]
+        assert np.allclose(arc, 10.0 * (theta_notch - theta), atol=0.8), u

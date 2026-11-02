@@ -56,6 +56,9 @@ Construction (:meth:`UnrolledFemur.from_reference`)
    length: on K1_30_unbelastet the levels 33.5-36 mm patient-right of the notch read their
    posterior condyle 10-33 mm further along than the level beside them, a strip at arc 50-85 mm
    on every femoral map. Their vertices take the neighbouring levels' values (step 3) or none.
+   A run of unused levels leaves a gap that is **not** bridged: a vertex in a gap wider than
+   ``2 * slice_mm`` takes a kept level's value only within one ``slice_mm`` of it (as beyond the
+   outermost levels) and is ``NaN`` further in, i.e. dropped from the maps and counted.
 3. Every vertex of the cropped bone mesh takes the arc of its nearest contour point (in the
    sagittal plane) on the two levels that bracket it, linearly interpolated in the
    medial-lateral coordinate. A level gives no value for the vertex if that nearest point
@@ -396,6 +399,19 @@ class UnrolledFemur:
         # One level without a profile point: fall back to the other one.
         arc = np.where(np.isnan(values[0]), values[1], np.where(np.isnan(values[1]), values[0],
                                                                 arc))
+        # A gap of unused levels (PROFILE_MAX_DETOUR_MM) inside the range: a vertex is not
+        # blended across it. As at the outer edge, a vertex within one slice of a kept level
+        # takes that level's value; further into the gap it has none. Without this cap the
+        # outer-condyle gaps of the real femurs (up to ~8 mm, e.g. K11 35-41 mm) were filled
+        # by a linear blend of two profiles that do not describe the bone in between.
+        gap = level_ml[upper] - level_ml[lower]
+        inside = (across >= level_ml[lower]) & (across <= level_ml[upper])
+        in_gap = inside & (gap > 2.0 * slice_mm + 1e-9)
+        near_lower = across - level_ml[lower] <= slice_mm
+        near_upper = level_ml[upper] - across <= slice_mm
+        gap_arc = np.where(near_lower & np.isfinite(values[0]), values[0],
+                           np.where(near_upper, values[1], np.nan))
+        arc = np.where(in_gap, gap_arc, arc)
         # Each level stands for the slab of one slice around it: beyond the outermost levels a
         # vertex takes the outermost level's value up to one slice out (the rounded end face
         # of a condyle lies there, and a plane through the very edge cuts nothing), and is
