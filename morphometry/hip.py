@@ -10,7 +10,7 @@ from morphometry.utils import sphere_fit, get_contour_points, calculate_angle_be
     get_minimum_distance_between_line_and_point, get_contour_points, num_connected_components, \
     extract_connected_components_2d, circumference_points, intersect_ndarrays, \
     sort_points_clockwise, sort_points_by_x, fit_circle_to_points
-from morphometry.image_io import Image, Segmentation
+from morphometry.image_io import Image, Segmentation, reflect_image_left_right
 from morphometry.bresenham import bresenhamline
 from morphometry import constants as C
 from morphometry import geometry as G
@@ -139,7 +139,7 @@ def _femoral_head_slab_bound(mask: np.ndarray, column: Tuple[int, int], layer_hi
     return min(layer_high + slab_layers, mask.shape[2] - 1)
 
 
-def _fit_femoral_head_consensus(points: np.ndarray, com_high: Tuple[int, int], side: str,
+def _fit_femoral_head_consensus(points: np.ndarray, com_high: Tuple[int, int],
                                 voxel_size: np.ndarray,
                                 tolerance_mm: float = C.FEMORAL_HEAD_CONSENSUS_TOLERANCE_MM,
                                 max_iterations: int = C.FEMORAL_HEAD_CONSENSUS_MAX_ITERATIONS,
@@ -153,19 +153,26 @@ def _fit_femoral_head_consensus(points: np.ndarray, com_high: Tuple[int, int], s
     medial-lateral cutoff (a cutoff cannot tell lateral head surface at the equator from neck
     surface below it):
 
-    1. Seed: fit a sphere to the points on the medial side of the top-slice centroid (``x >=``
-       centroid on a left image half, ``x <=`` on a right one) that lie within ``seed_depth_mm`` of the
-       top slab slice, trimmed anteroposteriorly to the centroid's symmetric range. The neck and
+    1. Seed: fit a sphere to the points medial of the top-slice centroid (``x >=`` centroid; this is
+       a LEFT image half, where medial is ``+x``) that lie within ``seed_depth_mm`` of the top slab
+       slice, trimmed anteroposteriorly to the centroid's symmetric range. The neck and
        trochanter are lateral, and the depth limit keeps the seed above the neck basin and the calcar,
        which the slab can reach when the column walk stays in bone; so the seed is head surface.
     2. Consensus: refit on every slab point whose distance from the current sphere's surface is at
        most ``tolerance_mm``; repeat until the inlier set no longer changes (or ``max_iterations``).
 
     Every step is defined relative to the head's own points and centroid, so the fit follows a
-    translation of the image exactly.
+    translation of the image exactly. There is no right-side branch: a right image half is measured
+    by :func:`get_femoral_head_center` as the reflection of a left one, so this helper only ever
+    sees left-sided geometry. The former ``x <=`` switch was keyed on ``int(centroid[0])``, and
+    truncation does not commute with ``x -> n - 1 - x``, so the seed's boundary column was off by
+    one on essentially every half. The consensus refit absorbed that on most of them: over the 100
+    halves of the 50 Augsburg reader-study patients, 91 agreed with their own mirror to within
+    1e-9 mm and 9 did not -- 7 of those by under 0.08 mm, and two materially, ``PA000390``
+    image-left by 3.01 mm (radius 0.43 in-plane voxels) and ``PA000397`` image-right by 1.52 mm
+    (radius 0.68).
     :param points: Slab contour points as ``(x, y, z)`` voxel indices, shape ``(n, 3)``.
     :param com_high: The ``(x, y)`` voxel index of the top-slice centroid.
-    :param side: Side of the image (not patient!), either 'left' or 'right'.
     :param voxel_size: Voxel size in mm along ``(x, y, z)``.
     :param tolerance_mm: Inlier band around the sphere surface, in mm.
     :param max_iterations: Maximum number of consensus refits.
@@ -176,7 +183,7 @@ def _fit_femoral_head_consensus(points: np.ndarray, com_high: Tuple[int, int], s
     points = np.asarray(points, dtype=float)
     points_mm = points * voxel_size
 
-    medial = points[:, 0] >= com_high[0] if side == 'left' else points[:, 0] <= com_high[0]
+    medial = points[:, 0] >= com_high[0]  # left image half: medial is +x
     near_top = (points[:, 2] - np.min(points[:, 2])) * voxel_size[2] <= seed_depth_mm
     seed = points[medial & near_top]
     if len(seed) == 0:
@@ -222,8 +229,30 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     not commute with the left/right mirror, so the image-left half came out ~0.4 voxel more
     lateral than the mirror of the image-right one (and its centre-edge angle ~1.1 degrees lower
     on the same hip).
+
+    **Mirror-equivariant on both paths**: a RIGHT image half is measured as the reflection of a
+    left one (``mask[::-1]`` measured with ``side='left'``, the centre mapped back with
+    :func:`morphometry.geometry.mirror_index_x`), so a half and its mirror image give the same head
+    centre and the same radius. The body below is therefore left-side-only -- the rule being the one
+    the torsion, CCD and tibial-torsion landmark code already follows: add left-side logic and let
+    the reflection handle the right, never a ``side == 'right'`` branch. The former right-side
+    branches were the ``ceil(x - 0.5)`` half of the isotropic column tie-break and the mirrored
+    lateral trim, both written so the direct right-side call would reproduce the mirror of the left
+    one; the reflection reproduces them by construction. On the non-isotropic path the truncated
+    seed boundary of :func:`_fit_femoral_head_consensus` did not mirror, which made 9 of the 100
+    Augsburg reader-study halves disagree with their own mirror, two of them by 1.52 and 3.01 mm
+    (see that function).
+
+    One residual exception, pre-existing and deliberately not fixed: the top-slice island selection
+    below -- and :func:`_largest_component_centroid` on the CT path -- resolves a tie with
+    ``np.argmax``, which takes the *first* maximum in ``scipy.ndimage.label``'s raster order, and
+    reflection reverses that order along x. Two islands of exactly equal size therefore select
+    different islands in the direct and in the reflected run. It needs a true tie to bite, so it
+    has never been observed on real data; a code change here would move every hip with more than
+    one island on its top slice, which is not worth it for a tie-break.
     :param segmentation_mask: A segmentation mask of the proximal femur where the femur is 1 and everything else 0.
-    :param side: Side of the image (not patient!), either 'left' or 'right'.
+    :param side: Side of the image (not patient!), either 'left' or 'right'. A right half is
+        measured as the reflection of a left one (see above), so the two sides cannot diverge.
     :param segmentation_label: The label of the femur in the segmentation mask.
     :param return_layers: Whether to return layer_high and layer_low.
     :param x_ratio: Slice-axis scale factor, in in-plane voxels per slice. On the non-isotropic
@@ -241,6 +270,18 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     :return: The radius (in in-plane voxels) and the location (voxel index) of the femoral head center.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
+
+    if side == 'right':
+        # measure the right half as the reflection of a left one and mirror the centre back, so
+        # the two sides cannot be different measurements. The radius is a scalar and the two layer
+        # bounds are z indices, so the x-mirror leaves all three alone.
+        width = segmentation_mask.shape[0]
+        radius, center, *layers = get_femoral_head_center(segmentation_mask[::-1], side='left',
+                                                          segmentation_label=segmentation_label,
+                                                          return_layers=return_layers, x_ratio=x_ratio,
+                                                          isotropic=isotropic, spacing=spacing)
+        return (radius, G.mirror_index_x(center, width), *layers)
+
     segmentation_mask = np.where(segmentation_mask == segmentation_label, 1, 0)
 
     contour_pts = get_contour_points(segmentation_mask)
@@ -267,13 +308,15 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     centroid = center_of_mass(segmentation_mask[:, :, layer_high])
     com_high = (int(centroid[0]), int(centroid[1]))
     if isotropic:
-        # the column walk indexes the mask, so it needs an integer x. Floor does not commute with
-        # the mirror x -> n-1-x; rounding to nearest with ties broken towards medial (+x on the
-        # left half, -x on the right) does, so a reflected hip walks the mirrored column. The
-        # lateral cutoff below uses the unrounded centroid. The consensus path keeps the
-        # truncation it was validated with.
-        com_high = (int(np.floor(centroid[0] + .5)) if side == 'left' else int(np.ceil(centroid[0] - .5)),
-                    com_high[1])
+        # The column walk indexes the mask, so it needs an integer x, and this is nearest-with-
+        # ties-up rather than the plain int() above for one reason only: it is what the shipped
+        # left-side value was computed with, so keeping it is what holds every NaKo golden still.
+        # Its ORIGINAL reason is gone -- it was chosen because floor does not commute with the
+        # mirror x -> n-1-x while this does, and with a right half now measured through the
+        # reflection there are no longer two code paths that have to agree, so any rounding rule
+        # would mirror. Do not preserve it as a symmetry constraint; it is a bit-compatibility one.
+        # The lateral cutoff below uses the unrounded centroid; the consensus path keeps int().
+        com_high = (int(np.floor(centroid[0] + .5)), com_high[1])
     # the walk works in index space, so the length unit is the in-plane voxel and x_ratio is how
     # many of those the caller says a slice is worth. The pipelines' x_ratio is not the true
     # aspect (task #6), but this bound is inert either way: identical at 1, 5.47 and 9.14.
@@ -288,7 +331,7 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
 
     if not isotropic:
         voxel_size = np.abs(np.asarray(spacing, dtype=float)) if spacing is not None else np.array([1., 1., x_ratio])
-        r_mm, center_mm = _fit_femoral_head_consensus(point_cloud, com_high, side, voxel_size)
+        r_mm, center_mm = _fit_femoral_head_consensus(point_cloud, com_high, voxel_size)
         # back to the units the callers expect: in-plane voxels for the radius, voxel index for the centre
         r, center = r_mm / voxel_size[0], center_mm / voxel_size
         return (r, center) if not return_layers else (r, center, layer_high, layer_low)
@@ -296,17 +339,13 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     point_cloud = point_cloud.astype(np.float32) * np.array([1, 1, x_ratio])  # adjust for slice thickness
 
     # need to exclude lateral parts of the mask: compute distance between com and max medial point of femoral head,
-    # then exclude everything that is farther away than this distance in the lateral direction
-    if side == 'left':
-        max_s = np.max(point_cloud[:, 0])
-        radius = max_s - centroid[0]
-        min_s = centroid[0] - radius  # the most lateral point of the femoral head
-        point_cloud = point_cloud[point_cloud[:, 0] >= min_s]
-    else:
-        min_s = np.min(point_cloud[:, 0])
-        radius = centroid[0] - min_s
-        max_s = centroid[0] + radius  # the most lateral point of the femoral head
-        point_cloud = point_cloud[point_cloud[:, 0] <= max_s]
+    # then exclude everything that is farther away than this distance in the lateral direction.
+    # This is a left image half, so medial is +x and the cutoff goes on the -x side; the mirrored
+    # form the right side used to carry is now reached through the reflection at the top.
+    max_s = np.max(point_cloud[:, 0])
+    radius = max_s - centroid[0]
+    min_s = centroid[0] - radius  # the most lateral point of the femoral head
+    point_cloud = point_cloud[point_cloud[:, 0] >= min_s]
 
     min_c = np.min(point_cloud[:, 1])
     radius = com_high[1] - min_c
@@ -321,6 +360,39 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
 
     return (r, center) if not return_layers else (r, center, layer_high, layer_low)
 
+
+def _mirror_physical_point_x(image: Image, point: np.ndarray) -> np.ndarray:
+    """Map a physical point through a left-right reflection of ``image``'s index grid.
+
+    :func:`morphometry.image_io.reflect_image_left_right` moves the voxel at index ``i`` to index
+    ``n - 1 - i`` and leaves the index-to-physical mapping alone, so a physical point found on the
+    reflected image belongs, in the original image, at the physical location of the mirrored index.
+    That is ``p -> A ((n - 1) - t, u, v) + o`` where ``(t, u, v)`` is the continuous index of ``p``.
+
+    The index is recovered from the affine assembled out of four
+    :meth:`Image.transform_index_to_physical_point` calls rather than from
+    :meth:`Image.transform_physical_point_to_index`, which on the SimpleITK backend is
+    ``TransformPhysicalPointToIndex`` and returns an *integer* index -- it would snap a sphere-fit
+    centre to a whole voxel (0.8 mm in plane, 3.0 mm in z on whole-leg CT), against this module's
+    rule that physical coordinates stay floats. Four integer index calls are exact on both backends
+    and recover the full index-to-physical matrix, so the round trip is continuous. The width comes
+    from ``image.shape`` and not from ``image.array.shape`` for the same reason of backend
+    independence: ``Image.array`` is ``(x, y, z)`` on nibabel but ``(z, y, x)`` on SimpleITK, where
+    ``array.shape[0]`` would be the slice count, while ``Image.shape`` is the width on both (and
+    needs no float64 copy of the volume to read).
+    :param image: The image (or Segmentation) whose index grid is reflected; not modified.
+    :param point: The physical point to map, length 3.
+    :return: The mapped physical point as a float array of length 3.
+    """
+    origin = np.asarray(image.transform_index_to_physical_point((0, 0, 0)), dtype=float)
+    # columns of the index-to-physical matrix: where each unit index step lands in physical space
+    matrix = np.stack([np.asarray(image.transform_index_to_physical_point(step), dtype=float) - origin
+                       for step in ((1, 0, 0), (0, 1, 0), (0, 0, 1))], axis=1)
+    index = np.linalg.solve(matrix, np.asarray(point, dtype=float) - origin)
+    index[0] = (image.shape[0] - 1) - index[0]
+    return matrix @ index + origin
+
+
 def get_femoral_head_center_ct(femur_image: Segmentation, segmentation_label: int = 1, side: str = 'left') -> Tuple[float, np.ndarray]:
     """
     Get the center of the femoral head from a whole-leg CT segmentation mask.
@@ -331,11 +403,41 @@ def get_femoral_head_center_ct(femur_image: Segmentation, segmentation_label: in
     them), and the slab handed to the sphere fit is capped at one head diameter by
     :func:`_femoral_head_slab_bound` (so on a straight femur the walk cannot run head into
     neck into shaft and return a radius far above anatomical).
+
+    **Mirror-equivariant, as in the MRI variant**: a RIGHT image half is measured as the
+    reflection of a left one and the centre mapped back with :func:`_mirror_physical_point_x`, so
+    the body below is left-side-only and the two sides cannot be different measurements. The
+    reflection (:func:`morphometry.image_io.reflect_image_left_right`), not the index-relabelling
+    :func:`morphometry.image_io.mirror_image_left_right`, is the operation needed here, for the
+    same reason as in :func:`morphometry.femur.get_proximal_reference_line_ct` and
+    ``measurements.hip.calculate_ccd_ct``: the lateral cutoff below is applied to *physical* x, so
+    the landmark code only sees a consistent left-sided leg after the anatomy itself has been
+    reflected. The deleted right-side branch was the mirror image of the kept one, written so the
+    direct right-side call would reproduce the left-side answer; it did not, and unlike the MRI path
+    it failed *systematically* rather than occasionally -- on the NMDID verification sample only 2
+    of 46 right halves agreed with their mirror to 1e-9 mm, median gap 0.78 mm, max 3.26, against
+    4 of 100 beyond 0.01 mm on the Augsburg MRI. So the ``int()`` truncation of the seed boundary
+    that explains the MRI path is **not** a sufficient account of the CT one.
+    :func:`_largest_component_centroid`, which starts this column, has three steps that do not
+    commute with ``x -> n - 1 - x``: ``np.argmax`` over island sizes (first maximum in raster
+    order), ``int()`` on the centroid, and the nearest-voxel fallback for a concave island
+    (``np.argmin`` over ``np.argwhere`` order). The last can move the column by more than a voxel
+    and with it the slab bound, which is the likeliest reason the CT gap is systematic. None of
+    that is diagnosed here and none of it needs to be: the reflection makes the question moot.
     :param femur_image: A segmentation mask of the whole leg.
     :param segmentation_label: The label of the femur in the segmentation mask.
-    :param side: Side of the image (not patient!), either 'left' or 'right'.
-    :return: The radius and location of the femoral head center.
+    :param side: Side of the image (not patient!), either 'left' or 'right'. A right half is
+        measured as the reflection of a left one (see above), so the two sides cannot diverge.
+    :return: The radius and location (physical mm) of the femoral head center.
     """
+    G.validate_side(side)
+
+    if side == 'right':
+        radius, center = get_femoral_head_center_ct(reflect_image_left_right(femur_image),
+                                                    segmentation_label=segmentation_label, side='left')
+        # a reflection is an isometry, so only the centre moves; the radius carries over unchanged
+        return radius, _mirror_physical_point_x(femur_image, center)
+
     mask = np.where(femur_image.array == segmentation_label, 1, 0)
     contour_points = get_contour_points(mask)
 
@@ -362,16 +464,13 @@ def get_femoral_head_center_ct(femur_image: Segmentation, segmentation_label: in
     middle_slice = (layer_high + (layer_low - layer_high) // 2)
     superior_half = contour_points[contour_points[:, 2] >= middle_slice]
 
-    if side == 'left':
-        min_s = np.min(superior_half[:, 0])
-        radius = com_high[0] - min_s
-        max_s = com_high[0] + radius
-        contour_points = contour_points[contour_points[:, 0] <= max_s]
-    else:
-        max_s = np.max(superior_half[:, 0])
-        radius = max_s - com_high[0]
-        min_s = com_high[0] - radius
-        contour_points = contour_points[contour_points[:, 0] >= min_s]
+    # left image half: in this physical frame the head's medial surface is at the smallest x, so the
+    # lateral cutoff goes one "medial radius" on the +x side of the top-slice centroid. The mirrored
+    # form the right side used to carry is now reached through the reflection at the top.
+    min_s = np.min(superior_half[:, 0])
+    radius = com_high[0] - min_s
+    max_s = com_high[0] + radius
+    contour_points = contour_points[contour_points[:, 0] <= max_s]
 
     min_c = np.min(contour_points[:, 1])
     radius = com_high[1] - min_c

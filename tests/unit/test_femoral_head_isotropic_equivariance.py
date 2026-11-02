@@ -1,23 +1,35 @@
 """Mirror equivariance of the isotropic femoral-head centre (``get_femoral_head_center(isotropic=True)``).
 
-The isotropic path (NaKo hip MRI) fits a sphere to the contour points of a slab of slices below the
-top of the femur, after dropping everything lateral of a cutoff placed one "medial radius" on the far
-side of the top-slice centroid. The left-side code puts the cutoff at ``2 * cx - max_x``, the
-right-side code at ``2 * cx - min_x``; on a mirror image the two are the same plane only if ``cx``
-mirrors too. It used to be ``int(cx)``, and floor does not commute with ``x -> n - 1 - x`` (the
-mirror of ``floor(n - 1 - cx)`` is ``ceil(cx)``), so the right-side cutoff of a reflected hip sat two
-voxels away from the left-side cutoff of the original, the column walk that ends the slab ran down a
-neighbouring column, and the two image sides were measured with different head centres. On the 60
-NaKo reference hips that made the left-side code read the centre-edge angle ~1.1 degrees lower than
-the right-side code on the same hip.
+**What this test pins now.** ``get_femoral_head_center`` measures a right image half as the
+reflection of a left one (backlog task #11): ``mask[::-1]`` run through the left-side code, with the
+centre mapped back by ``x -> n - 1 - x``. So the probe below -- a left half, reflected, measured
+with ``side='right'`` -- reflects twice and reaches the left-side code with the *identical* array.
+The arithmetic that produces the centre is therefore the same arithmetic in both calls, and the
+assertion is **exact**: what is left to fail is the index mapping itself, which is what this test
+guards. An ``n`` versus ``n - 1`` slip, a mirror about the wrong axis, or a ``floor`` reintroduced
+into the map-back all fail it; a change inside the shared left-side code cannot, because the probe
+reproduces it identically on both sides.
 
-The cutoff now uses the unrounded centroid, and the column walk the nearest column with half-voxel
-ties broken towards medial (``floor(x + 0.5)`` on the left, ``ceil(x - 0.5)`` on the right), which
-commutes with the mirror. Plain ``np.rint`` would not: it rounds ties to even, and the parity flips
-under ``x -> n - 1 - x`` when ``n`` is even. The phantom is a femoral head with a neck running
-laterally and inferiorly, on a 1 mm isotropic grid, with an off-grid head centre so the top-slice
-centroid is not an integer; one centre sits on a half voxel, where the top slice is symmetric and
-its centroid is an exact tie.
+**What it used to pin, and why that content is gone.** The isotropic path once had a genuine
+right-side branch: the lateral cutoff (one "medial radius" on the far side of the top-slice
+centroid) was ``2 * cx - max_x`` on the left and ``2 * cx - min_x`` on the right, and the column
+walk rounded with ``floor(x + 0.5)`` on the left against ``ceil(x - 0.5)`` on the right. Those two
+had to be each other's mirror for the two independent code paths to agree, and before that they
+were both ``int(cx)`` -- floor does not commute with ``x -> n - 1 - x`` (the mirror of
+``floor(n - 1 - cx)`` is ``ceil(cx)``), so the right-side cutoff of a reflected hip sat two voxels
+from the left-side cutoff of the original, the column walk ran down a neighbouring column, and the
+two image sides were measured with different head centres -- worth ~1.1 degrees of centre-edge
+angle on the same hip over the 60 NaKo reference hips.
+
+With a single code path that requirement has disappeared rather than moved: there is no second
+rounding rule left to agree with, so an exact-tie centroid is no longer a hazard at all. The
+``floor(x + 0.5)`` rule survives only as bit-compatibility with the shipped left-side value (it is
+what every NaKo golden was captured with), not as a symmetry constraint.
+
+The phantom is a femoral head with a neck running laterally and inferiorly, on a 1 mm isotropic
+grid, with an off-grid head centre so the top-slice centroid is not an integer. The ``x = 75.5``
+case is kept deliberately: it is the exact tie that used to be the difficult input, and it is now
+no more interesting than the others, which is the point.
 """
 import numpy as np
 import pytest
@@ -52,7 +64,12 @@ def head_and_neck(head: np.ndarray, shape=SHAPE) -> np.ndarray:
 
 @pytest.mark.parametrize('head', HEAD_CENTRES, ids=lambda h: f'x{h[0]:.1f}')
 def test_isotropic_head_centre_is_mirror_equivariant(head):
-    """The left half and its reflection measured with ``side='right'`` give mirrored centres, equal radii."""
+    """The left half and its reflection measured with ``side='right'`` give mirrored centres, equal radii.
+
+    Asserted as exact equality, not within a tolerance: the probe double-reflects to the identical
+    array, so the two calls run the same arithmetic and any non-zero difference is a defect in the
+    index map-back rather than floating-point reassociation.
+    """
     mask = head_and_neck(head)
     top = np.flatnonzero(mask.any(axis=(0, 1)))[0]
     cx = center_of_mass(mask[:, :, top])[0]
@@ -64,5 +81,5 @@ def test_isotropic_head_centre_is_mirror_equivariant(head):
 
     mapped = np.asarray(c_right, dtype=float).copy()
     mapped[0] = SHAPE[0] - 1 - mapped[0]
-    np.testing.assert_allclose(mapped, c_left, atol=1e-6)
-    assert r_right == pytest.approx(r_left, abs=1e-6)
+    np.testing.assert_array_equal(mapped, np.asarray(c_left, dtype=float))
+    assert r_right == r_left
