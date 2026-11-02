@@ -368,3 +368,41 @@ def test_write_csv_round_trips_columns(tmp_path, fake_delta_maps):
     mod.write_csv(result['subregion_rows'], mod.SUBREGION_COLUMNS, path)
     header = path.read_text().splitlines()[0].split(',')
     assert header == mod.SUBREGION_COLUMNS
+
+
+# ---------------------------------------------------------------------------------------
+# Isolation: figures and per-bone crashes
+# ---------------------------------------------------------------------------------------
+
+def test_figure_failure_keeps_the_knee_rows_and_is_recorded(fake_delta_maps, monkeypatch,
+                                                            tmp_path):
+    def broken_plot(*args, **kwargs):
+        raise OSError('No space left on device')
+
+    monkeypatch.setattr(mod, 'plot_knee_deltas', broken_plot)
+    knee, result = mod._knee_job(('K1', _knee(), 1.0, 3.0, 1.0, tmp_path))
+    assert knee == 'K1'
+    assert {r['status'] for r in result['subregion_rows']} == {'ok'}
+    assert {r['status'] for r in result['hotspot_rows']} == {'ok'}
+    figure = [f for f in result['failures'] if f['stage'] == 'figure']
+    assert [f['bone'] for f in figure] == ['tibia', 'femur']
+    assert all('OSError' in f['error'] for f in figure)
+    assert not list(tmp_path.glob('*.png'))
+
+
+def test_unexpected_crash_of_one_bone_keeps_the_other_bone(monkeypatch, fake_delta_maps):
+    real = mod.knee_delta_maps
+
+    def femur_crashes(bone, *args, **kwargs):
+        if bone == 'femur':
+            raise IndexError('index 40 is out of bounds')
+        return real(bone, *args, **kwargs)
+
+    monkeypatch.setattr(mod, 'knee_delta_maps', femur_crashes)
+    result = _process(_knee())
+    assert {r['status'] for r in _rows(result, 'subregion_rows', bone='tibia')} == {'ok'}
+    assert {r['status'] for r in _rows(result, 'subregion_rows', bone='femur')} == {'failed'}
+    assert result['maps']['tibia'] is not None and result['maps']['femur'] is None
+    crash = [f for f in result['failures'] if f['stage'] == 'delta_maps']
+    assert len(crash) == 1 and crash[0]['bone'] == 'femur'
+    assert 'IndexError' in crash[0]['error']

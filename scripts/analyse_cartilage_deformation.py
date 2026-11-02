@@ -63,7 +63,8 @@ Outputs (into ``-o``)
 * ``registration.csv`` -- :data:`REGISTRATION_COLUMNS`, one row per registered
   (comparison, bone).
 * ``failures.csv`` -- :data:`FAILURE_COLUMNS`, one row per failed measurement, registration
-  or hotspot search.
+  or hotspot search, an unexpected crash of one bone's delta maps (stage ``delta_maps``,
+  that bone only) or a figure that could not be drawn (stage ``figure``, rows unaffected).
 * ``<knee>_tibia_delta.png`` / ``<knee>_femur_delta.png`` -- the 2 x 4 grid of
   :func:`~morphometry.cartilage.deformation_plot.plot_knee_deltas` (not drawn for a bone whose
   reference failed).
@@ -102,6 +103,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
+from morphometry.cartilage.deformation_plot import plot_knee_deltas
 from morphometry.cartilage.deformation import (
     COMPARISONS, COMPARTMENTS, REFERENCE, bone_measurement, find_largest_thinning,
     knee_delta_maps,
@@ -592,13 +594,17 @@ def process_knee(knee: str, measurements: Dict[tuple, dict], grid_mm: float = 1.
                 failure(key, bone, 'measurement', record['errors'].get(bone, 'failed'))
         configurations = {key: measurements[key][bone] for key in COMPARISONS
                           if key in measurements and measurements[key][bone] is not None}
+        ref_stage = 'reference'
         if ref_m is not None:
             try:
                 maps = knee_delta_maps(bone, ref_m, configurations, grid_mm=grid_mm)
             except CAUGHT as error:
                 ref_error = f'reference: {type(error).__name__}: {error}'
+            except Exception as error:  # an unexpected crash costs this bone only
+                ref_stage = 'delta_maps'
+                ref_error = f'delta maps crashed: {type(error).__name__}: {error}'
         if ref_error:
-            failure(REFERENCE, bone, 'reference', ref_error)
+            failure(REFERENCE, bone, ref_stage, ref_error)
             log.warning('%s %s: %s; every comparison of this bone fails', knee, bone, ref_error)
         if maps is not None:
             for key, error in maps.errors.items():
@@ -669,10 +675,11 @@ def write_knee_figures(knee: str, result: dict, out_dir: Path) -> List[str]:
     :param knee: Knee id.
     :param result: Its :func:`process_knee` result.
     :param out_dir: Output directory.
-    :return: The paths written (a bone whose reference failed has no map and no figure).
+    :return: The paths written (a bone whose reference failed has no map and no figure). A
+        figure that cannot be drawn or saved is logged and appended to ``result['failures']``
+        with stage ``figure``; it never touches the knee's rows.
     """
     import matplotlib.pyplot as plt
-    from morphometry.cartilage.deformation_plot import plot_knee_deltas
 
     written = []
     for bone in BONES:
@@ -681,9 +688,19 @@ def write_knee_figures(knee: str, result: dict, out_dir: Path) -> List[str]:
             log.warning('%s %s: no delta maps (reference failed); no figure', knee, bone)
             continue
         path = Path(out_dir) / f'{knee}_{bone}_delta.png'
-        figure = plot_knee_deltas(maps, knee, hotspots=result['hotspots'][bone],
-                                  panel_titles=result['panel_titles'][bone], path=str(path))
-        plt.close(figure)
+        try:
+            figure = plot_knee_deltas(maps, knee, hotspots=result['hotspots'][bone],
+                                      panel_titles=result['panel_titles'][bone],
+                                      path=str(path))
+            plt.close(figure)
+        except Exception as error:
+            message = f'{type(error).__name__}: {error}'
+            log.error('%s %s: figure failed: %s', knee, bone, message)
+            result['failures'].append({'knee': knee, 'angle': REFERENCE[0],
+                                       'load': REFERENCE[1], 'bone': bone, 'stage': 'figure',
+                                       'error': message})
+            plt.close('all')
+            continue
         written.append(str(path))
     return written
 
@@ -703,8 +720,10 @@ def _knee_job(arguments: tuple) -> Tuple[str, dict]:
     """
     Process-pool entry point: :func:`process_knee` plus the knee's figures.
 
-    An exception :func:`process_knee` does not catch (or a figure failing) does not lose the
-    knee's rows: the knee is re-processed with every scan failed, so every row is written with
+    Figures are drawn after the rows, each in its own ``try`` (:func:`write_knee_figures`), so
+    a figure failing never fails a row. An exception :func:`process_knee` itself does not
+    catch (it already isolates each bone's delta maps) does not lose the knee's rows: the knee
+    is re-processed with every scan failed, so every row is written with
     status ``failed`` (``missing`` for absent files) and the error in ``failures.csv``.
 
     :param arguments: ``(knee, measurements, grid_mm, neighbourhood_mm, max_rms_mm, out_dir)``.
@@ -714,13 +733,14 @@ def _knee_job(arguments: tuple) -> Tuple[str, dict]:
     knee, measurements, grid_mm, neighbourhood_mm, max_rms_mm, out_dir = arguments
     try:
         result = process_knee(knee, measurements, grid_mm, neighbourhood_mm, max_rms_mm)
-        write_knee_figures(knee, result, out_dir)
     except Exception as error:
         message = f'knee job: {type(error).__name__}: {error}'
         log.error('%s: %s', knee, message)
         result = process_knee(knee, {k: failed_record(r, message)
                                      for k, r in measurements.items()},
                               grid_mm, neighbourhood_mm, max_rms_mm)
+    # Figures after, and isolated: a PNG that cannot be drawn never fails the knee's rows.
+    write_knee_figures(knee, result, out_dir)
     return knee, result
 
 
