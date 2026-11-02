@@ -78,16 +78,33 @@ voxelisations of the same bone (against <= 0.6 mm on the condyles). A real fossa
 so this is the phantom's worst case, not a measured property of real knees. Before the
 corner rule above, such a level could jump to a crossing ~20 mm proximal (the underside of the
 shaft); that is pinned against by ``tests/unit/test_unrolled_femur.py``.
+
+Delta maps (:func:`knee_delta_maps`)
+------------------------------------
+Per knee and bone, every configuration's measurement (:class:`BoneMeasurement`, built from a
+subdivision and its :class:`~morphometry.cartilage.thickness.ThicknessMaps` by
+:func:`bone_measurement`) is rigidly registered onto the reference's bone
+(:data:`REFERENCE`, unloaded 30 degrees), its **covered** tAB triangle centroids are carried
+into the reference's world frame and binned, area-weighted, into the reference's map
+coordinates: the tibial plateau plane of the reference :class:`KneeFrame` for the tibia, the
+:class:`UnrolledFemur` of the reference femur for the femur. Denuded triangles are excluded
+(their cells stay empty), never counted as 0. All maps of one knee and bone share one
+:class:`MapGrid`; ``delta = configuration - reference`` per cell, defined only where both are.
 """
-from dataclasses import dataclass
-from typing import Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 import pyvista as pv
 from scipy.spatial import cKDTree
 
 from morphometry.cartilage.femur_regions import FemoralFrame, _polyline_components
-from morphometry.cartilage.registration import REGISTRATION_CROP_MM, crop_to_articular_end
+from morphometry.cartilage.registration import (
+    REGISTRATION_CROP_MM, RegistrationResult, RigidTransform, crop_to_articular_end,
+    register_bone,
+)
+from morphometry.cartilage.surface import triangle_areas, triangle_centroids
+from morphometry.cartilage.thickness import KneeFrame, ThicknessMaps, knee_frame_from_tibia
 
 #: Largest distance (mm) anterior of the notch plane at which a profile vertex can serve as the
 #: arc origin (a corner) when the profile has no distal crossing of the plane (see
@@ -374,3 +391,481 @@ class UnrolledFemur:
         out[ok, 0] = across[ok] - float(self.frame.notch_point @ self.frame.ml_axis)
         out[ok, 1] = arc[ok]
         return out
+
+
+# ----------------------------------------------------------------------------------------
+# Reference-anchored thickness maps and their deltas
+# ----------------------------------------------------------------------------------------
+
+#: The reference configuration ``(flexion angle in degrees, load)`` every other configuration
+#: of a knee is compared against: unloaded, 30 degrees of flexion.
+REFERENCE = (30, 'unbelastet')
+
+#: The configurations compared against :data:`REFERENCE`, in reporting order.
+COMPARISONS = ((0, 'unbelastet'), (60, 'unbelastet'), (90, 'unbelastet'),
+               (0, 'belastet'), (30, 'belastet'), (60, 'belastet'), (90, 'belastet'))
+
+#: How much longer (mm) the reference (fixed) bone is cropped than a configuration's (moving)
+#: bone before registration. The registration residual is one-sided (moving -> fixed) and
+#: counts moving surface beyond the fixed surface's extent at full distance, so the moving
+#: crop must lie inside the fixed one (see :mod:`morphometry.cartilage.registration`).
+REFERENCE_CROP_MARGIN_MM = 10.0
+
+#: Which end of the bone's long axis (``frame_axes[2]``) holds the articular surface:
+#: the tibial plateau normal points superior (keep its maximum), the femoral shaft axis points
+#: proximal (keep its minimum, the distal end).
+_ARTICULAR_END = {'tibia': 'max', 'femur': 'min'}
+
+
+@dataclass
+class BoneMeasurement:
+    """
+    Everything the delta maps need from one bone of one scan, detached from the image.
+
+    Plain arrays, meshes and frame dataclasses only, so instances pickle (results of the
+    expensive subdivision + thickness step are cached to disk per scan).
+
+    :ivar bone: ``'tibia'`` or ``'femur'``.
+    :ivar tab_mesh: The labelled tAB of the subdivision (``subdivision.mesh``, world mm), with
+        cell data ``'region'`` (index into ``TIBIA_REGION_KEYS`` / ``FEMUR_REGION_KEYS``) and
+        ``'covered'`` (bool, ``False`` = denuded).
+    :ivar bone_mesh: The full bone surface the subdivision was built on (world mm); the
+        registration uses this, never the cartilage.
+    :ivar triangle_thickness: ``(tab_mesh.n_cells,)`` per-triangle ``cAB -> AC`` distance (mm),
+        ``ThicknessMaps.triangle_thickness`` (0 on denuded triangles, which the maps exclude).
+    :ivar statistics: ``ThicknessMaps.statistics`` (per-subregion area-weighted statistics).
+    :ivar frame_origin: ``(3,)`` origin of the bone's anatomical frame (world mm), used for the
+        initial registration estimate.
+    :ivar frame_axes: ``(3, 3)`` row-orthonormal, right-handed axes of that frame. Row 2 is the
+        bone's long axis (tibia: plateau normal, superior; femur: shaft axis, proximal), along
+        which the bone is cropped to its articular end.
+    :ivar femoral_frame: The :class:`FemoralFrame` (femur only; needed for a femoral reference,
+        whose :class:`UnrolledFemur` is built on it).
+    :ivar knee_frame: The tibial :class:`KneeFrame` (tibia only; needed for a tibial reference,
+        whose plateau plane keys the map).
+    """
+    bone: str
+    tab_mesh: pv.PolyData
+    bone_mesh: pv.PolyData
+    triangle_thickness: np.ndarray
+    statistics: dict
+    frame_origin: np.ndarray
+    frame_axes: np.ndarray
+    femoral_frame: Optional[FemoralFrame] = None
+    knee_frame: Optional[KneeFrame] = None
+
+    def __post_init__(self):
+        """Coerce the array fields to float arrays of the right shape."""
+        self.triangle_thickness = np.asarray(self.triangle_thickness, dtype=float).ravel()
+        self.frame_origin = np.asarray(self.frame_origin, dtype=float).reshape(3)
+        self.frame_axes = np.asarray(self.frame_axes, dtype=float).reshape(3, 3)
+
+
+def bone_measurement(bone: str, subdivision, thickness: ThicknessMaps) -> BoneMeasurement:
+    """
+    Collect one bone's subdivision and thickness result into a :class:`BoneMeasurement`.
+
+    The anatomical frame used to initialise the registration is, for the femur, the femoral
+    frame (rows ``ml_axis, ap_axis, proximal_axis``, origin the trochlear-notch point); for the
+    tibia, the shared knee frame of :func:`~morphometry.cartilage.thickness.knee_frame_from_tibia`
+    (rows ``e1`` patient right, ``e2`` anterior, ``e3`` superior; origin the midpoint of the two
+    plates' centres of gravity). Both are right-handed with the long axis in row 2.
+
+    :param bone: ``'tibia'`` or ``'femur'``.
+    :param subdivision: A :class:`~morphometry.cartilage.tibia_regions.TibiaSubdivision` or
+        :class:`~morphometry.cartilage.femur_regions.FemurSubdivision` carrying ``bone_mesh``.
+    :param thickness: The :class:`~morphometry.cartilage.thickness.ThicknessMaps` measured on
+        that subdivision (its ``triangle_thickness`` must be aligned with ``subdivision.mesh``).
+    :return: A :class:`BoneMeasurement`. The meshes and frames are shared with ``subdivision``,
+        not copied.
+    :raises ValueError: For an unknown ``bone``, a subdivision without ``bone_mesh``, or a
+        thickness result without (or misaligned) ``triangle_thickness``.
+    """
+    if bone not in _ARTICULAR_END:
+        raise ValueError(f"bone must be 'tibia' or 'femur', got {bone!r}")
+    if getattr(subdivision, 'bone_mesh', None) is None:
+        raise ValueError(f'the {bone} subdivision carries no bone_mesh')
+    triangles = getattr(thickness, 'triangle_thickness', None)
+    if triangles is None or len(triangles) != subdivision.mesh.n_cells:
+        raise ValueError(f'the {bone} thickness result has no triangle_thickness aligned with '
+                         'the subdivision mesh')
+    femoral_frame = knee_frame = None
+    if bone == 'femur':
+        femoral_frame = subdivision.frame
+        axes = np.stack([femoral_frame.ml_axis, femoral_frame.ap_axis,
+                         femoral_frame.proximal_axis])
+        origin = femoral_frame.notch_point
+    else:
+        knee_frame = knee_frame_from_tibia(subdivision)
+        axes, origin = knee_frame.axes, knee_frame.origin
+    return BoneMeasurement(bone=bone, tab_mesh=subdivision.mesh, bone_mesh=subdivision.bone_mesh,
+                           triangle_thickness=triangles,
+                           statistics=dict(getattr(thickness, 'statistics', None) or {}),
+                           frame_origin=origin, frame_axes=axes, femoral_frame=femoral_frame,
+                           knee_frame=knee_frame)
+
+
+@dataclass(eq=False)
+class MapGrid:
+    """
+    A square grid of map cells over 2-D map coordinates (mm).
+
+    Cell ``(i, j)`` is centred at ``origin_mm + grid_mm * (i, j)``: index ``i`` runs along map
+    coordinate column 0 and ``j`` along column 1, so a map array ``a`` of this grid has
+    ``a[i, j]`` for the cell at ``(column 0, column 1) ~ centre_mm(i, j)``. (For an image with
+    column 0 horizontal, plot ``a.T`` with ``origin='lower'``.) The map coordinates are those
+    of the reference scan: the tibial :meth:`KneeFrame.in_plane` (patient right, anterior) or
+    the :meth:`UnrolledFemur.coordinates` (patient right, arc posteriorly).
+
+    :ivar origin_mm: ``(2,)`` map coordinates (mm) of the centre of cell ``(0, 0)``.
+    :ivar grid_mm: Side length of one cell (mm).
+    :ivar shape: ``(H, W)``: number of cells along column 0 and column 1.
+    """
+    origin_mm: np.ndarray
+    grid_mm: float
+    shape: Tuple[int, int]
+
+    def __post_init__(self):
+        """Coerce the fields and check the cell size."""
+        self.origin_mm = np.asarray(self.origin_mm, dtype=float).reshape(2)
+        self.grid_mm = float(self.grid_mm)
+        self.shape = (int(self.shape[0]), int(self.shape[1]))
+        if not self.grid_mm > 0:
+            raise ValueError(f'grid_mm must be positive, got {self.grid_mm!r}')
+
+    def __eq__(self, other) -> bool:
+        """
+        Whether two grids have the same origin, cell size and shape.
+
+        :param other: Another object.
+        :return: ``True`` for an identical :class:`MapGrid`.
+        """
+        return (isinstance(other, MapGrid) and self.grid_mm == other.grid_mm
+                and self.shape == other.shape
+                and np.array_equal(self.origin_mm, other.origin_mm))
+
+    @classmethod
+    def covering(cls, coordinate_sets: Sequence[np.ndarray], grid_mm: float,
+                 pad_cells: int = 2) -> 'MapGrid':
+        """
+        The smallest grid holding every finite point of several coordinate sets, plus padding.
+
+        Cell boundaries lie on the absolute lattice ``(k + 1/2) * grid_mm`` (cell centres at
+        integer multiples of ``grid_mm``), so two grids of the same cell size over the same
+        coordinates discretise identically wherever their extents differ.
+
+        :param coordinate_sets: Sequence of ``(N_k, 2)`` map coordinates (mm); rows with a NaN
+            are ignored.
+        :param grid_mm: Side length of one cell (mm).
+        :param pad_cells: Empty cells added on every side (room for a smoothing kernel).
+        :return: A :class:`MapGrid`.
+        :raises ValueError: If no set holds a finite point, or ``grid_mm`` is not positive.
+        """
+        if not grid_mm > 0:
+            raise ValueError(f'grid_mm must be positive, got {grid_mm!r}')
+        points = [np.asarray(c, dtype=float).reshape(-1, 2) for c in coordinate_sets]
+        points = np.vstack(points) if points else np.zeros((0, 2))
+        points = points[np.all(np.isfinite(points), axis=1)]
+        if len(points) == 0:
+            raise ValueError('no finite map coordinates to build a grid over')
+        lo = np.floor(points.min(axis=0) / grid_mm + 0.5).astype(np.int64)
+        hi = np.floor(points.max(axis=0) / grid_mm + 0.5).astype(np.int64)
+        shape = hi - lo + 1 + 2 * int(pad_cells)
+        return cls((lo - int(pad_cells)) * float(grid_mm), grid_mm, (shape[0], shape[1]))
+
+    def cells(self, coords: np.ndarray) -> np.ndarray:
+        """
+        Integer cell indices of map coordinates.
+
+        Rounding is half-up (``floor(x + 0.5)``), as in :meth:`KneeFrame.cells`, so the cell of
+        a point is a monotone function of its coordinate. Rows with a NaN have no cell; filter
+        them out first (:func:`rasterise` does). Indices may fall outside ``shape``.
+
+        :param coords: ``(N, 2)`` map coordinates (mm), finite.
+        :return: ``(N, 2)`` int array of ``(i, j)``.
+        """
+        coords = np.asarray(coords, dtype=float).reshape(-1, 2)
+        return np.floor((coords - self.origin_mm) / self.grid_mm + 0.5).astype(np.int64)
+
+    def centre_mm(self, i, j) -> np.ndarray:
+        """
+        Map coordinates of a cell centre.
+
+        :param i: Index along coordinate column 0.
+        :param j: Index along coordinate column 1.
+        :return: ``(2,)`` map coordinates (mm).
+        """
+        return self.origin_mm + self.grid_mm * np.array([float(i), float(j)])
+
+
+def _cell_index(grid: MapGrid, coords: np.ndarray, *arrays: np.ndarray):
+    """
+    Flat cell indices of the usable rows of point data.
+
+    A row is usable if its coordinates and every given array are finite, its weight (the last
+    array) is positive, and its cell lies inside the grid.
+
+    :param grid: The grid.
+    :param coords: ``(N, 2)`` map coordinates (mm).
+    :param arrays: ``(N,)`` per-point arrays; the last one is the weight.
+    :return: ``(flat_index, selected_arrays...)``: the ravelled cell index of each usable row
+        and the arrays restricted to those rows.
+    """
+    coords = np.asarray(coords, dtype=float).reshape(-1, 2)
+    arrays = [np.asarray(a).ravel() for a in arrays]
+    ok = np.all(np.isfinite(coords), axis=1)
+    for a in arrays:
+        if a.dtype.kind == 'f':
+            ok &= np.isfinite(a)
+    ok &= arrays[-1] > 0
+    cells = grid.cells(coords[ok])
+    inside = np.all((cells >= 0) & (cells < np.array(grid.shape)), axis=1)
+    flat = np.ravel_multi_index((cells[inside, 0], cells[inside, 1]), grid.shape)
+    rows = np.flatnonzero(ok)[inside]
+    return (flat,) + tuple(a[rows] for a in arrays)
+
+
+def rasterise(grid: MapGrid, coords: np.ndarray, values: np.ndarray,
+              weights: np.ndarray) -> np.ndarray:
+    """
+    Bin point values into a grid as a weighted mean per cell.
+
+    :param grid: The grid.
+    :param coords: ``(N, 2)`` map coordinates (mm) of the points.
+    :param values: ``(N,)`` values (e.g. thickness in mm).
+    :param weights: ``(N,)`` weights (e.g. triangle areas in mm^2).
+    :return: ``(H, W)`` float array: ``sum(w * v) / sum(w)`` over the points in each cell,
+        ``NaN`` where no point falls. Points with a NaN coordinate or value, a non-positive
+        weight, or a cell outside the grid are dropped.
+    """
+    flat, v, w = _cell_index(grid, coords, np.asarray(values, dtype=float),
+                             np.asarray(weights, dtype=float))
+    size = grid.shape[0] * grid.shape[1]
+    total = np.bincount(flat, weights=w, minlength=size)
+    weighted = np.bincount(flat, weights=w * v, minlength=size)
+    out = np.full(size, np.nan)
+    filled = total > 0
+    out[filled] = weighted[filled] / total[filled]
+    return out.reshape(grid.shape)
+
+
+def rasterise_labels(grid: MapGrid, coords: np.ndarray, labels: np.ndarray,
+                     weights: np.ndarray) -> np.ndarray:
+    """
+    Bin integer point labels into a grid by weighted majority per cell.
+
+    :param grid: The grid.
+    :param coords: ``(N, 2)`` map coordinates (mm) of the points.
+    :param labels: ``(N,)`` integer labels (e.g. region codes, non-negative).
+    :param weights: ``(N,)`` weights (e.g. triangle areas in mm^2).
+    :return: ``(H, W)`` int64 array: per cell, the label with the largest total weight (ties go
+        to the smaller label), ``-1`` where no point falls. Points with a NaN coordinate, a
+        non-positive weight or a cell outside the grid are dropped.
+    """
+    flat, lab, w = _cell_index(grid, coords, np.asarray(labels, dtype=np.int64),
+                               np.asarray(weights, dtype=float))
+    size = grid.shape[0] * grid.shape[1]
+    out = np.full(size, -1, dtype=np.int64)
+    if len(flat):
+        unique = np.unique(lab)
+        totals = np.stack([np.bincount(flat[lab == u], weights=w[lab == u], minlength=size)
+                           for u in unique])
+        best = np.argmax(totals, axis=0)
+        filled = totals.max(axis=0) > 0
+        out[filled] = unique[best[filled]]
+    return out.reshape(grid.shape)
+
+
+@dataclass
+class BoneDeltaMaps:
+    """
+    One knee's thickness maps of one bone on the reference's grid, and their deltas.
+
+    Keys of the per-configuration dicts are ``(angle, load)`` tuples. A configuration whose
+    registration failed appears only in ``errors``.
+
+    :ivar bone: ``'tibia'`` or ``'femur'``.
+    :ivar grid: The :class:`MapGrid` all maps share.
+    :ivar reference: ``(H, W)`` area-weighted mean thickness (mm) of the reference's covered
+        tAB triangles per cell, ``NaN`` where none.
+    :ivar region_codes: ``(H, W)`` int: per cell, the area-majority ``'region'`` code of the
+        reference's tAB triangles (covered or not), ``-1`` where none.
+    :ivar configurations: Per configuration, ``(H, W)`` thickness (mm) of its covered triangles
+        after registration into the reference, ``NaN`` where none.
+    :ivar deltas: Per configuration, ``configuration - reference`` (mm; negative = thinner),
+        ``NaN`` where either is ``NaN``.
+    :ivar registrations: Per configuration, the bone :class:`RegistrationResult`
+        (configuration -> reference).
+    :ivar dropped_fraction: Per configuration, the area fraction of its covered triangles whose
+        registered centroid has no map coordinate (beyond the reference bone, see
+        :meth:`UnrolledFemur.coordinates`) and is therefore missing from the map.
+    :ivar reference_positions: ``(H, W, 3)`` area-weighted mean world position (RAS mm, the
+        reference scan's frame) of the reference's covered tAB triangle centroids per cell,
+        ``NaN`` where none -- where a map cell lies on the reference bone.
+    :ivar rotation_change_deg: Per configuration, the angle (degrees) between the rotation of
+        the frame-derived initial transform and the final ICP rotation. The trimmed residual
+        cannot detect a ~180 degree flip of a near-symmetric bone; a large change from the
+        frame-derived start means the ICP slid off it.
+    :ivar errors: Per configuration whose registration raised, ``'<ExceptionType>: <message>'``.
+    :ivar reference_dropped_fraction: The same as ``dropped_fraction`` for the reference's own
+        covered triangles (non-zero only for a femur, at the unrolling's edges).
+    """
+    bone: str
+    grid: MapGrid
+    reference: np.ndarray
+    region_codes: np.ndarray
+    configurations: Dict[tuple, np.ndarray]
+    deltas: Dict[tuple, np.ndarray]
+    registrations: Dict[tuple, RegistrationResult]
+    dropped_fraction: Dict[tuple, float]
+    reference_positions: np.ndarray
+    rotation_change_deg: Dict[tuple, float]
+    errors: Dict[tuple, str] = field(default_factory=dict)
+    reference_dropped_fraction: float = 0.0
+
+
+def _rotation_angle_deg(a: np.ndarray, b: np.ndarray) -> float:
+    """
+    The angle of the relative rotation between two rotation matrices.
+
+    :param a: ``(3, 3)`` rotation.
+    :param b: ``(3, 3)`` rotation.
+    :return: The angle (degrees, in ``[0, 180]``) of ``a @ b.T``.
+    """
+    cosine = (np.trace(np.asarray(a) @ np.asarray(b).T) - 1.0) / 2.0
+    return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+
+
+def _covered_triangles(m: BoneMeasurement):
+    """
+    Centroids, areas and thickness of a measurement's covered, measured tAB triangles.
+
+    :param m: The measurement.
+    :return: ``(centroids (K, 3), areas (K,), thickness (K,), selected (n_cells,) bool)``.
+    :raises ValueError: If the mesh has no ``'covered'`` cell data or the thickness is not
+        aligned with the mesh.
+    """
+    if 'covered' not in m.tab_mesh.cell_data:
+        raise ValueError(f"the {m.bone} tAB mesh has no 'covered' cell data")
+    if len(m.triangle_thickness) != m.tab_mesh.n_cells:
+        raise ValueError(f'the {m.bone} triangle_thickness is not aligned with its tAB mesh')
+    selected = (np.asarray(m.tab_mesh.cell_data['covered'], dtype=bool)
+                & np.isfinite(m.triangle_thickness))
+    centroids = triangle_centroids(m.tab_mesh)[selected]
+    areas = triangle_areas(m.tab_mesh)[selected]
+    return centroids, areas, m.triangle_thickness[selected], selected
+
+
+def _dropped(coords: np.ndarray, areas: np.ndarray) -> float:
+    """
+    Area fraction of points without a map coordinate.
+
+    :param coords: ``(K, 2)`` map coordinates, ``NaN`` rows for unmappable points.
+    :param areas: ``(K,)`` areas.
+    :return: The dropped area fraction, ``NaN`` if the total area is zero.
+    """
+    total = float(np.sum(areas))
+    if not total > 0:
+        return float('nan')
+    return float(np.sum(areas[~np.all(np.isfinite(coords), axis=1)]) / total)
+
+
+def knee_delta_maps(bone: str, reference: BoneMeasurement,
+                    configurations: Dict[tuple, BoneMeasurement], grid_mm: float = 1.0,
+                    crop_mm: float = REGISTRATION_CROP_MM) -> BoneDeltaMaps:
+    """
+    Register every configuration of one knee's bone onto the reference and build the Δ maps.
+
+    Per configuration:
+
+    1. Initial estimate ``RigidTransform.from_frames(cfg frame -> reference frame)`` (the
+       frames may rest on cartilage; only the start does).
+    2. Rigid ICP on **bone only**: the configuration's bone cropped to ``crop_mm`` of its
+       articular end (along ``frame_axes[2]``) onto the reference's bone cropped to
+       ``crop_mm + REFERENCE_CROP_MARGIN_MM`` (longer, so the moving surface lies within the
+       fixed one's coverage, as the one-sided residual requires).
+    3. The configuration's **covered** tAB triangle centroids are carried into the reference's
+       world frame and given map coordinates: the reference :class:`KneeFrame`'s
+       ``in_plane`` (tibia) or the reference's :class:`UnrolledFemur` (femur, built once).
+       Points with no coordinate are dropped and their area share is recorded.
+
+    One :class:`MapGrid` of ``grid_mm`` covers the reference's whole tAB and every
+    configuration's mapped triangles; each map is the area-weighted mean thickness per cell
+    (:func:`rasterise`). Denuded triangles never enter a map, so a cell with only denuded bone
+    is empty, not 0.
+
+    :param bone: ``'tibia'`` or ``'femur'``.
+    :param reference: The reference scan's :class:`BoneMeasurement` (needs ``knee_frame`` for a
+        tibia, ``femoral_frame`` for a femur).
+    :param configurations: ``{(angle, load): BoneMeasurement}`` of the configurations to
+        compare (same bone, same knee).
+    :param grid_mm: Map cell size (mm).
+    :param crop_mm: Length of the articular end of the configuration's bone used for the
+        registration (mm).
+    :return: A :class:`BoneDeltaMaps`. A configuration whose registration raises
+        ``RuntimeError`` / ``ValueError`` / ``AssertionError`` is left out of every dict but
+        ``errors``, so one bad scan does not lose the knee.
+    :raises ValueError: For invalid input -- an unknown bone, a measurement of another bone,
+        a reference without the frame its map needs, a non-positive ``grid_mm`` -- or a
+        reference that cannot be mapped (e.g. a femur too small to unroll).
+    """
+    if bone not in _ARTICULAR_END:
+        raise ValueError(f"bone must be 'tibia' or 'femur', got {bone!r}")
+    if not grid_mm > 0:
+        raise ValueError(f'grid_mm must be positive, got {grid_mm!r}')
+    for key, m in [('reference', reference)] + list(configurations.items()):
+        if m.bone != bone:
+            raise ValueError(f'measurement {key!r} is a {m.bone}, expected a {bone}')
+    end = _ARTICULAR_END[bone]
+    if bone == 'tibia':
+        if reference.knee_frame is None:
+            raise ValueError('the tibial reference measurement has no knee_frame')
+        to_map = reference.knee_frame.in_plane
+    else:
+        if reference.femoral_frame is None:
+            raise ValueError('the femoral reference measurement has no femoral_frame')
+        to_map = UnrolledFemur.from_reference(reference.bone_mesh,
+                                              reference.femoral_frame).coordinates
+
+    # The reference: its covered triangles for the thickness and positions, its whole tAB for
+    # the region codes.
+    ref_centroids, ref_areas, ref_thickness, _ = _covered_triangles(reference)
+    ref_coords = to_map(ref_centroids)
+    all_coords = to_map(triangle_centroids(reference.tab_mesh))
+    all_areas = triangle_areas(reference.tab_mesh)
+    fixed = crop_to_articular_end(reference.bone_mesh, reference.frame_axes[2],
+                                  crop_mm + REFERENCE_CROP_MARGIN_MM, end)
+
+    mapped, registrations, rotation_change, dropped, errors = {}, {}, {}, {}, {}
+    for key, cfg in configurations.items():
+        try:
+            initial = RigidTransform.from_frames(cfg.frame_origin, cfg.frame_axes,
+                                                 reference.frame_origin, reference.frame_axes)
+            moving = crop_to_articular_end(cfg.bone_mesh, cfg.frame_axes[2], crop_mm, end)
+            result = register_bone(moving, fixed, initial)
+            centroids, areas, thickness, _ = _covered_triangles(cfg)
+        except (RuntimeError, ValueError, AssertionError) as error:
+            errors[key] = f'{type(error).__name__}: {error}'
+            continue
+        coords = to_map(result.transform.apply(centroids))
+        mapped[key] = (coords, thickness, areas)
+        registrations[key] = result
+        rotation_change[key] = _rotation_angle_deg(result.transform.rotation, initial.rotation)
+        dropped[key] = _dropped(coords, areas)
+
+    grid = MapGrid.covering([all_coords, ref_coords] + [c for c, _, _ in mapped.values()],
+                            grid_mm)
+    reference_map = rasterise(grid, ref_coords, ref_thickness, ref_areas)
+    positions = np.stack([rasterise(grid, ref_coords, ref_centroids[:, k], ref_areas)
+                          for k in range(3)], axis=-1)
+    region_codes = rasterise_labels(grid, all_coords,
+                                    np.asarray(reference.tab_mesh.cell_data['region']),
+                                    all_areas)
+    config_maps = {key: rasterise(grid, *value) for key, value in mapped.items()}
+    deltas = {key: value - reference_map for key, value in config_maps.items()}
+    return BoneDeltaMaps(bone=bone, grid=grid, reference=reference_map,
+                         region_codes=region_codes, configurations=config_maps, deltas=deltas,
+                         registrations=registrations, dropped_fraction=dropped,
+                         reference_positions=positions, rotation_change_deg=rotation_change,
+                         errors=errors,
+                         reference_dropped_fraction=_dropped(ref_coords, ref_areas))
