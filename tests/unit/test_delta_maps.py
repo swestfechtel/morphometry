@@ -315,6 +315,31 @@ def test_reference_positions_and_region_codes(ref):
     assert np.all(d.region_codes[~finite] == -1)
 
 
+def test_uncovered_tab_far_from_the_cartilage_does_not_stretch_the_grid(ref):
+    """
+    The grid spans the covered triangles: an uncovered tAB triangle 60 mm away (a sliver of
+    the reference tAB far up the bone, as on K23) gets no cell instead of stretching the map.
+    """
+    far = ref.tab_mesh.copy()
+    p = np.asarray(far.points, dtype=float).copy()
+    centroids = S.triangle_centroids(far)
+    cell = int(np.argmax(centroids[:, 0]))
+    ids = far.get_cell(cell).point_ids
+    p[ids, 0] += 60.0                        # pull one corner triangle's points 60 mm out
+    far.points = p
+    covered = np.asarray(far.cell_data['covered'], dtype=bool).copy()
+    moved = np.any(np.isin(far.faces.reshape(-1, 4)[:, 1:], ids), axis=1)
+    covered[moved] = False
+    far.cell_data['covered'] = covered
+    thickness = ref.triangle_thickness.copy()
+    thickness[~covered] = 0.0
+    reference = dataclasses.replace(ref, tab_mesh=far, triangle_thickness=thickness)
+    d = knee_delta_maps('tibia', reference, {KEY: _moved(ref, _rot(4, -3, 7), [5, 2, -3])})
+    assert d.grid.shape[0] * d.grid.grid_mm < 50.0          # the plate is 40 mm wide
+    # (the cells next to the distorted corner mix in fewer reference triangles: ~0.003 mm)
+    assert np.nanmax(np.abs(d.deltas[KEY])) < 0.01
+
+
 def test_failed_registration_is_recorded_not_raised(ref):
     """A configuration whose registration raises is omitted and its error recorded."""
     good = _moved(ref, _rot(4, -3, 7), [5.0, 2.0, -3.0])

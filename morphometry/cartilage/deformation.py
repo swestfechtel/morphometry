@@ -966,8 +966,9 @@ def knee_delta_maps(bone: str, reference: BoneMeasurement,
        ``in_plane`` (tibia) or the reference's :class:`UnrolledFemur` (femur, built once).
        Points with no coordinate are dropped and their area share is recorded.
 
-    One :class:`MapGrid` of ``grid_mm`` covers the reference's whole tAB and every
-    configuration's mapped triangles; each map is the area-weighted mean thickness per cell
+    One :class:`MapGrid` of ``grid_mm`` covers the reference's and every configuration's
+    mapped **covered** triangles (uncovered reference tAB beyond them has no cell, so no region
+    code); each map is the area-weighted mean thickness per cell
     (:func:`rasterise`). Denuded triangles never enter a map, so a cell with only denuded bone
     is empty, not 0.
 
@@ -1036,8 +1037,11 @@ def knee_delta_maps(bone: str, reference: BoneMeasurement,
         rotation_change[key] = _rotation_angle_deg(result.transform.rotation, initial.rotation)
         dropped[key] = _dropped(coords, areas)
 
-    grid = MapGrid.covering([all_coords, ref_coords] + [c for c, _, _ in mapped.values()],
-                            grid_mm)
+    # The grid spans the covered (measured) triangles only. Region codes of uncovered tAB
+    # outside it are dropped: on the whole-bone unrolling a few near-zero-area uncovered
+    # slivers of a reference tAB map far up the shaft (arc -115 mm on K23_30_unbelastet) and
+    # would stretch every panel. The lattice is absolute, so no measured cell moves.
+    grid = MapGrid.covering([ref_coords] + [c for c, _, _ in mapped.values()], grid_mm)
     reference_map = rasterise(grid, ref_coords, ref_thickness, ref_areas)
     positions = np.stack([rasterise(grid, ref_coords, ref_centroids[:, k], ref_areas)
                           for k in range(3)], axis=-1)
