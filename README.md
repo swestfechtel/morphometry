@@ -40,7 +40,25 @@ whole-leg CT, plus a FastAPI service and batch-processing scripts.
   `docs/wirth_eckstein_2008_plan.md` (Wirth & Eckstein Table I / II analogues,
   region areas, thickness per subregion, loaded-vs-unloaded and across-flexion
   spread, QC summary) into CSVs plus a markdown report and a `.meta.json`
-  recording the commit it was produced at.
+  recording the commit it was produced at. `analyse_cartilage_deformation.py`
+  maps cartilage thickness change per knee against its unloaded 30° scan
+  (bone-registered Δ maps, per-subregion Δ, largest-thinning hotspots, figures,
+  and a cohort report with uncorrected Wilcoxon p-values) on the current
+  `dfg_knees` label set (`/home/simon/Downloads/dfg_knees_segmentations/dfg_knees/segmentations`):
+
+  ```bash
+  python scripts/analyse_cartilage_deformation.py \
+      -i /home/simon/Downloads/dfg_knees_segmentations/dfg_knees/segmentations \
+      -o /home/simon/Data/dfg_knees/deformation_<short sha> --workers 16
+  ```
+
+  Outputs: `subregion_delta.csv`, `hotspots.csv`, `registration.csv`,
+  `failures.csv`, `<knee>_{tibia,femur}_delta.png`, `{bone}_hotspots_cohort.png`,
+  `cohort_summary.csv`, `report.md`, `report.meta.json`. Without
+  `--laterality-table` all knees are pooled by patient side (assumed same side).
+  The existing knee goldens and `report_knee_cartilage_cohort.py`'s quoted tables
+  still use the older label set under `/home/simon/Data/dfg_knees/monai_segmentations`
+  (follow-up).
 - **`frontend/`** — the Next.js 15 / React 19 web UI for the API (DICOM upload,
   job dispatch, and interactive landmark editing of results). The torsion viewer
   uses **Cornerstone3D** to render the NIfTI volumes directly (see "Running the
@@ -70,7 +88,8 @@ MORPH_UPDATE_GOLDEN=1 pytest      # (re)capture golden baselines
 Tests skip cleanly when sample data is absent. Data paths can be overridden via
 `MORPH_AUGSBURG_PA000001`, `MORPH_AUGSBURG_READER_STUDY`, `MORPH_NAKO_SAMPLE_DIR`,
 `MORPH_CT_SAMPLE`, `MORPH_DFG_KNEES_DIR` (the knee cartilage goldens; marker
-`needs_dfg_knees`). The data-requiring markers are `needs_augsburg`,
+`needs_dfg_knees`), `MORPH_DFG_KNEES_CURRENT_DIR` (the current label set, for the
+cartilage deformation characterization). The data-requiring markers are `needs_augsburg`,
 `needs_augsburg_reader_study`, `needs_nako`, `needs_ct` and `needs_dfg_knees`.
 
 ## Running the stack

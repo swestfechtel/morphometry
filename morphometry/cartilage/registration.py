@@ -54,8 +54,15 @@ from morphometry.cartilage.surface import surface_distances
 #: whole articular surface and some metaphysis, short enough to stay inside every knee FOV.
 REGISTRATION_CROP_MM = 40.0
 
-#: QC threshold on the registration residual RMS (mm). Provisional: to be confirmed against
-#: the observed residual distribution (never against the thickness deltas).
+#: QC threshold on the registration residual RMS (mm). Set from the residuals alone, never
+#: from the thickness deltas. Rule: a visible gap above the bulk of the observed residuals, or
+#: 1.0 mm if there is none. Observed on the current 15-knee ``dfg_knees`` cohort (commit 552f598,
+#: ``registration.csv``): femur n = 98, rms median 0.121 / p90 0.158 / max 0.208 mm; tibia
+#: n = 88, median 0.091 / p90 0.125 / max 0.142 mm -- one continuous bulk with no gap, so
+#: 1.0 mm stays, about 5x the largest residual seen (no comparison flagged). The same run's
+#: initial-to-final rotation change (the other guard, ``MAX_ROTATION_CHANGE_DEG`` = 15 in the
+#: script) was median 2.28 / max 11.75 deg (femur) and 1.02 / 5.69 deg (tibia); 3 of 186
+#: registrations hit the 60-iteration cap unconverged (rms 0.10-0.17 mm, inside the bulk).
 REGISTRATION_MAX_RMS_MM = 1.0
 
 
