@@ -74,7 +74,13 @@ Outputs (into ``-o``)
   ``edge_distance_mm`` = the hotspot cell's distance to the nearer of the two scans' footprint
   edges (a boundary cell reads one grid step).
 * ``registration.csv`` -- :data:`REGISTRATION_COLUMNS`, one row per registered
-  (comparison, bone).
+  (comparison, bone); ``reference_unmapped_fraction`` is the knee's reference value of
+  ``BoneDeltaMaps.reference_dropped_fraction`` (covered reference tAB area with no map
+  coordinate -- for the femur, the outer condyle edges whose sagittal levels are not used),
+  repeated on each of the knee's rows.
+* ``report.md`` has an "Open caveats" section after its introduction: how many hotspots sit within
+  ``--edge-margin-mm`` + 1 mm of a footprint edge, the scans whose cartilage labels hold
+  enclosed cavities (:func:`count_enclosed_cavities`) and the reference unmapped fraction.
 * ``failures.csv`` -- :data:`FAILURE_COLUMNS`, one row per failed measurement, registration
   or hotspot search, an unexpected crash of one bone's delta maps (stage ``delta_maps``,
   that bone only) or a figure that could not be drawn (stage ``figure``, rows unaffected).
@@ -172,7 +178,7 @@ HOTSPOT_COLUMNS = ['knee', 'angle', 'load', 'bone', 'compartment', 'map_x_mm', '
                    'qc_flags']
 REGISTRATION_COLUMNS = ['knee', 'angle', 'load', 'bone', 'rms_mm', 'median_mm', 'p95_mm',
                         'n_points', 'iterations', 'converged', 'rotation_change_deg',
-                        'dropped_fraction', 'flagged']
+                        'dropped_fraction', 'reference_unmapped_fraction', 'flagged']
 FAILURE_COLUMNS = ['knee', 'angle', 'load', 'bone', 'stage', 'error']
 #: ``cohort_summary.csv``. ``compartment`` is filled for the ``hotspot_frequency`` table only
 #: (the ``subregion_delta`` table is per subregion); ``count`` likewise.
@@ -303,6 +309,33 @@ def load_scan(path: str):
     return seg
 
 
+def count_enclosed_cavities(array: np.ndarray, label: int) -> int:
+    """
+    Number of enclosed cavities in one label: connected background pockets fully surrounded
+    by the label (3-D ``binary_fill_holes`` minus the label, 6-connected components).
+
+    A single-voxel hole inside a cartilage label meshes as a tiny closed surface inside the
+    cartilage, and the thickness reads a ~3 mm spot of near-zero there (K10 of the current
+    ``dfg_knees`` label set: 8 femoral and 4 tibial cavities, 8 and 4 spots on its maps).
+    Counted per scan so a run's report can list the affected scans; nothing is repaired.
+
+    :param array: Integer label array.
+    :param label: The label to inspect.
+    :return: The number of cavities (0 if the label is absent).
+    """
+    from scipy.ndimage import binary_fill_holes, label as connected
+
+    mask = np.asarray(array) == label
+    if not mask.any():
+        return 0
+    # Crop to the label's bounding box (plus a margin of one voxel) for speed.
+    lo = np.maximum(np.argwhere(mask).min(axis=0) - 1, 0)
+    hi = np.argwhere(mask).max(axis=0) + 2
+    box = mask[tuple(slice(a, b) for a, b in zip(lo, hi))]
+    cavities = binary_fill_holes(box) & ~box
+    return int(connected(cavities)[1])
+
+
 def measure_scan(path: str, femur_label: int = 3, tibia_label: int = 4,
                  femur_bone_label: int = 1, tibia_bone_label: int = 2) -> dict:
     """
@@ -319,7 +352,10 @@ def measure_scan(path: str, femur_label: int = 3, tibia_label: int = 4,
     :param tibia_label: Label of the tibial cartilage.
     :param femur_bone_label: Label of the femoral bone.
     :param tibia_bone_label: Label of the tibial bone.
-    :return: ``{'scan', 'tibia', 'femur', 'qc_flags', 'errors', 'seconds'}``: ``tibia`` /
+    :return: ``{'scan', 'tibia', 'femur', 'qc_flags', 'errors', 'seconds',
+        'cartilage_cavities'}``: ``cartilage_cavities`` ``{'femur': n, 'tibia': n}`` counts the
+        enclosed cavities of each cartilage label (:func:`count_enclosed_cavities`, absent when
+        the scan did not load); ``tibia`` /
         ``femur`` a :class:`~morphometry.cartilage.deformation.BoneMeasurement` or ``None``
         when that bone failed, ``qc_flags`` the scan's ``scan_qc_flags`` string, ``errors``
         ``{bone: '<ExceptionType>: <message>'}`` for the failed bones.
@@ -337,6 +373,12 @@ def measure_scan(path: str, femur_label: int = 3, tibia_label: int = 4,
         record['errors'] = {bone: message for bone in BONES}
         return record
 
+    try:
+        record['cartilage_cavities'] = {
+            'femur': count_enclosed_cavities(seg.array, femur_label),
+            'tibia': count_enclosed_cavities(seg.array, tibia_label)}
+    except CAUGHT + (MemoryError,) as error:
+        log.warning('%s: cavity count failed: %s', scan, error)
     tibia = femur = None
     try:
         tibia = Tibia(seg, cartilage_label=tibia_label, bone_label=tibia_bone_label)
@@ -708,6 +750,7 @@ def process_knee(knee: str, measurements: Dict[tuple, dict], grid_mm: float = 1.
                     iterations=result.iterations, converged=bool(result.converged),
                     rotation_change_deg=rotation,
                     dropped_fraction=float(maps.dropped_fraction.get(key, NAN)),
+                    reference_unmapped_fraction=float(maps.reference_dropped_fraction),
                     flagged=bool(result.rms_mm > max_rms_mm
                                  or rotation > MAX_ROTATION_CHANGE_DEG)))
         out['hotspots'][bone] = hotspots
@@ -1235,6 +1278,64 @@ def registration_summary(rows: Sequence[dict]) -> List[dict]:
     return out
 
 
+def hotspot_crowding(rows: Sequence[dict], edge_margin_mm: float) -> Dict[str, dict]:
+    """
+    How close the hotspots sit to a footprint edge, per bone.
+
+    :param rows: Selected ``hotspots.csv`` rows (every compartment).
+    :param edge_margin_mm: The run's edge margin (mm).
+    :return: Per bone ``{'n', 'n_near', 'median_mm'}``: hotspots with a finite
+        ``edge_distance_mm``, those within ``edge_margin_mm + 1`` mm of an edge, and the median
+        distance (NaN if none).
+    """
+    out = {}
+    for bone in BONES:
+        distances = _finite(row.get('edge_distance_mm', NAN) for row in rows
+                            if row['bone'] == bone)
+        out[bone] = {'n': len(distances),
+                     'n_near': int(np.sum(distances <= edge_margin_mm + 1.0)),
+                     'median_mm': float(np.median(distances)) if len(distances) else NAN}
+    return out
+
+
+def cavity_scans(records: Dict[str, dict]) -> List[tuple]:
+    """
+    The scans with enclosed cartilage cavities.
+
+    :param records: :func:`measure_scan` records (by path).
+    :return: Sorted ``(scan, femoral cavities, tibial cavities)`` for every scan with at least
+        one; records without the count (older cache entries, unloadable scans) are skipped.
+    """
+    out = []
+    for record in records.values():
+        counts = record.get('cartilage_cavities')
+        if counts and (counts.get('femur', 0) or counts.get('tibia', 0)):
+            out.append((record['scan'], int(counts.get('femur', 0)),
+                        int(counts.get('tibia', 0))))
+    return sorted(out, key=lambda item: (_natural_knee_key(item[0].split('_')[0]), item[0]))
+
+
+def reference_unmapped(rows: Sequence[dict]) -> Dict[str, dict]:
+    """
+    Per bone, the reference's unmapped covered-area fraction over the knees.
+
+    :param rows: ``registration.csv`` rows (one value per knee, repeated per comparison).
+    :return: Per bone ``{'n', 'median', 'max', 'max_knee'}`` (NaN / '' if none).
+    """
+    out = {}
+    for bone in BONES:
+        per_knee = {row['knee']: row.get('reference_unmapped_fraction', NAN) for row in rows
+                    if row['bone'] == bone}
+        finite = {k: float(v) for k, v in per_knee.items() if np.isfinite(float(v))}
+        if finite:
+            worst = max(finite, key=finite.get)
+            out[bone] = {'n': len(finite), 'median': float(np.median(list(finite.values()))),
+                         'max': finite[worst], 'max_knee': worst}
+        else:
+            out[bone] = {'n': 0, 'median': NAN, 'max': NAN, 'max_knee': ''}
+    return out
+
+
 def _md(value, digits: int = 3) -> str:
     """
     Format a number for a markdown table (NaN as an em dash).
@@ -1271,6 +1372,51 @@ def _grouped(rows: Sequence[dict], keep_flags: bool = False) -> List[str]:
         line = f'{knee} {_comparison_name(angle, load)} ({", ".join(bones)})'
         lines.append(f'{line}: `{flags}`' if flags else line)
     return lines
+
+
+def _caveat_lines(args: argparse.Namespace, cohort: dict) -> List[str]:
+    """
+    The "Open caveats" section of ``report.md``.
+
+    :param args: The parsed command line (``edge_margin_mm``).
+    :param cohort: The :func:`cohort_stage` dict (``crowding``, ``cavities``,
+        ``reference_unmapped``).
+    :return: The markdown lines.
+    """
+    out: List[str] = []
+    margin = getattr(args, 'edge_margin_mm', DEFAULT_HOTSPOT_EDGE_MARGIN_MM)
+    out.append('## Open caveats')
+    out.append('')
+    crowd = cohort.get('crowding', {})
+    parts = [f'{bone} {c["n_near"]}/{c["n"]} (median {_md(c["median_mm"], 2)} mm)'
+             for bone, c in crowd.items() if c['n']]
+    out.append(f'- **Hotspots crowd the footprint edge.** Hotspots within {margin + 1:g} mm of an '
+               f'edge (the edge margin is {margin:g} mm): {", ".join(parts) or "none"}. The margin '
+               'moves rim hotspots inward; it does not remove the tendency of the smoothed '
+               'minimum to sit next to an edge, where cartilage ends and two acquisitions\' '
+               'labels disagree. Read a hotspot just past the margin with that in mind.')
+    cavities = cohort.get('cavities', [])
+    if cavities:
+        knees = sorted({scan.split('_')[0] for scan, _, _ in cavities}, key=_natural_knee_key)
+        listing = ', '.join(f'{scan} (femur {f}, tibia {t})' for scan, f, t in cavities)
+        out.append(f'- **Enclosed cavities in the cartilage labels** in {len(cavities)} scans of '
+                   f'{len(knees)} knees: {listing}. Each reads as a ~3 mm spot of near-zero '
+                   'thickness on that scan\'s map (a cavity in the reference appears in every '
+                   'panel of that knee) and can capture the hotspot; nothing is repaired.')
+    else:
+        out.append('- Enclosed cavities in the cartilage labels: none counted (or not recorded '
+                   'by the cached measurements).')
+    unmapped = cohort.get('reference_unmapped', {})
+    parts = [f'{bone} median {_md(100 * u["median"], 2)}%, max {_md(100 * u["max"], 2)}% '
+             f'({u["max_knee"]})' for bone, u in unmapped.items() if u['n']]
+    if parts:
+        out.append('- Covered reference tAB with no map coordinate (reference unmapped '
+                   f'fraction, per knee): {"; ".join(parts)}. On the femur these are the '
+                   'outer condyle edges whose sagittal levels are not used '
+                   '(`PROFILE_MAX_DETOUR_MM`); `registration.csv` has the value per knee.')
+    out.append('')
+
+    return out
 
 
 def write_report(path: Path, args: argparse.Namespace, cohort: dict):
@@ -1324,6 +1470,8 @@ def write_report(path: Path, args: argparse.Namespace, cohort: dict):
         selection += f'; scans excluded by name: {", ".join(args.exclude)}'
     out.append(f'Selection: only comparisons with status `ok`; {selection}.')
     out.append('')
+
+    out.extend(_caveat_lines(args, cohort))
 
     # --- n per comparison
     out.append('## Knees per comparison')
@@ -1519,6 +1667,11 @@ def cohort_stage(args: argparse.Namespace, context: dict,
     cohort['summary'] = (subregion_summary(cohort['subregion_rows'])
                          + hotspot_frequency(cohort['hotspot_rows']))
     cohort['registration'] = registration_summary(collect('registration_rows'))
+    cohort['crowding'] = hotspot_crowding(cohort['hotspot_rows'],
+                                          getattr(args, 'edge_margin_mm',
+                                                  DEFAULT_HOTSPOT_EDGE_MARGIN_MM))
+    cohort['cavities'] = cavity_scans(context.get('records', {}))
+    cohort['reference_unmapped'] = reference_unmapped(collect('registration_rows'))
 
     out_dir = Path(args.output)
     write_csv(cohort['summary'], SUMMARY_COLUMNS, out_dir / DEFAULT_SUMMARY_CSV)

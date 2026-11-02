@@ -672,3 +672,48 @@ def test_edge_margin_option_default_and_meta(tmp_path, fake_delta_maps):
     args = mod.build_parser().parse_args(['-i', 'x', '-o', str(tmp_path),
                                           '--edge-margin-mm', '0'])
     assert args.edge_margin_mm == 0.0
+
+
+# ---------------------------------------------------------------------------------------
+# Reference unmapped fraction, cartilage cavities, report caveats
+# ---------------------------------------------------------------------------------------
+
+def test_registration_rows_carry_the_reference_unmapped_fraction(fake_delta_maps):
+    assert mod.REGISTRATION_COLUMNS.index('reference_unmapped_fraction') == \
+        mod.REGISTRATION_COLUMNS.index('dropped_fraction') + 1
+    result = _process(_knee())
+    rows = result['registration_rows']
+    assert rows and all(r['reference_unmapped_fraction'] == 0.0 for r in rows)  # fake maps
+
+
+def test_count_enclosed_cavities():
+    array = np.zeros((20, 20, 20), dtype=np.int16)
+    array[3:12, 3:12, 3:12] = 3            # a femoral cartilage block ...
+    array[6, 6, 6] = 0                     # ... with one single-voxel cavity
+    array[8:10, 8:10, 8] = 0               # ... and a second, 4 voxels
+    array[11, 3:12, 3:12] = 0              # an open notch on the surface: not enclosed
+    array[14:18, 14:18, 14:18] = 4         # tibial cartilage, solid
+    assert mod.count_enclosed_cavities(array, 3) == 2
+    assert mod.count_enclosed_cavities(array, 4) == 0
+    assert mod.count_enclosed_cavities(array, 9) == 0          # absent label
+
+
+def test_report_lists_hotspot_crowding_and_cavity_caveats(tmp_path, fake_delta_maps):
+    context = _cohort_context(fake_delta_maps, tmp_path)
+    context['records'] = {
+        'a': {'scan': 'K1_30_unbelastet', 'cartilage_cavities': {'femur': 8, 'tibia': 4}},
+        'b': {'scan': 'K1_0_belastet', 'cartilage_cavities': {'femur': 0, 'tibia': 0}},
+        'c': {'scan': 'K1_60_belastet'},                       # an older cached record
+    }
+    out = tmp_path / 'out'
+    out.mkdir()
+    args = mod.build_parser().parse_args(['-i', str(tmp_path), '-o', str(out)])
+    cohort = mod.cohort_stage(args, context, {})
+    report = (out / 'report.md').read_text()
+    assert '## Open caveats' in report
+    # fake maps: every hotspot is 3.0 mm from an edge -> all within margin + 1 mm
+    assert cohort['crowding']['femur']['n_near'] == cohort['crowding']['femur']['n']
+    assert cohort['crowding']['femur']['median_mm'] == 3.0
+    assert 'K1_30_unbelastet (femur 8, tibia 4)' in report
+    assert cohort['cavities'] == [('K1_30_unbelastet', 8, 4)]
+    assert 'reference unmapped' in report
