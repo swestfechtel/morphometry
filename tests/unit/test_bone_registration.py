@@ -3,9 +3,12 @@
 The test surface is the bone of the femoral phantom of :mod:`tests.unit.test_femur_regions`
 (two condyle cylinders, an open intercondylar fossa, a trochlear ridge with a groove and a
 proximal shaft) meshed through :func:`morphometry.cartilage.surface.bone_surface_mesh`, i.e.
-the same smoothed, FOV-open marching-cubes surface the real scans produce. It is asymmetric
-under every rotation (the fossa is posterior, the shaft proximal), so the ICP has a unique
-answer; a sphere-like surface would not pin the rotation at all.
+the same smoothed, FOV-open marching-cubes surface the real scans produce. Unlike a sphere it
+pins the rotation near the true pose, but it is *not* asymmetric under every rotation: a 180
+degree turn about the shaft axis maps the (cylindrical) condyles and the shaft onto
+themselves, and only the small trochlear ridge / fossa differs. That near-symmetry is less than
+the 10% of points the trimmed residual drops, so ICP can land there with a small residual --
+pinned as a strict xfail below, as the documented limit of the residual check.
 """
 import pickle
 
@@ -188,8 +191,8 @@ def test_bad_initialisation_is_visible_in_the_residual(fixed_surface):
         'about its shaft axis (full condyle cylinders; only the small trochlear ridge differs), '
         'ICP lands in that mirror pose, and the ridge is less than the 10% of points the '
         'trimmed residual drops, so the wrong pose reads rms < 0.1 mm. A trimmed one-sided '
-        'residual cannot see a near-symmetry covering more than trim_fraction of the surface; '
-        'the initial frame must resolve it.'))),
+        'residual cannot see a wrong pose whose misaligned part is under 1 - trim_fraction '
+        'of the sample; the initial frame and an initial-vs-final rotation guard must.'))),
 ])
 def test_no_silently_wrong_transform_from_any_bad_start(fixed_surface, axis_deg):
     """Same requirement as above, about each axis: a small residual implies the true pose."""
@@ -201,6 +204,33 @@ def test_no_silently_wrong_transform_from_any_bad_start(fixed_surface, axis_deg)
                       max_points=5000)
     if r.rms_mm <= REGISTRATION_MAX_RMS_MM:
         assert _angle(r.transform.rotation, T.rotation) < 0.5
+
+
+def test_moving_beyond_fixed_inflates_the_residual_of_a_perfect_fit(fixed_surface):
+    """
+    The residual is one-sided and assumes ``moving`` lies inside ``fixed``'s coverage. Here
+    the *fixed* surface is cut 30 mm short and the moving one is whole, so ~20% of the moving
+    points have no surface to land on: the pose is still recovered exactly and the median is
+    ~0, but the rms is inflated past ``REGISTRATION_MAX_RMS_MM`` (pinned, measured ~3.2 mm).
+    Cropping the moving surface to inside the fixed one's coverage -- what callers must do --
+    brings the same fit back to ~0.
+    """
+    full = fixed_surface
+    z = full.cell_centers().points[:, 2]
+    fixed = full.extract_cells(np.flatnonzero(z <= z.max() - 30.0)).extract_surface()
+    true = RigidTransform(_rot(6, -4, 7), np.array([2.0, -3.0, 1.5]))
+    moving = full.copy()
+    moving.points = true.inverse().apply(full.points)
+    initial = RigidTransform(_rot(2, 2, -2), np.zeros(3))
+    r = register_bone(moving, fixed, initial=initial)
+    assert r.converged and _angle(r.transform.rotation, true.rotation) < 0.01
+    assert r.median_mm < 0.01
+    assert r.rms_mm > REGISTRATION_MAX_RMS_MM          # a perfect fit that would be flagged
+
+    # The same moving surface cropped to the fixed one's coverage (+ margin): residual ~0.
+    inside = moving.extract_cells(np.flatnonzero(z <= z.max() - 35.0)).extract_surface()
+    r_in = register_bone(inside, fixed, initial=initial)
+    assert r_in.rms_mm < 0.05 and _angle(r_in.transform.rotation, true.rotation) < 0.01
 
 
 def test_no_overlap_reports_failure_not_nan_crash(fixed_surface):

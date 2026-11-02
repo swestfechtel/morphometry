@@ -19,9 +19,25 @@ the ICP itself is trimmed -- pairs further apart than ``max_pair_mm`` are ignore
 (:func:`morphometry.cartilage.surface.surface_distances`) from the final transformed moving
 points to the fixed surface, over the ``trim_fraction`` closest of *all* sampled moving points
 -- not only of those that happened to find a partner within ``max_pair_mm``. A registration
-stuck in a wrong local minimum therefore cannot hide behind the pair cut-off: at most the
-trimmed ``1 - trim_fraction`` of the points are excluded from the residual, so a wrong pose
-shows up as a large residual (compare with ``REGISTRATION_MAX_RMS_MM``), never as a small one.
+stuck in a wrong local minimum therefore cannot hide behind the pair cut-off. It is a
+detector with two known limits, both pinned by ``tests/unit/test_bone_registration.py``:
+
+* **It sees a wrong pose only if the misaligned part exceeds ``1 - trim_fraction`` of the
+  sample.** A pose in which the bone is nearly symmetric -- all but less than 10% of the
+  surface lands back on the fixed surface, e.g. a 180 degree turn about the shaft of a femur
+  whose condyles are near-cylindrical -- reads a *small* residual although the transform is
+  wrong (the femoral phantom does exactly that, rms < 0.1 mm). Such a pose has to be ruled
+  out by the initial frame, and by a guard on the angle between the initial and the final
+  rotation (the delta-map pipeline's job, not this function's); the residual cannot do it.
+* **It assumes the moving surface lies inside the fixed surface's coverage.** The residual is
+  one-sided (moving -> fixed): every moving point beyond the fixed surface's extent (a longer
+  shaft, a wider FOV) counts at its full distance unless it falls within the trimmed
+  ``1 - trim_fraction``. A *perfect* registration of a moving surface whose surplus is 20% of
+  its points reads rms ~3 mm on the phantom, far above ``REGISTRATION_MAX_RMS_MM``, while its
+  median stays ~0. Callers therefore crop the fixed (reference) mesh longer than the moving
+  one (:func:`crop_to_articular_end` with ``REGISTRATION_CROP_MM + margin`` vs
+  ``REGISTRATION_CROP_MM``) so that moving is a subset of fixed. The reverse case, fixed
+  extending beyond moving, is harmless: unmatched fixed surface does not enter the residual.
 """
 from dataclasses import dataclass
 from typing import Optional
@@ -225,7 +241,11 @@ def register_bone(moving: pv.PolyData, fixed: pv.PolyData,
 
     The residual is the exact surface distance of the final transformed sample to ``fixed``,
     over the ``trim_fraction`` closest of all sample points (see the module docstring for why
-    the pair cut-off is not applied there).
+    the pair cut-off is not applied there). It assumes ``moving`` lies inside ``fixed``'s
+    coverage (crop ``fixed`` longer than ``moving``): moving surface beyond it inflates the
+    residual even for a perfect fit. And it cannot reveal a wrong pose in which all but
+    ``1 - trim_fraction`` of the moving sample lands on ``fixed`` (a near-symmetry of the
+    bone); rule that out with the initial frame and an initial-vs-final rotation guard.
 
     :param moving: All-triangle bone surface to move (world mm).
     :param fixed: All-triangle reference bone surface (world mm).
