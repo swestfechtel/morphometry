@@ -54,7 +54,7 @@ whole-leg CT, plus a FastAPI service and batch-processing scripts.
 
   How it works: each configuration's **bone** surface (never the cartilage) is
   rigidly ICP-registered onto the reference's, cropped to the articular end; on
-  the current run (`/home/simon/Data/dfg_knees/deformation_df36e88`) the residual
+  the current run (`/home/simon/Data/dfg_knees/deformation_f53c02a`) the residual
   RMS is median 0.121 / max 0.208 mm (femur, n = 98) and 0.091 / 0.142 mm (tibia,
   n = 88), far below the 1.0 mm QC threshold (`REGISTRATION_MAX_RMS_MM`, kept
   because the residuals show no gap). The tibial map is the reference's plateau
