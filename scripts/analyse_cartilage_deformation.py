@@ -21,7 +21,8 @@ Stages
    bone surface is rigidly registered onto the reference's
    (:func:`~morphometry.cartilage.deformation.knee_delta_maps`), giving the Δ maps
    (configuration - reference, mm, negative = thinner) on the reference's map grid; the
-   largest-thinning hotspot per compartment is located on the smoothed Δ map
+   largest-thinning hotspot per compartment is located on the smoothed Δ map, at least
+   ``--edge-margin-mm`` (2.0) from each scan's own map footprint edge
    (:func:`~morphometry.cartilage.deformation.find_largest_thinning`); the per-subregion Δ is
    ``aMe(config) - aMe(reference)`` with **each scan's own** subdivision.
 3. **Cohort** (:func:`cohort_stage`): the per-knee rows are selected (:func:`select_rows`:
@@ -69,7 +70,9 @@ Outputs (into ``-o``)
   coordinates in the reference's map frame
   (tibia: plateau plane, patient right / anterior; femur: medial-lateral / unrolled arc), world
   coordinates = the reference scan's RAS mm position of the hotspot cell
-  (``BoneDeltaMaps.reference_positions``; NaN where the reference has no covered triangle).
+  (``BoneDeltaMaps.reference_positions``; NaN where the reference has no covered triangle);
+  ``edge_distance_mm`` = the hotspot cell's distance to the nearer of the two scans' footprint
+  edges (a boundary cell reads one grid step).
 * ``registration.csv`` -- :data:`REGISTRATION_COLUMNS`, one row per registered
   (comparison, bone).
 * ``failures.csv`` -- :data:`FAILURE_COLUMNS`, one row per failed measurement, registration
@@ -128,7 +131,8 @@ import numpy as np
 
 from morphometry.cartilage.deformation_plot import plot_knee_deltas
 from morphometry.cartilage.deformation import (
-    COMPARISONS, COMPARTMENTS, REFERENCE, bone_measurement, find_largest_thinning,
+    COMPARISONS, COMPARTMENTS, DEFAULT_HOTSPOT_EDGE_MARGIN_MM, REFERENCE, bone_measurement,
+    find_largest_thinning,
     knee_delta_maps,
 )
 from morphometry.cartilage.deformation_plot import plot_cohort_hotspots
@@ -164,7 +168,8 @@ SUBREGION_COLUMNS = ['knee', 'angle', 'load', 'bone', 'subregion', 'anatomical_s
 HOTSPOT_COLUMNS = ['knee', 'angle', 'load', 'bone', 'compartment', 'map_x_mm', 'map_y_mm',
                    'world_x', 'world_y', 'world_z', 'subregion', 'anatomical_subregion',
                    'smoothed_delta_mm',
-                   'delta_mm', 'kernel_size', 'fallback', 'status', 'qc_flags']
+                   'delta_mm', 'kernel_size', 'edge_distance_mm', 'fallback', 'status',
+                   'qc_flags']
 REGISTRATION_COLUMNS = ['knee', 'angle', 'load', 'bone', 'rms_mm', 'median_mm', 'p95_mm',
                         'n_points', 'iterations', 'converged', 'rotation_change_deg',
                         'dropped_fraction', 'flagged']
@@ -570,14 +575,15 @@ def _hotspot_values(maps, hotspot: Optional[dict]) -> dict:
 
     :param maps: The bone's ``BoneDeltaMaps`` (for the reference world positions).
     :param hotspot: A :func:`find_largest_thinning` result or ``None``.
-    :return: Dict of the ``map_*``, ``world_*``, ``subregion``, delta, ``kernel_size`` and
-        ``fallback`` columns (NaN / empty when ``hotspot`` is ``None``).
+    :return: Dict of the ``map_*``, ``world_*``, ``subregion``, delta, ``kernel_size``,
+        ``edge_distance_mm`` and ``fallback`` columns (NaN / empty when ``hotspot`` is
+        ``None``).
     """
     if hotspot is None:
         return {'map_x_mm': NAN, 'map_y_mm': NAN, 'world_x': NAN, 'world_y': NAN,
                 'world_z': NAN, 'subregion': '', 'anatomical_subregion': '',
                 'smoothed_delta_mm': NAN, 'delta_mm': NAN,
-                'kernel_size': NAN, 'fallback': ''}
+                'kernel_size': NAN, 'edge_distance_mm': NAN, 'fallback': ''}
     i, j = hotspot['cell']
     world = np.asarray(maps.reference_positions[i, j], dtype=float)
     return {'map_x_mm': hotspot['map_mm'][0], 'map_y_mm': hotspot['map_mm'][1],
@@ -585,12 +591,14 @@ def _hotspot_values(maps, hotspot: Optional[dict]) -> dict:
             'subregion': hotspot['subregion'], 'anatomical_subregion': '',
             'smoothed_delta_mm': hotspot['smoothed_delta_mm'],
             'delta_mm': hotspot['delta_mm'], 'kernel_size': hotspot['kernel_size'],
+            'edge_distance_mm': hotspot['edge_distance_mm'],
             'fallback': bool(hotspot['fallback'])}
 
 
 def process_knee(knee: str, measurements: Dict[tuple, dict], grid_mm: float = 1.0,
                  neighbourhood_mm: float = 3.0,
-                 max_rms_mm: float = REGISTRATION_MAX_RMS_MM) -> dict:
+                 max_rms_mm: float = REGISTRATION_MAX_RMS_MM,
+                 edge_margin_mm: float = DEFAULT_HOTSPOT_EDGE_MARGIN_MM) -> dict:
     """
     Compare one knee's configurations against its reference, per bone.
 
@@ -600,6 +608,8 @@ def process_knee(knee: str, measurements: Dict[tuple, dict], grid_mm: float = 1.
     :param grid_mm: Δ-map cell size (mm).
     :param neighbourhood_mm: Smoothing neighbourhood of the hotspot search (mm).
     :param max_rms_mm: Registration residual above which a comparison is flagged (mm).
+    :param edge_margin_mm: Minimum distance (mm) of a hotspot cell from each scan's map
+        footprint edge (:func:`~morphometry.cartilage.deformation.find_largest_thinning`).
     :return: ``{'subregion_rows', 'hotspot_rows', 'registration_rows', 'failures', 'maps',
         'hotspots', 'panel_titles'}``: the rows of the three CSVs (column sets
         :data:`SUBREGION_COLUMNS` / :data:`HOTSPOT_COLUMNS` / :data:`REGISTRATION_COLUMNS`) and
@@ -677,7 +687,8 @@ def process_knee(knee: str, measurements: Dict[tuple, dict], grid_mm: float = 1.
                 hotspot, row_status = None, status
                 if status == 'ok':
                     hotspot = find_largest_thinning(maps, key, compartment,
-                                                    neighbourhood_mm=neighbourhood_mm)
+                                                    neighbourhood_mm=neighbourhood_mm,
+                                                    edge_margin_mm=edge_margin_mm)
                     if hotspot is None:
                         row_status = 'failed'
                         failure(key, bone, f'hotspot_{compartment}',
@@ -762,19 +773,22 @@ def _knee_job(arguments: tuple) -> Tuple[str, dict]:
     is re-processed with every scan failed, so every row is written with
     status ``failed`` (``missing`` for absent files) and the error in ``failures.csv``.
 
-    :param arguments: ``(knee, measurements, grid_mm, neighbourhood_mm, max_rms_mm, out_dir)``.
+    :param arguments: ``(knee, measurements, grid_mm, neighbourhood_mm, max_rms_mm,
+        edge_margin_mm, out_dir)``.
     :return: ``(knee, result)``.
     """
     warnings.simplefilter('ignore')
-    knee, measurements, grid_mm, neighbourhood_mm, max_rms_mm, out_dir = arguments
+    knee, measurements, grid_mm, neighbourhood_mm, max_rms_mm, edge_margin_mm, out_dir = \
+        arguments
     try:
-        result = process_knee(knee, measurements, grid_mm, neighbourhood_mm, max_rms_mm)
+        result = process_knee(knee, measurements, grid_mm, neighbourhood_mm, max_rms_mm,
+                              edge_margin_mm)
     except Exception as error:
         message = f'knee job: {type(error).__name__}: {error}'
         log.error('%s: %s', knee, message)
         result = process_knee(knee, {k: failed_record(r, message)
                                      for k, r in measurements.items()},
-                              grid_mm, neighbourhood_mm, max_rms_mm)
+                              grid_mm, neighbourhood_mm, max_rms_mm, edge_margin_mm)
     # Figures after, and isolated: a PNG that cannot be drawn never fails the knee's rows.
     write_knee_figures(knee, result, out_dir)
     return knee, result
@@ -782,7 +796,8 @@ def _knee_job(arguments: tuple) -> Tuple[str, dict]:
 
 def process_knees(knees: Dict[str, Dict[tuple, dict]], out_dir: Path, workers: Optional[int],
                   grid_mm: float, neighbourhood_mm: float,
-                  max_rms_mm: float) -> Dict[str, dict]:
+                  max_rms_mm: float,
+                  edge_margin_mm: float = DEFAULT_HOTSPOT_EDGE_MARGIN_MM) -> Dict[str, dict]:
     """
     Run :func:`_knee_job` for every knee, in a process pool.
 
@@ -792,9 +807,10 @@ def process_knees(knees: Dict[str, Dict[tuple, dict]], out_dir: Path, workers: O
     :param grid_mm: Δ-map cell size (mm).
     :param neighbourhood_mm: Hotspot smoothing neighbourhood (mm).
     :param max_rms_mm: Registration residual threshold (mm).
+    :param edge_margin_mm: Hotspot edge margin (mm).
     :return: ``{knee: process_knee result}`` in the order of ``knees``.
     """
-    jobs = [(knee, measurements, grid_mm, neighbourhood_mm, max_rms_mm, out_dir)
+    jobs = [(knee, measurements, grid_mm, neighbourhood_mm, max_rms_mm, edge_margin_mm, out_dir)
             for knee, measurements in knees.items()]
     results = {}
     started = time.time()
@@ -815,7 +831,8 @@ def process_knees(knees: Dict[str, Dict[tuple, dict]], out_dir: Path, workers: O
                     message = f'knee job: {type(error).__name__}: {error}'
                     result = process_knee(knee, {k: failed_record(r, message)
                                                  for k, r in job[1].items()},
-                                          grid_mm, neighbourhood_mm, max_rms_mm)
+                                          grid_mm, neighbourhood_mm, max_rms_mm,
+                                          edge_margin_mm)
                 results[knee] = result
                 log.info('[%d/%d] knee %s done (%.0fs elapsed)', len(results), len(jobs), knee,
                          time.time() - started)
@@ -1437,6 +1454,7 @@ def write_meta(path: Path, args: argparse.Namespace, context: dict, cohort: dict
         'missing': _grouped(cohort['missing']),
         'failed': _grouped(cohort['failed']),
         'flagged': _grouped(cohort['flagged'], keep_flags=True),
+        'hotspot_edge_margin_mm': args.edge_margin_mm,
         'excluded_by_name': sorted(args.exclude),
         'laterality_table': str(args.laterality_table) if args.laterality_table else None,
         'missing_laterality': cohort['missing_laterality'],
@@ -1553,6 +1571,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help='delta-map cell size in mm (default: 1.0)')
     parser.add_argument('--neighbourhood-mm', type=float, default=3.0,
                         help='hotspot smoothing neighbourhood in mm (default: 3.0)')
+    parser.add_argument('--edge-margin-mm', type=float, default=DEFAULT_HOTSPOT_EDGE_MARGIN_MM,
+                        help='minimum distance (mm) of a hotspot cell from each scan\'s own map '
+                             'footprint edge, against the near-zero rim band and the edge '
+                             'mismatch between acquisitions; 0 disables (default: %(default)s)')
     parser.add_argument('--max-registration-rms', type=float, default=REGISTRATION_MAX_RMS_MM,
                         help='registration residual (mm) above which a comparison is flagged '
                              f'(default: {REGISTRATION_MAX_RMS_MM})')
@@ -1609,7 +1631,8 @@ def per_knee_stage(args: argparse.Namespace,
     knee_measurements = {knee: {key: records[path] for key, path in configs.items()}
                          for knee, configs in knees.items()}
     results = process_knees(knee_measurements, args.output, args.workers, args.grid_mm,
-                            args.neighbourhood_mm, args.max_registration_rms)
+                            args.neighbourhood_mm, args.max_registration_rms,
+                            args.edge_margin_mm)
 
     def collect(kind):
         return [row for result in results.values() for row in result[kind]]

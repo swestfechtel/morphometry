@@ -14,18 +14,27 @@ KEY = (60, 'unbelastet')
 H = W = 40
 
 
-def _maps(delta, bone='tibia', split=20):
-    """Minimal BoneDeltaMaps: patient-left region for i < split, patient-right otherwise."""
+def _maps(delta, bone='tibia', split=20, reference=None, configuration=None, grid_mm=0.5):
+    """
+    Minimal BoneDeltaMaps: patient-left region for i < split, patient-right otherwise.
+
+    The reference and configuration maps default to the delta's own footprint (thickness
+    1.0 mm there), as in a real ``knee_delta_maps`` result, where ``delta`` is finite exactly
+    where both are.
+    """
     keys = TIBIA_REGION_KEYS if bone == 'tibia' else FEMUR_REGION_KEYS
     left = keys.index('clt' if bone == 'tibia' else 'cclf')
     right = keys.index('crt' if bone == 'tibia' else 'ccrf')
     codes = np.full((H, W), -1, dtype=int)
     codes[:split] = left
     codes[split:] = right
-    nan = np.full((H, W), np.nan)
+    footprint = np.where(np.isfinite(delta), 1.0, np.nan)
+    reference = footprint if reference is None else reference
+    configuration = footprint + delta if configuration is None else configuration
     return BoneDeltaMaps(
-        bone=bone, grid=MapGrid(origin_mm=(10.0, -5.0), grid_mm=0.5, shape=(H, W)),
-        reference=nan, region_codes=codes, configurations={}, deltas={KEY: delta},
+        bone=bone, grid=MapGrid(origin_mm=(10.0, -5.0), grid_mm=grid_mm, shape=(H, W)),
+        reference=reference, region_codes=codes, configurations={KEY: configuration},
+        deltas={KEY: delta},
         registrations={}, dropped_fraction={}, reference_positions=np.full((H, W, 3), np.nan),
         rotation_change_deg={})
 
@@ -114,3 +123,53 @@ def test_fallback_stays_inside_the_requested_compartment():
     assert hr['cell'][0] >= 20 and hr['subregion'].endswith('rt')
     assert hr['delta_mm'] == pytest.approx(-0.1)
     assert hl['cell'][0] < 20 and hl['subregion'].endswith('lt')
+
+
+def _rim_case():
+    """1 mm grid, k = 3: a strong thinning in the second column from an edge, a milder one inside."""
+    delta = np.zeros((H, W))
+    delta[10:15, 0:2] = -1.0     # cells at 1 and 2 mm from the edge: clear the k=3 window rule
+    delta[24:29, 22:27] = -0.3
+    return delta
+
+
+def test_edge_margin_keeps_the_hotspot_off_the_footprint_rim():
+    delta = _rim_case()
+    m = _maps(delta, grid_mm=1.0)
+    off = find_largest_thinning(m, KEY, edge_margin_mm=0.0)
+    assert off['cell'][1] == 1 and off['edge_distance_mm'] == pytest.approx(2.0)
+    h = find_largest_thinning(m, KEY)      # default edge margin, 2 mm
+    assert 24 <= h['cell'][0] < 29 and 22 <= h['cell'][1] < 27
+    assert h['edge_distance_mm'] > 2.0 and h['fallback'] is False
+
+
+def test_edge_margin_applies_to_each_scan_footprint():
+    # the delta is defined everywhere the configuration is; the reference ends at column 5
+    # (its rim lies inside the configuration's footprint), or the configuration does
+    base = np.zeros((H, W))
+    base[10:15, 5:7] = -1.0
+    base[24:29, 22:27] = -0.3
+    for which in ('reference', 'configuration'):
+        delta = base.copy()
+        delta[:, :5] = np.nan
+        short = np.where(np.isfinite(delta), 1.0, np.nan)
+        full = np.ones((H, W))
+        if which == 'reference':
+            m = _maps(delta, grid_mm=1.0, reference=short, configuration=full + np.nan_to_num(delta))
+        else:
+            m = _maps(delta, grid_mm=1.0, reference=full, configuration=short + delta)
+        assert find_largest_thinning(m, KEY, edge_margin_mm=0.0)['cell'][1] in (5, 6)
+        h = find_largest_thinning(m, KEY)
+        assert 22 <= h['cell'][1] < 27, which
+
+
+def test_edge_margin_fallback_stays_in_the_compartment():
+    # a right compartment only 3 cells wide: nothing is 2 mm from its edge; the fallback must
+    # stay right even though the left compartment holds a deeper, fully interior thinning
+    delta = np.full((H, W), np.nan)
+    delta[:20, :] = 0.0
+    delta[5:10, 10:15] = -0.8
+    delta[30:33, 10:20] = -0.1
+    m = _maps(delta, grid_mm=1.0)
+    hr = find_largest_thinning(m, KEY, 'right')
+    assert hr['fallback'] is True and hr['cell'][0] >= 20 and hr['subregion'].endswith('rt')

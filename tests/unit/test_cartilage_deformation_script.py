@@ -380,7 +380,7 @@ def test_figure_failure_keeps_the_knee_rows_and_is_recorded(fake_delta_maps, mon
         raise OSError('No space left on device')
 
     monkeypatch.setattr(mod, 'plot_knee_deltas', broken_plot)
-    knee, result = mod._knee_job(('K1', _knee(), 1.0, 3.0, 1.0, tmp_path))
+    knee, result = mod._knee_job(('K1', _knee(), 1.0, 3.0, 1.0, 2.0, tmp_path))
     assert knee == 'K1'
     assert {r['status'] for r in result['subregion_rows']} == {'ok'}
     assert {r['status'] for r in result['hotspot_rows']} == {'ok'}
@@ -594,6 +594,7 @@ def test_report_states_same_side_assumption_without_table(tmp_path, fake_delta_m
     meta = json.loads((out / 'report.meta.json').read_text())
     assert {'commit', 'dirty', 'branch', 'host', 'date', 'args', 'inputs'} <= set(meta)
     assert meta['n_knees'] == 2
+    assert meta['hotspot_edge_margin_mm'] == 2.0
     # Flagged K2 60° unloaded is out of the statistics: the clt row of 60° unloaded has n = 1.
     [row] = [r for r in cohort['summary'] if r['table'] == 'subregion_delta'
              and (r['angle'], r['load'], r['bone'], r['region'], r['unit'])
@@ -644,3 +645,30 @@ def test_main_runs_both_stages_and_fills_the_per_knee_anatomical_column(tmp_path
         assert (out / name).exists()
     assert {r['compartment'] for r in context['cohort']['hotspot_rows']} == \
         {'both', 'medial', 'lateral'}
+
+
+# ---------------------------------------------------------------------------------------
+# Hotspot edge margin
+# ---------------------------------------------------------------------------------------
+
+def test_hotspot_edge_margin_reaches_the_search_and_the_rows(fake_delta_maps, tmp_path):
+    # a uniform delta: the C-order-first searchable cell wins, so the margin decides which.
+    # 12 x 12 footprint at 1 mm: the window rule alone leaves (1, 1), 2 mm from the edge;
+    # the default 2 mm margin moves it to (2, 2), 3 mm from it.
+    assert 'edge_distance_mm' in mod.HOTSPOT_COLUMNS
+    default = mod.process_knee('K1', _knee(), 1.0, 3.0, 1.0)
+    off = mod.process_knee('K1', _knee(), 1.0, 3.0, 1.0, edge_margin_mm=0.0)
+    for result, expected in ((default, 3.0), (off, 2.0)):
+        both = _rows(result, 'hotspot_rows', compartment='both', status='ok')
+        assert both and {r['edge_distance_mm'] for r in both} == {expected}
+    _, result = mod._knee_job(('K1', _knee(), 1.0, 3.0, 1.0, 0.0, tmp_path))
+    assert {r['edge_distance_mm'] for r in _rows(result, 'hotspot_rows', compartment='both',
+                                                  status='ok')} == {2.0}
+
+
+def test_edge_margin_option_default_and_meta(tmp_path, fake_delta_maps):
+    args = mod.build_parser().parse_args(['-i', 'x', '-o', str(tmp_path)])
+    assert args.edge_margin_mm == 2.0
+    args = mod.build_parser().parse_args(['-i', 'x', '-o', str(tmp_path),
+                                          '--edge-margin-mm', '0'])
+    assert args.edge_margin_mm == 0.0

@@ -4,9 +4,9 @@ import logging
 import pyvista as pv
 import numpy as np
 from typing import Optional, Tuple
-from scipy.ndimage import distance_transform_edt, label
+from scipy.ndimage import label
 from morphometry.image_io import Image
-from morphometry.cartilage.robust_search import smoothed_argmin
+from morphometry.cartilage.robust_search import interior_cells, smoothed_argmin
 from morphometry.cartilage.surface import (
     array_indices_to_world, transfer_qc, TRANSFER_FAR_MM, TRANSFER_MAX_FAR_FRACTION,
 )
@@ -853,25 +853,10 @@ def _overlap_spacing(tibia_thickness: dict, femur_thickness: dict, image: Image)
     return float(tibia_frame.grid_mm)
 
 
-def _interior_cells(footprint: np.ndarray, margin_mm: float, spacing: float) -> np.ndarray:
-    """
-    The cells of a footprint at least ``margin_mm`` from its boundary.
-
-    The boundary is measured with a Euclidean distance transform over a padded copy, so that a
-    footprint touching the array border is still treated as ending there.
-
-    :param footprint: ``(H, W)`` bool mask of the cells a bone's map covers.
-    :param margin_mm: Required distance to the nearest cell outside the footprint, in mm.
-        ``<= 0`` returns the footprint unchanged.
-    :param spacing: Cell size in mm.
-    :return: ``(H, W)`` bool mask of the interior cells.
-    """
-    if margin_mm <= 0 or not footprint.any():
-        return footprint
-    pad = int(np.ceil(margin_mm / spacing)) + 1
-    padded = np.pad(footprint, pad, mode='constant', constant_values=False)
-    inside = distance_transform_edt(padded, sampling=spacing) > margin_mm
-    return inside[pad:-pad, pad:-pad]
+#: The footprint-interior rule of ``edge_margin_mm``; lives in :mod:`robust_search` so the
+#: delta-map hotspot search applies exactly the same rule (the padding there is one cell instead
+#: of ``ceil(margin / spacing) + 1``, which gives identical distances).
+_interior_cells = interior_cells
 
 
 def find_thinnest_area(tibia_thickness: dict, femur_thickness: dict, image: Image,

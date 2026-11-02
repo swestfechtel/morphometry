@@ -104,7 +104,7 @@ from morphometry.cartilage.registration import (
     REGISTRATION_CROP_MM, RegistrationResult, RigidTransform, crop_to_articular_end,
     register_bone,
 )
-from morphometry.cartilage.robust_search import smoothed_argmin
+from morphometry.cartilage.robust_search import edge_distance, smoothed_argmin
 from morphometry.cartilage.surface import triangle_areas, triangle_centroids
 from morphometry.cartilage.thickness import KneeFrame, ThicknessMaps, knee_frame_from_tibia
 from morphometry.cartilage.tibia_regions import TIBIA_REGION_KEYS
@@ -879,6 +879,19 @@ def knee_delta_maps(bone: str, reference: BoneMeasurement,
 #: Compartments of the hotspot search; patient-side, ``'both'`` = the whole bone.
 COMPARTMENTS = ('both', 'left', 'right')
 
+#: Default minimum distance (mm) of a thinning-hotspot cell from **each** scan's own map
+#: footprint edge (:func:`find_largest_thinning`). Chosen from the geometry of the maps, not from
+#: any delta value: (1) a cartilage map stops rather than fades, and
+#: :func:`~morphometry.cartilage.surface.cartilage_coverage`'s distance test puts a band of
+#: near-zero-thickness triangles at every cartilage edge (cAB reaches ~0.5 mm sideways past the
+#: label; the denuded aMin of every non-central subregion is 0.00-0.15 mm), and (2) where the
+#: labelled cartilage ends differs between two acquisitions of one knee by several voxels
+#: (0.3125 mm in plane, 0.75 mm across slices), so the reference and configuration rims do not
+#: coincide and the cells just inside the shorter one compare a full thickness with a tapering
+#: one. The smoothing-window rule (``neighbourhood_mm`` = 3 mm, one cell at the 1 mm grid)
+#: removes only the outermost cell; 2 mm removes the two outermost rings of each footprint.
+DEFAULT_HOTSPOT_EDGE_MARGIN_MM = 2.0
+
 
 def compartment_codes(bone: str, compartment: str) -> Tuple[int, ...]:
     """
@@ -906,7 +919,9 @@ def compartment_codes(bone: str, compartment: str) -> Tuple[int, ...]:
 
 def find_largest_thinning(maps: BoneDeltaMaps, key: tuple, compartment: str = 'both',
                           neighbourhood_mm: float = 3.0,
-                          radius_mm: Optional[float] = None) -> Optional[dict]:
+                          radius_mm: Optional[float] = None,
+                          edge_margin_mm: float = DEFAULT_HOTSPOT_EDGE_MARGIN_MM
+                          ) -> Optional[dict]:
     """
     Locate the centre of the area that thinned most in one configuration's delta map.
 
@@ -914,41 +929,68 @@ def find_largest_thinning(maps: BoneDeltaMaps, key: tuple, compartment: str = 'b
     negative = thinner), so the result is the minimum of a median-smoothed map, searched only
     where the whole smoothing window is measured: a single outlier cell or the rim where one
     scan's cartilage ends (an edge mismatch reads strongly negative) cannot win. The search is
-    restricted to the cells whose reference region belongs to the compartment.
+    restricted to the cells whose reference region belongs to the compartment, and -- both for
+    the neighbourhood centre and for the refinement -- to the cells more than
+    ``edge_margin_mm`` from **each** scan's own footprint edge: the reference's
+    (``isfinite(maps.reference)``) and the configuration's
+    (``isfinite(maps.configurations[key])``), each with the array border counting as an edge
+    (:func:`~morphometry.cartilage.robust_search.interior_cells`, the rule
+    ``find_thinnest_area``'s ``edge_margin_mm`` uses). Why 2 mm: see
+    :data:`DEFAULT_HOTSPOT_EDGE_MARGIN_MM`.
+
+    If no cell survives, the fallback searches every measured cell of the compartment (no
+    window rule, no edge margin), never another compartment.
 
     :param maps: The bone's :class:`BoneDeltaMaps`.
     :param key: ``(angle, load)`` of the configuration.
     :param compartment: ``'both'``, ``'left'`` or ``'right'`` (patient side).
     :param neighbourhood_mm: Diameter (mm) of the smoothing neighbourhood.
     :param radius_mm: Refinement-disc radius (mm); default half the neighbourhood.
+    :param edge_margin_mm: Minimum distance (mm, strictly greater) of a candidate cell from
+        each scan's footprint edge; ``<= 0`` disables the rule.
     :return: ``None`` if the configuration is absent from ``maps.deltas`` or the compartment
         has no finite delta cell; else a dict with ``'cell'`` (refined ``(i, j)``),
         ``'centre'`` (neighbourhood centre ``(i, j)``), ``'map_mm'`` (map coordinates of
         ``cell``), ``'smoothed_delta_mm'`` (smoothed delta at the centre), ``'delta_mm'`` (raw
         delta at ``cell``), ``'subregion'`` (region key at ``cell``, ``''`` if none),
-        ``'kernel_size'`` and ``'fallback'`` (True if no fully measured window existed; a
-        WARNING is logged then).
+        ``'kernel_size'``, ``'edge_distance_mm'`` (distance of ``cell`` to the nearer of the two
+        footprint edges, mm, as :func:`~morphometry.cartilage.robust_search.edge_distance`
+        measures it -- a boundary cell reads one grid step) and ``'fallback'`` (True if no
+        fully measured window survived the restrictions; a WARNING is logged then).
     """
     if key not in maps.deltas:
         return None
     delta = np.asarray(maps.deltas[key], dtype=float)
     valid = np.isfinite(delta)
-    restrict = np.isin(maps.region_codes, compartment_codes(maps.bone, compartment))
-    if not (valid & restrict).any():
+    in_compartment = np.isin(maps.region_codes, compartment_codes(maps.bone, compartment))
+    if not (valid & in_compartment).any():
         return None
-    res = smoothed_argmin(delta, valid, maps.grid.grid_mm, neighbourhood_mm,
+    spacing = maps.grid.grid_mm
+    # Distance to the nearer of the two scans' own footprint edges. delta is finite exactly
+    # where both maps are, so this equals the distance to the delta footprint's edge; keeping
+    # the two footprints explicit states which edges count and stays right if the delta ever
+    # gains NaNs of its own.
+    distance = np.minimum(edge_distance(np.isfinite(maps.reference), spacing),
+                          edge_distance(np.isfinite(maps.configurations[key]), spacing))
+    restrict = in_compartment
+    if edge_margin_mm > 0:
+        restrict = in_compartment & (distance > edge_margin_mm)
+    res = smoothed_argmin(delta, valid, spacing, neighbourhood_mm,
                           radius_mm=radius_mm, restrict=restrict)
     if res['fallback']:
         # smoothed_argmin's fallback drops ``restrict`` (find_thinnest_area relies on that), so
         # its answer may lie in the other compartment. Redo it on the compartment alone: cells
         # outside are blanked, so the fallback can only search this compartment's measured cells.
-        delta_c = np.where(restrict, delta, np.nan)
-        res = smoothed_argmin(delta_c, valid & restrict, maps.grid.grid_mm, neighbourhood_mm,
-                              radius_mm=radius_mm, restrict=restrict)
+        # The fallback also drops the edge margin: it searches every measured cell of the
+        # compartment, so it can only be inside the compartment.
+        delta_c = np.where(in_compartment, delta, np.nan)
+        res = smoothed_argmin(delta_c, valid & in_compartment, spacing, neighbourhood_mm,
+                              radius_mm=radius_mm, restrict=in_compartment)
         res['fallback'] = True
-        logger.warning("thinning hotspot %s/%s %s: no fully measured %d-cell window; searched "
-                       "all measured cells (the hotspot may lie on a footprint rim)",
-                       maps.bone, compartment, key, res['kernel_size'])
+        logger.warning("thinning hotspot %s/%s %s: no fully measured %d-cell window %.1f mm "
+                       "inside both footprints; searched all measured cells of the compartment "
+                       "(the hotspot may lie on a footprint rim)",
+                       maps.bone, compartment, key, res['kernel_size'], edge_margin_mm)
     ci, cj = res['center_index']
     pi, pj = res['point_index']
     code = int(maps.region_codes[pi, pj])
@@ -961,5 +1003,6 @@ def find_largest_thinning(maps: BoneDeltaMaps, key: tuple, compartment: str = 'b
         'delta_mm': float(delta[pi, pj]),
         'subregion': keys[code] if code >= 0 else '',
         'kernel_size': int(res['kernel_size']),
+        'edge_distance_mm': float(distance[pi, pj]),
         'fallback': bool(res['fallback']),
     }

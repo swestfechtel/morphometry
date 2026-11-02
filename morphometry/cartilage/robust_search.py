@@ -12,7 +12,45 @@ import warnings
 from typing import Optional
 
 import numpy as np
-from scipy.ndimage import generic_filter, minimum_filter
+from scipy.ndimage import distance_transform_edt, generic_filter, minimum_filter
+
+
+def edge_distance(footprint: np.ndarray, spacing: float) -> np.ndarray:
+    """
+    Distance (mm) of every footprint cell to the nearest cell outside the footprint.
+
+    A Euclidean distance transform over a copy padded with one empty cell, so that a footprint
+    touching the array border is treated as ending there: a boundary cell reads ``spacing``,
+    the next ring ``2 * spacing`` (or a diagonal distance), and so on. Cells outside the
+    footprint read 0.
+
+    :param footprint: ``(H, W)`` bool mask of the cells a map covers.
+    :param spacing: Cell size in mm.
+    :return: ``(H, W)`` float array of distances in mm.
+    """
+    padded = np.pad(np.asarray(footprint, dtype=bool), 1, mode='constant',
+                    constant_values=False)
+    return distance_transform_edt(padded, sampling=spacing)[1:-1, 1:-1]
+
+
+def interior_cells(footprint: np.ndarray, margin_mm: float, spacing: float) -> np.ndarray:
+    """
+    The cells of a footprint more than ``margin_mm`` from its boundary.
+
+    The boundary is measured with :func:`edge_distance`, so a footprint touching the array
+    border is still treated as ending there. Used by
+    :func:`~morphometry.cartilage.knee.find_thinnest_area` (``edge_margin_mm``) and by the
+    delta-map hotspot search (:func:`~morphometry.cartilage.deformation.find_largest_thinning`).
+
+    :param footprint: ``(H, W)`` bool mask of the cells a map covers.
+    :param margin_mm: Required distance to the nearest cell outside the footprint, in mm
+        (strictly greater). ``<= 0`` returns the footprint unchanged (the same object).
+    :param spacing: Cell size in mm.
+    :return: ``(H, W)`` bool mask of the interior cells.
+    """
+    if margin_mm <= 0 or not footprint.any():
+        return footprint
+    return edge_distance(footprint, spacing) > margin_mm
 
 
 def smoothed_argmin(grid: np.ndarray, valid: np.ndarray, spacing: float,
