@@ -186,12 +186,22 @@ def test_failed_reference_fails_every_comparison_of_that_knee(fake_delta_maps):
     assert any('reference' in f['error'] for f in result['failures'])
 
 
-def test_reference_that_cannot_be_mapped_fails_that_bone(fake_delta_maps):
+def test_reference_that_cannot_be_mapped_fails_that_bones_maps_only(fake_delta_maps):
+    """
+    An un-unrollable reference femur costs that bone's maps and hotspots, not its subregion
+    Δ, which does not go through the registration or the map (controller ruling 8).
+    """
     fake_delta_maps['femur']['raise'] = 'the reference femur has too few cross-sections'
     result = _process(_knee())
-    assert {r['status'] for r in _rows(result, 'subregion_rows', bone='femur')} == {'failed'}
+    femur = _rows(result, 'subregion_rows', bone='femur')
+    assert {r['status'] for r in femur} == {'ok'}
+    assert all(r['delta_mm'] == pytest.approx(0.0) for r in femur)
+    assert {r['status'] for r in _rows(result, 'hotspot_rows', bone='femur')} == {'failed'}
     assert {r['status'] for r in _rows(result, 'subregion_rows', bone='tibia')} == {'ok'}
+    assert {r['status'] for r in _rows(result, 'hotspot_rows', bone='tibia')} == {'ok'}
     assert result['maps']['femur'] is None and result['maps']['tibia'] is not None
+    assert set(result['panel_titles']['femur'].values()) == {'failed'}
+    assert not _rows(result, 'registration_rows', bone='femur')
 
 
 def test_one_bone_failing_keeps_the_other_bones_rows(fake_delta_maps):
@@ -212,11 +222,18 @@ def test_one_bone_failing_keeps_the_other_bones_rows(fake_delta_maps):
     assert result['maps']['tibia'] is not None and result['maps']['femur'] is not None
 
 
-def test_registration_error_fails_that_comparison_only(fake_delta_maps):
+def test_registration_error_fails_that_comparisons_maps_only(fake_delta_maps):
+    """A registration error fails that comparison's hotspots and panel; its subregion Δ stays."""
     fake_delta_maps['tibia']['errors'] = {(0, 'belastet'): 'RuntimeError: ICP diverged'}
     result = _process(_knee())
-    assert {r['status'] for r in _rows(result, 'subregion_rows', angle=0, load='belastet',
+    rows = _rows(result, 'subregion_rows', angle=0, load='belastet', bone='tibia')
+    assert {r['status'] for r in rows} == {'ok'}
+    assert all(math.isfinite(r['delta_mm']) for r in rows)
+    assert {r['status'] for r in _rows(result, 'hotspot_rows', angle=0, load='belastet',
                                        bone='tibia')} == {'failed'}
+    assert result['panel_titles']['tibia'][(0, 'belastet')] == 'failed'
+    assert {r['status'] for r in _rows(result, 'hotspot_rows', angle=0, load='unbelastet',
+                                       bone='tibia')} == {'ok'}
     assert {r['status'] for r in _rows(result, 'subregion_rows', angle=0, load='unbelastet',
                                        bone='tibia')} == {'ok'}
     assert {r['status'] for r in _rows(result, 'subregion_rows', angle=0, load='belastet',
@@ -401,7 +418,9 @@ def test_unexpected_crash_of_one_bone_keeps_the_other_bone(monkeypatch, fake_del
     monkeypatch.setattr(mod, 'knee_delta_maps', femur_crashes)
     result = _process(_knee())
     assert {r['status'] for r in _rows(result, 'subregion_rows', bone='tibia')} == {'ok'}
-    assert {r['status'] for r in _rows(result, 'subregion_rows', bone='femur')} == {'failed'}
+    # The subregion Δ does not need the maps: kept; the femoral hotspots fail.
+    assert {r['status'] for r in _rows(result, 'subregion_rows', bone='femur')} == {'ok'}
+    assert {r['status'] for r in _rows(result, 'hotspot_rows', bone='femur')} == {'failed'}
     assert result['maps']['tibia'] is not None and result['maps']['femur'] is None
     crash = [f for f in result['failures'] if f['stage'] == 'delta_maps']
     assert len(crash) == 1 and crash[0]['bone'] == 'femur'
@@ -713,7 +732,127 @@ def test_report_lists_hotspot_crowding_and_cavity_caveats(tmp_path, fake_delta_m
     assert '## Open caveats' in report
     # fake maps: every hotspot is 3.0 mm from an edge -> all within margin + 1 mm
     assert cohort['crowding']['femur']['n_near'] == cohort['crowding']['femur']['n']
+    # Only the left/right hotspots count (the whole-bone one duplicates one of them).
+    sides = [r for r in cohort['hotspot_rows'] if r['bone'] == 'femur'
+             and r['compartment'] in ('left', 'right') and r['status'] == 'ok']
+    assert cohort['crowding']['femur']['n'] == len(sides) > 0
+    assert 'Left/right compartment hotspots' in report
     assert cohort['crowding']['femur']['median_mm'] == 3.0
     assert 'K1_30_unbelastet (femur 8, tibia 4)' in report
     assert cohort['cavities'] == [('K1_30_unbelastet', 8, 4)]
     assert 'reference unmapped' in report
+
+
+# ---------------------------------------------------------------------------------------
+# Final-review fixes: unmapped causes, maps-only failures, provenance, cache, report wording
+# ---------------------------------------------------------------------------------------
+
+def test_registration_rows_split_the_reference_unmapped_fraction_by_cause(fake_delta_maps):
+    from morphometry.cartilage.deformation import UNMAPPED_CAUSES
+    columns = [f'reference_unmapped_{cause}' for cause in UNMAPPED_CAUSES]
+    assert columns == [c for c in mod.REGISTRATION_COLUMNS if c.startswith('reference_unmapped_')
+                       and c != 'reference_unmapped_fraction']
+    rows = [{'knee': 'K1', 'bone': 'femur', 'reference_unmapped_fraction': 0.03,
+             'reference_unmapped_detour': 0.02, 'reference_unmapped_no_crossing': 0.01,
+             'reference_unmapped_no_profile_point': 0.0, 'reference_unmapped_off_bone': 0.0},
+            {'knee': 'K2', 'bone': 'femur', 'reference_unmapped_fraction': 0.01,
+             'reference_unmapped_detour': 0.0, 'reference_unmapped_no_crossing': 0.004,
+             'reference_unmapped_no_profile_point': 0.006, 'reference_unmapped_off_bone': 0.0}]
+    summary = mod.reference_unmapped(rows)['femur']
+    assert summary['max'] == 0.03 and summary['max_knee'] == 'K1'
+    assert summary['causes']['detour']['max'] == 0.02
+    assert summary['causes']['no_profile_point']['max_knee'] == 'K2'
+    result = _process(_knee())
+    assert all(column in row for row in result['registration_rows'] for column in columns)
+
+
+def test_report_lists_maps_only_failures_and_states_the_one_sided_map_thickness(
+        tmp_path, fake_delta_maps):
+    fake_delta_maps['tibia']['errors'] = {(0, 'belastet'): 'RuntimeError: ICP diverged'}
+    context = _cohort_context(fake_delta_maps, tmp_path)
+    out = tmp_path / 'out'
+    out.mkdir()
+    args = mod.build_parser().parse_args(['-i', str(tmp_path), '-o', str(out)])
+    cohort = mod.cohort_stage(args, context, {})
+    report = (out / 'report.md').read_text()
+    assert [(r['knee'], r['bone']) for r in cohort['maps_failed']
+            if (r['angle'], r['load']) == (0, 'belastet')] == [('K1', 'tibia'), ('K2', 'tibia')]
+    assert 'Maps and hotspots failed, subregion Δ kept' in report
+    assert 'K1 0° loaded (tibia)' in report
+    # The registration error does not take the subregion rows out of the statistics.
+    [row] = [r for r in cohort['summary'] if r['table'] == 'subregion_delta'
+             and (r['angle'], r['load'], r['bone'], r['region'], r['unit'])
+             == (0, 'belastet', 'tibia', 'clt', 'mm')]
+    assert row['n'] == 2
+    assert 'cMe direction' in report and 'not directly comparable' in report
+    assert '140 p-values per bone (280 over both bones)' in report
+
+
+def test_cache_entry_that_cannot_be_read_is_recomputed(tmp_path, monkeypatch):
+    scan = tmp_path / 'K1_0_belastet.nii.gz'
+    scan.write_bytes(b'abc')
+    calls = []
+
+    def fake_measure(path, **labels):
+        calls.append(path)
+        return _record('K1_0_belastet')
+
+    monkeypatch.setattr(mod, 'measure_scan', fake_measure)
+    provenance = {'commit': 'abc123', 'dirty': False}
+    labels = dict(femur_label=3, tibia_label=4, femur_bone_label=1, tibia_bone_label=2)
+    out = tmp_path / 'out'
+    cache_file = out / 'cache' / 'K1_0_belastet.pkl'
+    cache_file.parent.mkdir(parents=True)
+    bad_entries = [b'not a pickle at all',                       # UnpicklingError
+                   pickle.dumps(['a', 'list']),                    # not a dict
+                   pickle.dumps({'record': 'not a dict'}),         # malformed record
+                   pickle.dumps(SimpleNamespace(x=1))[:-3],        # truncated
+                   b'\x80\x04\x95' + b'\xff' * 20]                 # garbage after a header
+    for n, content in enumerate(bad_entries, start=1):
+        cache_file.write_bytes(content)
+        records = mod.measure_scans([str(scan)], out, workers=1, use_cache=True,
+                                    provenance=provenance, labels=labels)
+        assert len(calls) == n and records[str(scan)]['scan'] == 'K1_0_belastet'
+
+
+def test_provenance_counts_untracked_code_as_dirty(monkeypatch):
+    answers = {}
+
+    def fake_git(*args):
+        if args[0] == 'rev-parse':
+            return 'abc123'
+        return answers['untracked' if '--untracked-files=all' in args else 'tracked']
+
+    monkeypatch.setattr(mod, '_git', fake_git)
+    answers.update(tracked='', untracked='')
+    assert mod.provenance() == {'commit': 'abc123', 'dirty': False}
+    answers.update(tracked='', untracked='?? morphometry/cartilage/new_module.py')
+    assert mod.provenance()['dirty'] is True
+    answers.update(tracked=' M scripts/x.py', untracked='')
+    assert mod.provenance()['dirty'] is True
+    answers.update(tracked='unknown', untracked='')
+    assert mod.provenance()['dirty'] is True
+
+    calls = []
+
+    def recording_git(*args):
+        calls.append(args)
+        return 'abc123' if args[0] == 'rev-parse' else ''
+
+    monkeypatch.setattr(mod, '_git', recording_git)
+    mod.provenance()
+    untracked = [a for a in calls if '--untracked-files=all' in a]
+    assert untracked and untracked[0][-2:] == mod.PROVENANCE_CODE_DIRS
+
+
+def test_meta_records_the_runs_own_provenance(tmp_path, fake_delta_maps, monkeypatch):
+    context = _cohort_context(fake_delta_maps, tmp_path)
+    context['provenance'] = {'commit': 'deadbeef', 'dirty': True}
+    monkeypatch.setattr(mod, '_git', lambda *args: 'from-a-second-git-call')
+    out = tmp_path / 'out'
+    out.mkdir()
+    args = mod.build_parser().parse_args(['-i', str(tmp_path), '-o', str(out)])
+    mod.cohort_stage(args, context, {})
+    import json
+    meta = json.loads((out / 'report.meta.json').read_text())
+    assert meta['commit'] == 'deadbeef' and meta['dirty'] is True

@@ -43,12 +43,21 @@ and per comparison x bone x compartment in ``hotspots.csv``, so absences stay vi
 
 * ``missing`` -- there is no file for that configuration (seven knees have no 90 degree
   loaded scan). A missing configuration stays ``missing`` even when the reference failed.
-* ``failed`` -- the file exists but that bone's measurement failed, its registration raised
-  (the configuration is in ``BoneDeltaMaps.errors``), or the **reference** failed for that
-  bone (missing reference file, failed measurement, or a reference that cannot be mapped):
-  then every present comparison of that knee and bone is ``failed``. A hotspot row is also
-  ``failed`` when its compartment has no measured Δ cell. Failed rows keep whatever ``aMe``
-  values were measured but no Δ. The reasons are in ``failures.csv``.
+* ``failed`` -- the file exists but cannot be compared. The two tables fail for different
+  reasons, because the per-subregion Δ does **not** go through the registration (it is
+  ``aMe(config) - aMe(reference)`` of each scan's own subdivision):
+
+  - a ``subregion_delta.csv`` row is ``failed`` only when that bone's measurement failed in
+    the configuration or in the reference (or the reference file is missing); then every
+    present comparison of that knee and bone is ``failed``;
+  - a ``hotspots.csv`` row (and the figure panel) is ``failed`` in those cases too, and also
+    when the configuration's registration raised (it is in ``BoneDeltaMaps.errors``), when
+    the reference cannot be mapped (e.g. a femur too small to unroll; every comparison of
+    that bone) or when its compartment has no measured Δ cell.
+
+  So a registration error or an un-unrollable reference leaves the subregion rows ``ok``.
+  Failed rows keep whatever ``aMe`` values were measured but no Δ. The reasons are in
+  ``failures.csv``.
 * ``ok`` -- otherwise. An ``ok`` row may still carry QC flags.
 
 QC flags
@@ -76,11 +85,17 @@ Outputs (into ``-o``)
 * ``registration.csv`` -- :data:`REGISTRATION_COLUMNS`, one row per registered
   (comparison, bone); ``reference_unmapped_fraction`` is the knee's reference value of
   ``BoneDeltaMaps.reference_dropped_fraction`` (covered reference tAB area with no map
-  coordinate -- for the femur, the outer condyle edges whose sagittal levels are not used),
-  repeated on each of the knee's rows.
-* ``report.md`` has an "Open caveats" section after its introduction: how many hotspots sit within
-  ``--edge-margin-mm`` + 1 mm of a footprint edge, the scans whose cartilage labels hold
-  enclosed cavities (:func:`count_enclosed_cavities`) and the reference unmapped fraction.
+  coordinate; 0 for the tibia), repeated on each of the knee's rows, and the four
+  ``reference_unmapped_<cause>`` columns split it by
+  :data:`~morphometry.cartilage.deformation.UNMAPPED_CAUSES` (they sum to it): on the femur
+  ``detour`` and ``no_crossing`` are the outermost sagittal levels of the condyles that are not
+  used, ``no_profile_point`` points the used levels' profiles do not reach, ``off_bone``
+  points away from the reference bone.
+* ``report.md`` has an "Open caveats" section after its introduction: how many left/right
+  compartment hotspots sit within ``--edge-margin-mm`` + 1 mm of a footprint edge (the
+  ``both`` hotspot is the deeper of the two, so it is not counted again), the scans whose
+  cartilage labels hold enclosed cavities (:func:`count_enclosed_cavities`) and the reference
+  unmapped fraction by cause.
 * ``failures.csv`` -- :data:`FAILURE_COLUMNS`, one row per failed measurement, registration
   or hotspot search, an unexpected crash of one bone's delta maps (stage ``delta_maps``,
   that bone only) or a figure that could not be drawn (stage ``figure``, rows unaffected).
@@ -137,9 +152,8 @@ import numpy as np
 
 from morphometry.cartilage.deformation_plot import plot_knee_deltas
 from morphometry.cartilage.deformation import (
-    COMPARISONS, COMPARTMENTS, DEFAULT_HOTSPOT_EDGE_MARGIN_MM, REFERENCE, bone_measurement,
-    find_largest_thinning,
-    knee_delta_maps,
+    COMPARISONS, COMPARTMENTS, DEFAULT_HOTSPOT_EDGE_MARGIN_MM, REFERENCE, UNMAPPED_CAUSES,
+    bone_measurement, find_largest_thinning, knee_delta_maps,
 )
 from morphometry.cartilage.deformation_plot import plot_cohort_hotspots
 from morphometry.cartilage.femur_regions import (
@@ -163,6 +177,10 @@ REGION_KEYS = {'tibia': TIBIA_REGION_KEYS, 'femur': FEMUR_REGION_KEYS}
 #: this (degrees) is flagged ``registration_rotation:<deg>``: the initial frames agree to a few
 #: degrees on a sound scan, so a much larger change means the ICP slid away from the start
 #: (e.g. a flip of a near-symmetric bone, which the trimmed residual cannot detect).
+#: It compares the final rotation with the frame-derived start only, so it cannot see a
+#: configuration whose anatomical frame is itself flipped (the ICP would then converge to the
+#: flipped start and report a small change). On the 0d993a3 run the largest change observed
+#: was 11.75 degrees (femur; tibia 5.69).
 MAX_ROTATION_CHANGE_DEG = 15.0
 
 #: Failures caught per measurement / registration; anything else in a worker is recorded too
@@ -178,7 +196,9 @@ HOTSPOT_COLUMNS = ['knee', 'angle', 'load', 'bone', 'compartment', 'map_x_mm', '
                    'qc_flags']
 REGISTRATION_COLUMNS = ['knee', 'angle', 'load', 'bone', 'rms_mm', 'median_mm', 'p95_mm',
                         'n_points', 'iterations', 'converged', 'rotation_change_deg',
-                        'dropped_fraction', 'reference_unmapped_fraction', 'flagged']
+                        'dropped_fraction', 'reference_unmapped_fraction',
+                        *(f'reference_unmapped_{cause}' for cause in UNMAPPED_CAUSES),
+                        'flagged']
 FAILURE_COLUMNS = ['knee', 'angle', 'load', 'bone', 'stage', 'error']
 #: ``cohort_summary.csv``. ``compartment`` is filled for the ``hotspot_frequency`` table only
 #: (the ``subregion_delta`` table is per subregion); ``count`` likewise.
@@ -466,7 +486,9 @@ def _read_cache(out_dir: Path, path: str, provenance: dict, labels: dict) -> Opt
     :param path: The scan path.
     :param provenance: ``{'commit', 'dirty'}`` of this run.
     :param labels: The labels passed to :func:`measure_scan`.
-    :return: The record, or ``None`` (no entry, stale, or unreadable).
+    :return: The record, or ``None`` (no entry, stale, or unreadable -- any exception while
+        unpickling, or an entry that is not a dict holding a dict ``'record'``, means
+        "recompute", never an aborted run).
     """
     cache = _cache_path(out_dir, path)
     if provenance.get('dirty', True) or provenance.get('commit') in (None, 'unknown'):
@@ -474,7 +496,9 @@ def _read_cache(out_dir: Path, path: str, provenance: dict, labels: dict) -> Opt
     try:
         with open(cache, 'rb') as handle:
             entry = pickle.load(handle)
-    except (OSError, pickle.UnpicklingError, EOFError, AttributeError, ImportError):
+    except Exception:  # missing, truncated, corrupt or stale (unpicklable) entry: recompute
+        return None
+    if not isinstance(entry, dict) or not isinstance(entry.get('record'), dict):
         return None
     if (entry.get('commit') != provenance['commit'] or entry.get('dirty', True)
             or entry.get('file') != _file_signature(path) or entry.get('labels') != labels):
@@ -693,7 +717,8 @@ def process_knee(knee: str, measurements: Dict[tuple, dict], grid_mm: float = 1.
                 ref_error = f'delta maps crashed: {type(error).__name__}: {error}'
         if ref_error:
             failure(REFERENCE, bone, ref_stage, ref_error)
-            log.warning('%s %s: %s; every comparison of this bone fails', knee, bone, ref_error)
+            log.warning('%s %s: %s; every comparison of this bone fails%s', knee, bone,
+                        ref_error, '' if ref_m is None else ' (maps and hotspots only)')
         if maps is not None:
             for key, error in maps.errors.items():
                 failure(key, bone, 'registration', error)
@@ -702,13 +727,17 @@ def process_knee(knee: str, measurements: Dict[tuple, dict], grid_mm: float = 1.
         hotspots, titles = {}, {}
         for key in COMPARISONS:
             record = measurements.get(key)
+            config_m = record[bone] if record is not None else None
+            # The per-subregion Δ needs only the two scans' measurements of this bone; the
+            # maps and hotspots need the registration and the reference's map as well.
             if record is None:
-                status = 'missing'
-            elif maps is None or record[bone] is None or key in maps.errors \
-                    or key not in maps.deltas:
-                status = 'failed'
+                sub_status = status = 'missing'
+            elif ref_m is None or config_m is None:
+                sub_status = status = 'failed'
             else:
-                status = 'ok'
+                sub_status = 'ok'
+                status = ('failed' if maps is None or key in maps.errors
+                          or key not in maps.deltas else 'ok')
             if status != 'ok':
                 titles[key] = 'no scan' if status == 'missing' else 'failed'
             flags = _join_flags(ref_flags, record['qc_flags'] if record is not None else '')
@@ -716,14 +745,14 @@ def process_knee(knee: str, measurements: Dict[tuple, dict], grid_mm: float = 1.
                 flags = _join_flags(flags, _registration_flags(maps, key, max_rms_mm))
             base = {'knee': knee, 'angle': key[0], 'load': key[1], 'bone': bone}
 
-            config_m = record[bone] if record is not None else None
             for region in REGION_KEYS[bone]:
                 ref_ame, ame = _ame(ref_m, region), _ame(config_m, region)
-                delta = ame - ref_ame if status == 'ok' else NAN
-                pct = 100.0 * delta / ref_ame if (status == 'ok' and ref_ame > 0) else NAN
+                delta = ame - ref_ame if sub_status == 'ok' else NAN
+                pct = 100.0 * delta / ref_ame if (sub_status == 'ok' and ref_ame > 0) else NAN
                 out['subregion_rows'].append(dict(
                     base, subregion=region, anatomical_subregion='', aMe_ref_mm=ref_ame,
-                    aMe_mm=ame, delta_mm=delta, delta_pct=pct, status=status, qc_flags=flags))
+                    aMe_mm=ame, delta_mm=delta, delta_pct=pct, status=sub_status,
+                    qc_flags=flags))
 
             for compartment in COMPARTMENTS:
                 hotspot, row_status = None, status
@@ -751,6 +780,9 @@ def process_knee(knee: str, measurements: Dict[tuple, dict], grid_mm: float = 1.
                     rotation_change_deg=rotation,
                     dropped_fraction=float(maps.dropped_fraction.get(key, NAN)),
                     reference_unmapped_fraction=float(maps.reference_dropped_fraction),
+                    **{f'reference_unmapped_{cause}':
+                       float(maps.reference_unmapped_by_cause.get(cause, NAN))
+                       for cause in UNMAPPED_CAUSES},
                     flagged=bool(result.rms_mm > max_rms_mm
                                  or rotation > MAX_ROTATION_CHANGE_DEG)))
         out['hotspots'][bone] = hotspots
@@ -931,15 +963,27 @@ def _git(*args: str) -> str:
         return 'unknown'
 
 
+#: Directories in which an untracked file makes the checkout dirty: the code the outputs
+#: depend on (a new, uncommitted module there would change the numbers without changing the
+#: commit). Untracked files elsewhere (notes, outputs) do not.
+PROVENANCE_CODE_DIRS = ('morphometry', 'scripts')
+
+
 def provenance() -> dict:
     """
-    The checkout's commit and whether it is dirty (tracked files modified).
+    The checkout's commit and whether it is dirty.
 
-    :return: ``{'commit', 'dirty'}``; an unknown commit counts as dirty.
+    Dirty = a tracked file is modified, or an untracked (not ignored) file exists under one of
+    :data:`PROVENANCE_CODE_DIRS`.
+
+    :return: ``{'commit', 'dirty'}``; an unknown commit or git status counts as dirty.
     """
     commit = _git('rev-parse', 'HEAD')
-    status = _git('status', '--porcelain', '--untracked-files=no')
-    return {'commit': commit, 'dirty': commit == 'unknown' or status != ''}
+    tracked = _git('status', '--porcelain', '--untracked-files=no')
+    untracked = _git('status', '--porcelain', '--untracked-files=all', '--',
+                     *PROVENANCE_CODE_DIRS)
+    dirty = 'unknown' in (commit, tracked, untracked) or tracked != '' or untracked != ''
+    return {'commit': commit, 'dirty': dirty}
 
 
 # ----------------------------------------------------------------------------------------
@@ -1278,20 +1322,29 @@ def registration_summary(rows: Sequence[dict]) -> List[dict]:
     return out
 
 
+#: The compartments :func:`hotspot_crowding` counts. The ``both`` hotspot is the deeper of
+#: the two side hotspots (it coincided with one of them in every comparison of the 0d993a3
+#: run), so counting it as well would count most hotspots twice. With a laterality table the
+#: sides are named ``medial`` / ``lateral``.
+CROWDING_COMPARTMENTS = ('left', 'right', 'medial', 'lateral')
+
+
 def hotspot_crowding(rows: Sequence[dict], edge_margin_mm: float) -> Dict[str, dict]:
     """
-    How close the hotspots sit to a footprint edge, per bone.
+    How close the hotspots sit to a footprint edge, per bone, over the side compartments.
 
-    :param rows: Selected ``hotspots.csv`` rows (every compartment).
+    :param rows: Selected ``hotspots.csv`` rows (every compartment; only the side
+        compartments, :data:`CROWDING_COMPARTMENTS`, are counted).
     :param edge_margin_mm: The run's edge margin (mm).
-    :return: Per bone ``{'n', 'n_near', 'median_mm'}``: hotspots with a finite
-        ``edge_distance_mm``, those within ``edge_margin_mm + 1`` mm of an edge, and the median
-        distance (NaN if none).
+    :return: Per bone ``{'n', 'n_near', 'median_mm'}``: side-compartment hotspots with a
+        finite ``edge_distance_mm``, those within ``edge_margin_mm + 1`` mm of an edge, and the
+        median distance (NaN if none).
     """
     out = {}
     for bone in BONES:
         distances = _finite(row.get('edge_distance_mm', NAN) for row in rows
-                            if row['bone'] == bone)
+                            if row['bone'] == bone
+                            and row.get('compartment') in CROWDING_COMPARTMENTS)
         out[bone] = {'n': len(distances),
                      'n_near': int(np.sum(distances <= edge_margin_mm + 1.0)),
                      'median_mm': float(np.median(distances)) if len(distances) else NAN}
@@ -1317,22 +1370,30 @@ def cavity_scans(records: Dict[str, dict]) -> List[tuple]:
 
 def reference_unmapped(rows: Sequence[dict]) -> Dict[str, dict]:
     """
-    Per bone, the reference's unmapped covered-area fraction over the knees.
+    Per bone, the reference's unmapped covered-area fraction over the knees, and by cause.
 
     :param rows: ``registration.csv`` rows (one value per knee, repeated per comparison).
-    :return: Per bone ``{'n', 'median', 'max', 'max_knee'}`` (NaN / '' if none).
+    :return: Per bone ``{'n', 'median', 'max', 'max_knee', 'causes'}`` (NaN / '' if none);
+        ``causes`` maps each name of ``UNMAPPED_CAUSES`` to ``{'median', 'max', 'max_knee'}``
+        of that cause's fraction over the same knees.
     """
+    def summarise(per_knee):
+        finite = {k: float(v) for k, v in per_knee.items() if np.isfinite(float(v))}
+        if not finite:
+            return {'n': 0, 'median': NAN, 'max': NAN, 'max_knee': ''}
+        worst = max(finite, key=finite.get)
+        return {'n': len(finite), 'median': float(np.median(list(finite.values()))),
+                'max': finite[worst], 'max_knee': worst}
+
     out = {}
     for bone in BONES:
-        per_knee = {row['knee']: row.get('reference_unmapped_fraction', NAN) for row in rows
-                    if row['bone'] == bone}
-        finite = {k: float(v) for k, v in per_knee.items() if np.isfinite(float(v))}
-        if finite:
-            worst = max(finite, key=finite.get)
-            out[bone] = {'n': len(finite), 'median': float(np.median(list(finite.values()))),
-                         'max': finite[worst], 'max_knee': worst}
-        else:
-            out[bone] = {'n': 0, 'median': NAN, 'max': NAN, 'max_knee': ''}
+        members = [row for row in rows if row['bone'] == bone]
+        out[bone] = summarise({row['knee']: row.get('reference_unmapped_fraction', NAN)
+                               for row in members})
+        out[bone]['causes'] = {
+            cause: summarise({row['knee']: row.get(f'reference_unmapped_{cause}', NAN)
+                              for row in members})
+            for cause in UNMAPPED_CAUSES}
     return out
 
 
@@ -1390,8 +1451,10 @@ def _caveat_lines(args: argparse.Namespace, cohort: dict) -> List[str]:
     crowd = cohort.get('crowding', {})
     parts = [f'{bone} {c["n_near"]}/{c["n"]} (median {_md(c["median_mm"], 2)} mm)'
              for bone, c in crowd.items() if c['n']]
-    out.append(f'- **Hotspots crowd the footprint edge.** Hotspots within {margin + 1:g} mm of an '
-               f'edge (the edge margin is {margin:g} mm): {", ".join(parts) or "none"}. The margin '
+    out.append(f'- **Hotspots crowd the footprint edge.** Left/right compartment hotspots '
+               f'within {margin + 1:g} mm of an '
+               f'edge (the edge margin is {margin:g} mm): {", ".join(parts) or "none"} (the '
+               'whole-bone hotspot is the deeper of the two and is not counted again). The margin '
                'moves rim hotspots inward; it does not remove the tendency of the smoothed '
                'minimum to sit next to an edge, where cartilage ends and two acquisitions\' '
                'labels disagree. Read a hotspot just past the margin with that in mind.')
@@ -1407,13 +1470,24 @@ def _caveat_lines(args: argparse.Namespace, cohort: dict) -> List[str]:
         out.append('- Enclosed cavities in the cartilage labels: none counted (or not recorded '
                    'by the cached measurements).')
     unmapped = cohort.get('reference_unmapped', {})
-    parts = [f'{bone} median {_md(100 * u["median"], 2)}%, max {_md(100 * u["max"], 2)}% '
-             f'({u["max_knee"]})' for bone, u in unmapped.items() if u['n']]
+    parts = []
+    for bone, u in unmapped.items():
+        if not u['n']:
+            continue
+        causes = ', '.join(f'{cause} {_md(100 * c["median"], 2)}% (max '
+                           f'{_md(100 * c["max"], 2)}%)'
+                           for cause, c in u.get('causes', {}).items()
+                           if c['n'] and c['max'] > 0)
+        parts.append(f'{bone} median {_md(100 * u["median"], 2)}%, max '
+                     f'{_md(100 * u["max"], 2)}% ({u["max_knee"]})'
+                     + (f' -- by cause, median per knee: {causes}' if causes else ''))
     if parts:
         out.append('- Covered reference tAB with no map coordinate (reference unmapped '
-                   f'fraction, per knee): {"; ".join(parts)}. On the femur these are the '
-                   'outer condyle edges whose sagittal levels are not used '
-                   '(`PROFILE_MAX_DETOUR_MM`); `registration.csv` has the value per knee.')
+                   f'fraction, per knee): {"; ".join(parts)}. On the femur `detour` and '
+                   '`no_crossing` are the outermost sagittal levels of the condyles that are '
+                   'not used (a side-wall crossing, `PROFILE_MAX_DETOUR_MM`, or no notch-plane '
+                   'crossing at all), `no_profile_point` points the used levels\' profiles do '
+                   'not reach; `registration.csv` has the values per knee.')
     out.append('')
 
     return out
@@ -1440,9 +1514,16 @@ def write_report(path: Path, args: argparse.Namespace, cohort: dict):
                'acquisition-to-acquisition (segmentation and repositioning) spread as well as '
                'any deformation; it is not a measure of measurement precision.')
     out.append('')
+    out.append('The **tables** are in aMe (both directions, cAB → AC and AC → cAB, averaged); '
+               'the **Δ maps and hotspots** (figures, `hotspots.csv`) are in the one-sided '
+               'cAB → AC distance per position (the cMe direction, '
+               '`ThicknessMaps.triangle_thickness`), so their magnitudes are not directly '
+               'comparable with the tables\'.')
+    out.append('')
     out.append('**p-values are uncorrected** for multiple comparisons: a two-sided Wilcoxon '
-               'signed-rank test of Δ against 0 per subregion and comparison, i.e. 20 '
-               'subregions × 7 comparisons = 140 tests per bone. Read them as a screen, not '
+               'signed-rank test of Δ against 0 per subregion and comparison, on Δ in mm and '
+               'again on Δ in %, i.e. 10 subregions × 7 comparisons × 2 units = 140 p-values '
+               'per bone (280 over both bones). Read them as a screen, not '
                'as evidence; with n ≤ 15 the smallest attainable p is about 6e-5, with n = 8 '
                'about 0.008.')
     out.append('')
@@ -1550,6 +1631,8 @@ def write_report(path: Path, args: argparse.Namespace, cohort: dict):
     out.append('## Comparisons left out')
     sections = [('Missing (no scan for the configuration)', cohort['missing'], False),
                 ('Failed (see `failures.csv`)', cohort['failed'], False),
+                ('Maps and hotspots failed, subregion Δ kept (see `failures.csv`)',
+                 cohort.get('maps_failed', []), False),
                 ('QC-flagged' + (' (kept, `--include-flagged`)' if args.include_flagged
                                  else ' (excluded)'), cohort['flagged'], True),
                 ('Excluded by `--exclude`', cohort['excluded'], False)]
@@ -1577,12 +1660,14 @@ def write_meta(path: Path, args: argparse.Namespace, context: dict, cohort: dict
 
     :param path: The meta JSON file to write.
     :param args: The parsed command line.
-    :param context: The :func:`per_knee_stage` context (paths, knees, records).
+    :param context: The :func:`per_knee_stage` context (paths, knees, records, provenance).
     :param cohort: The :func:`cohort_stage` dict (counts and lists).
     """
     meta = {
-        'commit': _git('rev-parse', 'HEAD'),
-        'dirty': _git('status', '--porcelain', '--untracked-files=no') != '',
+        # The provenance recorded when the run started (the measurements were made at that
+        # commit), not a second git call that a checkout during the run could change.
+        'commit': context.get('provenance', {}).get('commit', 'unknown'),
+        'dirty': bool(context.get('provenance', {}).get('dirty', True)),
         'branch': _git('rev-parse', '--abbrev-ref', 'HEAD'),
         'date': datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),
         'host': socket.gethostname(),
@@ -1601,6 +1686,7 @@ def write_meta(path: Path, args: argparse.Namespace, context: dict, cohort: dict
             for a, l in COMPARISONS},
         'missing': _grouped(cohort['missing']),
         'failed': _grouped(cohort['failed']),
+        'maps_failed': _grouped(cohort.get('maps_failed', [])),
         'flagged': _grouped(cohort['flagged'], keep_flags=True),
         'hotspot_edge_margin_mm': args.edge_margin_mm,
         'excluded_by_name': sorted(args.exclude),
@@ -1627,7 +1713,8 @@ def cohort_stage(args: argparse.Namespace, context: dict,
     :param laterality: ``{knee: 'left' | 'right'}`` (:func:`load_laterality_table`); empty =
         no table, pool by patient-side key.
     :return: ``{'summary', 'subregion_rows', 'hotspot_rows', 'registration', 'missing',
-        'failed', 'flagged', 'excluded', 'failures', 'missing_laterality', 'laterality',
+        'failed', 'maps_failed', 'flagged', 'excluded', 'failures', 'missing_laterality',
+        'laterality',
         'n_knees', 'n_scans'}``: the summary rows, the selected (and mapped) rows, the
         registration summary, the per-bone rows of the absent comparisons (subregion rows
         de-duplicated per knee x comparison x bone), the failure records and the knees missing
@@ -1646,6 +1733,12 @@ def cohort_stage(args: argparse.Namespace, context: dict,
     cohort = {
         'missing': [r for r in per_bone if r['status'] == 'missing'],
         'failed': [r for r in per_bone if r['status'] == 'failed'],
+        # Comparisons whose subregion rows are ok but whose maps / hotspots failed (a
+        # registration error or a reference that cannot be mapped).
+        'maps_failed': [r for r in per_bone if r['status'] == 'ok' and any(
+            h['status'] == 'failed' for h in hotspot_rows
+            if (h['knee'], h['angle'], h['load'], h['bone'])
+            == (r['knee'], r['angle'], r['load'], r['bone']))],
         'flagged': [r for r in per_bone if r['status'] == 'ok' and r['qc_flags']],
         'excluded': [r for r in per_bone if r['status'] == 'ok' and (
             _scan_name(r['knee'], r['angle'], r['load']) in excluded_names
