@@ -16,7 +16,7 @@ def _close():
 
 
 def _maps(bone='tibia', drop=()):
-    grid = MapGrid((-5.0, -4.0), 1.0, (10, 8))
+    grid = MapGrid((-5.0, -4.0), 0.5, (10, 8))
     rng = np.random.default_rng(0)
     ref = rng.uniform(1.5, 3.0, grid.shape)
     codes = np.zeros(grid.shape, int)
@@ -70,3 +70,36 @@ def test_cohort_scatter(tmp_path):
     fig = plot_cohort_hotspots(rows, 'tibia', path=tmp_path / 'c.png')
     n = sum(len(c.get_offsets()) for a in fig.axes for c in a.collections)
     assert n == 1 and (tmp_path / 'c.png').exists()
+
+
+def _panel(fig, title):
+    return [a for a in fig.axes if a.get_title().startswith(title)][0]
+
+
+def test_extent_and_orientation_in_mm():
+    # origin (-5, -4), 0.5 mm cells, (10, 8): x edges -5.25..-0.25, y edges -4.25..-0.25.
+    ax = _panel(plot_knee_deltas(_maps(), 'K'), '60° unloaded')
+    im = ax.get_images()[0]
+    assert im.get_array().shape == (8, 10)  # transposed: rows = column 1
+    np.testing.assert_allclose(im.get_extent(), [-5.25, -0.25, -4.25, -0.25])
+    assert im.origin == 'lower'
+
+
+def test_region_border_segments():
+    ax = _panel(plot_knee_deltas(_maps(), 'K'), '60° unloaded')
+    segs = np.array(ax.collections[0].get_segments())  # (n, 2 points, 2)
+    vertical = segs[np.isclose(segs[:, 0, 0], segs[:, 1, 0])]
+    horizontal = segs[np.isclose(segs[:, 0, 1], segs[:, 1, 1])]
+    assert len(vertical) == 6 and len(horizontal) == 10 and len(segs) == 16
+    # the 4|5 split of column 0 is at x = -2.75, over cells j = 0..5 (y -4.25..-1.25)
+    np.testing.assert_allclose(vertical[:, :, 0], -2.75)
+    np.testing.assert_allclose(np.sort(vertical[:, 0, 1]), -4.25 + 0.5 * np.arange(6))
+    # the labelled / unlabelled edge at y = -1.25 spans every column
+    np.testing.assert_allclose(horizontal[:, :, 1], -1.25)
+    np.testing.assert_allclose(np.sort(horizontal[:, 0, 0]), -5.25 + 0.5 * np.arange(10))
+
+
+def test_hotspot_marker_position():
+    fig = plot_knee_deltas(_maps(), 'K', hotspots={(60, 'unbelastet'): {'map_mm': (-3.0, -2.0)}})
+    x, y = _panel(fig, '60° unloaded').lines[0].get_data()
+    assert (list(x), list(y)) == ([-3.0], [-2.0])

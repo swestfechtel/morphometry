@@ -10,6 +10,7 @@ reference, red thicker.
 """
 from typing import Dict, Optional, Sequence
 
+import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.collections import LineCollection
@@ -82,7 +83,10 @@ def _region_borders(ax, maps: BoneDeltaMaps) -> None:
         if codes[i, j] >= 0 or codes[i, j + 1] >= 0:
             edge(i, j, False)
     if segs:
-        ax.add_collection(LineCollection(segs, colors='0.15', linewidths=0.4))
+        lc = LineCollection(segs, colors='black', linewidths=1.0)
+        # White halo under the black line keeps the border visible on dark and light cells.
+        lc.set_path_effects([pe.withStroke(linewidth=2.6, foreground='white')])
+        ax.add_collection(lc)
 
 
 def plot_knee_deltas(maps: BoneDeltaMaps, knee: str, hotspots: Optional[Dict[tuple, dict]] = None,
