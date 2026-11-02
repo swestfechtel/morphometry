@@ -36,13 +36,13 @@ Construction (:meth:`UnrolledFemur.from_reference`)
    field-of-view edge of the shaft never enters a contour.
 2. At every medial-lateral level ``notch_ml + k * slice_mm`` strictly inside the cropped
    bone's extent the mesh is cut by the sagittal plane (normal ``ml_axis``). The arc origin of
-   the level is the **distal-most point of the cross-section on or anterior of the notch plane**
-   ``ap = notch_ap``, over all contour components (:func:`_origin_candidates`). Wherever the
-   profile crosses the plane distally -- every condyle -- that point is exactly the notch-plane
-   crossing with the smallest proximal coordinate, because the bone rises proximally as it
-   runs anteriorly up the trochlea. Where the profile only reaches the plane at a corner (an
-   intercondylar wall lying nearly in it), the foot of that corner is taken if it lies within
-   ``NOTCH_SNAP_MM`` of the plane; further away the level has no profile. The component
+   the level is the profile's **crossing of the notch plane** ``ap = notch_ap`` with the
+   smallest proximal coordinate, over all contour components -- the distal crossing. Only if
+   there is no crossing, or the lowest vertex within ``NOTCH_SNAP_MM`` in front of the plane lies
+   more than ``NOTCH_CORNER_DROP_MM`` below the lowest crossing (the profile merely touches the
+   plane at a corner, e.g. an intercondylar wall lying nearly in it, and the lowest crossing is
+   the shaft's underside), is that corner taken instead (:func:`_origin_candidates`). A condyle
+   whose lowest point lies anterior of the plane keeps its origin at the crossing. The component
    holding the origin is the profile of that level; along it, signed arc length is measured
    from the origin, **positive posteriorly** (the direction in which ``ap`` decreases: round
    the distal condyle to the posterior condyle) and negative anteriorly (up the trochlea). A
@@ -72,14 +72,15 @@ the origin there is where the groove meets the fossa and positive arc climbs the
 (no articular cartilage). These levels get finite coordinates, continuous with their
 neighbours, but they are only as reproducible as the fossa's shape at the notch plane: on the
 test phantom, whose fossa wall is a plane 0.5 mm in front of and *parallel to* the notch plane,
-the origin slides along the foot of that wall by up to ~1.3 mm between two voxelisations of the
-same bone (against <= 0.6 mm on the condyles). A real fossa roof is oblique to the notch plane,
+the origin is a crossing up to ``NOTCH_CORNER_DROP_MM`` above the foot of that wall in one
+voxelisation and the foot itself in another, so the arc moves by up to ~2 mm between two
+voxelisations of the same bone (against <= 0.6 mm on the condyles). A real fossa roof is oblique to the notch plane,
 so this is the phantom's worst case, not a measured property of real knees. Before the
 corner rule above, such a level could jump to a crossing ~20 mm proximal (the underside of the
 shaft); that is pinned against by ``tests/unit/test_unrolled_femur.py``.
 """
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import pyvista as pv
@@ -88,10 +89,17 @@ from scipy.spatial import cKDTree
 from morphometry.cartilage.femur_regions import FemoralFrame, _polyline_components
 from morphometry.cartilage.registration import REGISTRATION_CROP_MM, crop_to_articular_end
 
-#: Largest distance (mm) anterior of the notch plane at which the distal-most anterior point of
-#: a sagittal profile is still accepted as the arc origin when the profile does not cross the
-#: plane there (see :func:`_origin_candidates`). Beyond it the level has no profile (``NaN``).
+#: Largest distance (mm) anterior of the notch plane at which a profile vertex can serve as the
+#: arc origin (a corner) when the profile has no distal crossing of the plane (see
+#: :func:`_origin_candidates`). Vertices further in front never compete with a crossing.
 NOTCH_SNAP_MM = 1.0
+
+#: How far (mm) below the lowest notch-plane crossing such a corner must lie to replace it.
+#: Near a crossing the profile within ``NOTCH_SNAP_MM`` in front of the plane is at most a
+#: fraction of a millimetre lower (a condyle of radius 20 mm whose lowest point is 3 mm anterior
+#: of the plane: ~0.1 mm), whereas a crossing that is not distal at all (the shaft's underside
+#: behind a fossa wall) lies ~20 mm above the corner on the phantom.
+NOTCH_CORNER_DROP_MM = 2.0
 
 
 @dataclass
@@ -128,38 +136,38 @@ def _edge_set(lines: np.ndarray) -> set:
     return edges
 
 
-def _origin_candidates(points_2d: np.ndarray,
-                       notch_ap: float) -> List[Tuple[float, float, int, float]]:
+def _origin_candidates(points_2d: np.ndarray, notch_ap: float):
     """
-    Candidate arc origins on one ordered polyline: everything on or anterior of the notch plane.
+    Candidate arc origins on one ordered polyline: notch-plane crossings and corner vertices.
 
-    The origin of the arc is the **distal-most point of the profile on or anterior of the notch
-    plane** ``ap = notch_ap``. Wherever the profile crosses the plane on its distal side (every
-    condyle, every trochlear level whose groove runs into a sloping fossa roof) that point *is*
-    the distal crossing, because the bone surface rises proximally as it runs anteriorly up the
-    trochlea. The vertices are candidates as well so that a level whose profile only *touches*
-    the plane -- an intercondylar wall lying (nearly) in it, as on the phantom, whose smoothed
-    wall crosses the plane in one voxelisation and not in another -- gets its origin at the
-    foot of that wall instead of jumping to some crossing far proximal.
+    The arc origin is the profile's **crossing of the notch plane** ``ap = notch_ap`` with the
+    smallest proximal coordinate (the distal crossing). The vertices lying on or at most
+    ``NOTCH_SNAP_MM`` in front of the plane are returned as a second, fallback kind: a level
+    whose profile only *touches* the plane at a corner -- an intercondylar wall lying (nearly)
+    in it, as on the phantom, whose smoothed wall crosses the plane in one voxelisation and not
+    in another -- has no distal crossing, and its lowest genuine crossing can be far proximal
+    (the underside of the shaft). :func:`_level_profile` uses a corner only in that case (see
+    ``NOTCH_CORNER_DROP_MM``); vertices further in front never compete, so a condyle whose
+    lowest point lies a few mm anterior of the notch plane keeps its origin at the crossing.
 
     :param points_2d: ``(M, 2)`` ordered in-plane coordinates ``(ap, proximal)``.
     :param notch_ap: The notch plane's ``ap`` coordinate.
-    :return: A list of ``(proximal, ap, segment_index, t)``: the candidate's proximal and
-        anterior-posterior coordinates, the index ``j`` of the segment ``(j, j + 1)`` it lies
+    :return: ``(crossings, corners)``: two lists of ``(proximal, segment_index, t)`` -- the
+        candidate's proximal coordinate, the index ``j`` of the segment ``(j, j + 1)`` it lies
         on and the fraction ``t`` in ``[0, 1]`` along it.
     """
     f = points_2d[:, 0] - notch_ap
-    candidates = []
+    crossings, corners = [], []
     last = len(f) - 1
     for j in range(len(f)):
-        if f[j] >= 0:
+        if 0.0 <= f[j] <= NOTCH_SNAP_MM:
             segment, t = (j, 0.0) if j < last else (j - 1, 1.0)
-            candidates.append((float(points_2d[j, 1]), float(points_2d[j, 0]), segment, t))
+            corners.append((float(points_2d[j, 1]), segment, t))
         if j < last and f[j] * f[j + 1] < 0:
             t = f[j] / (f[j] - f[j + 1])
-            point = points_2d[j] + t * (points_2d[j + 1] - points_2d[j])
-            candidates.append((float(point[1]), float(notch_ap), j, float(t)))
-    return candidates
+            proximal = points_2d[j, 1] + t * (points_2d[j + 1, 1] - points_2d[j, 1])
+            crossings.append((float(proximal), j, float(t)))
+    return crossings, corners
 
 
 def _profile_arc(ordered_2d: np.ndarray, segment: int, t: float,
@@ -193,9 +201,8 @@ def _level_profile(mesh: pv.PolyData, frame: FemoralFrame, ml: float) -> Optiona
     :param mesh: The cropped reference bone surface (world mm).
     :param frame: The reference femoral frame.
     :param ml: The cutting plane's coordinate along ``frame.ml_axis``.
-    :return: A :class:`_Level`, or ``None`` if the cross-section is empty, has no point on or
-        anterior of the notch plane, or its distal-most such point lies more than
-        ``NOTCH_SNAP_MM`` in front of the plane.
+    :return: A :class:`_Level`, or ``None`` if the cross-section is empty or has neither a
+        notch-plane crossing nor a vertex within ``NOTCH_SNAP_MM`` in front of the plane.
     """
     cut = mesh.slice(normal=frame.ml_axis, origin=ml * frame.ml_axis)
     if cut is None or cut.n_points < 2 or cut.n_cells == 0:
@@ -204,7 +211,7 @@ def _level_profile(mesh: pv.PolyData, frame: FemoralFrame, ml: float) -> Optiona
     plane = np.stack([points @ frame.ap_axis, points @ frame.proximal_axis], axis=1)
     edges = _edge_set(cut.lines)
 
-    best = None  # (proximal, ap, component index, segment, t)
+    crossing = corner = None  # (proximal, component index, segment, t)
     components = []
     for sequence in _polyline_components(points, cut.lines):
         if len(sequence) < 2:
@@ -216,15 +223,23 @@ def _level_profile(mesh: pv.PolyData, frame: FemoralFrame, ml: float) -> Optiona
             top = int(np.argmax(plane[ids, 1]))
             ids = ids[top:] + ids[:top] + [ids[top]]
         components.append(ids)
-        for proximal, ap, segment, t in _origin_candidates(plane[ids], frame.notch_ap):
-            if best is None or proximal < best[0]:
-                best = (proximal, ap, len(components) - 1, segment, t)
-    # No profile reaches the notch plane, or its distal-most anterior point is a corner too far
-    # in front of it to be read as the notch-plane crossing.
-    if best is None or best[1] - frame.notch_ap > NOTCH_SNAP_MM:
+        crossings, corners = _origin_candidates(plane[ids], frame.notch_ap)
+        for proximal, segment, t in crossings:
+            if crossing is None or proximal < crossing[0]:
+                crossing = (proximal, len(components) - 1, segment, t)
+        for proximal, segment, t in corners:
+            if corner is None or proximal < corner[0]:
+                corner = (proximal, len(components) - 1, segment, t)
+    # The brief's rule: the crossing with the smallest proximal coordinate. A corner within the
+    # snap band replaces it only if there is no crossing at all or the corner lies more than
+    # NOTCH_CORNER_DROP_MM below it -- i.e. the lowest crossing is not on the distal side.
+    best = crossing
+    if corner is not None and (crossing is None or corner[0] < crossing[0] - NOTCH_CORNER_DROP_MM):
+        best = corner
+    if best is None:
         return None
 
-    _, _, index, segment, t = best
+    _, index, segment, t = best
     all_ids, all_arc = [], []
     for k, ids in enumerate(components):
         all_ids.extend(ids)

@@ -145,16 +145,18 @@ def test_groove_levels_are_finite_and_close(flexed_pairs):
     """
     The intercondylar band (|u| < ``CONDYLE_INNER``): the trochlear groove and the corners of
     the fossa. The phantom's fossa wall is a plane 0.5 mm *in front of* and parallel to the
-    notch plane, so whether its smoothed foot dips across the plane differs between the two
-    voxelisations and the arc origin moves along the foot of the wall by up to ~1.3 mm (see
-    :func:`morphometry.cartilage.deformation._origin_candidates`). A real fossa roof is
-    oblique to the notch plane. Pinned looser, but finite and without a jump to another part of
-    the profile (which was ~20 mm).
+    notch plane, so whether its smoothed surface crosses the plane, and how far up the wall,
+    differs between the two voxelisations: the origin is either such a crossing (kept while it
+    lies within ``NOTCH_CORNER_DROP_MM`` = 2 mm above the wall's foot) or the foot itself (see
+    :func:`morphometry.cartilage.deformation._origin_candidates`), so the arc of a groove level
+    can move by up to about that much (max 2.05 mm when written). A real fossa roof is oblique
+    to the notch plane. Pinned looser, but finite and without a jump to another part of the
+    profile (which was ~20 mm).
     """
     points, c_base, c_rot = flexed_pairs
     groove = np.abs(points[:, 0]) < CONDYLE_INNER
     assert np.isfinite(c_base[groove]).all() and np.isfinite(c_rot[groove]).all()
-    assert np.max(np.abs(c_rot - c_base)[groove]) < 1.5
+    assert np.max(np.abs(c_rot - c_base)[groove]) < 2.5
 
 
 def test_points_off_the_bone_are_nan(base_sub, base_unrolled):
@@ -222,3 +224,24 @@ def test_invalid_slice_spacing_raises():
     mesh, frame = _cylinder_reference()
     with pytest.raises(ValueError):
         UnrolledFemur.from_reference(mesh, frame, slice_mm=0.0)
+
+
+@pytest.mark.parametrize('lowest_in_front_mm', [3.0, 0.5])
+def test_condyle_lowest_anterior_of_notch_keeps_the_crossing(lowest_in_front_mm):
+    """
+    Regression: on a real femur the lowest point of a condyle can lie a few mm *anterior* of
+    the notch plane. The origin must still be the notch-plane crossing on the distal side --
+    not the lowest vertex (which, 3 mm in front, used to drop the level entirely, and 0.5 mm in
+    front silently moved the origin by ~0.5 mm of arc).
+    """
+    radius = 10.0
+    notch_ap = -lowest_in_front_mm          # the tube's lowest point is at ap = 0
+    mesh, frame = _cylinder_reference(radius, notch_ap)
+    unrolled = UnrolledFemur.from_reference(mesh, frame, max_distance_mm=0.5)
+    theta_notch = np.arcsin(notch_ap / radius)
+    theta = np.radians(np.array([60.0, 0.0, -60.0, -120.0]))
+    points = np.stack([np.zeros_like(theta), radius * np.sin(theta),
+                       -radius * np.cos(theta)], axis=1)
+    arc = unrolled.coordinates(points)[:, 1]
+    assert np.isfinite(arc).all()
+    assert np.allclose(arc, radius * (theta_notch - theta), atol=0.05)
