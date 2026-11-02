@@ -7,6 +7,11 @@ increasing upwards). For the femur, x is the medial-lateral coordinate (patient 
 right) and y is the articular arc length in mm with the trochlea (negative) at the TOP and the
 posterior condyle (positive) at the bottom. All axes are in mm. Blue is thinner than the
 reference, red thicker.
+
+The maps show the **one-sided** cAB -> AC distance per position (the cMe direction,
+``ThicknessMaps.triangle_thickness``), which is what the colour-bar labels say; the
+per-subregion tables of the deformation script are in aMe (both directions averaged), so the
+magnitudes of the two are not directly comparable.
 """
 from typing import Dict, Optional, Sequence
 
@@ -53,7 +58,7 @@ def _style_axes(ax, bone: str, extent: list) -> None:
     ax.set_xlim(extent[0], extent[1])
     ax.set_ylim((extent[3], extent[2]) if bone == 'femur' else (extent[2], extent[3]))
     ax.set_aspect('equal')
-    ax.set_xlabel('patient right (mm)' if bone == 'tibia' else 'medial-lateral (mm)', fontsize=7)
+    ax.set_xlabel('patient right (mm)', fontsize=7)
     ax.set_ylabel('anterior (mm)' if bone == 'tibia' else 'arc, trochlea at top (mm)', fontsize=7)
     ax.tick_params(labelsize=6)
 
@@ -153,10 +158,10 @@ def plot_knee_deltas(maps: BoneDeltaMaps, knee: str, hotspots: Optional[Dict[tup
     fig.tight_layout(rect=(0, 0, 0.9, 0.96))
     if delta_im is not None:
         cax = fig.add_axes([0.92, 0.12, 0.012, 0.35])
-        fig.colorbar(delta_im, cax=cax).set_label('Δ thickness (mm)', fontsize=8)
+        fig.colorbar(delta_im, cax=cax).set_label('Δ thickness, cAB→AC (mm)', fontsize=8)
     if ref_im is not None:
         cax = fig.add_axes([0.92, 0.55, 0.012, 0.3])
-        fig.colorbar(ref_im, cax=cax).set_label('reference thickness (mm)', fontsize=8)
+        fig.colorbar(ref_im, cax=cax).set_label('reference thickness, cAB→AC (mm)', fontsize=8)
     if path is not None:
         fig.savefig(str(path), dpi=130)
     return fig

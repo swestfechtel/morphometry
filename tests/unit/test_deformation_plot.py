@@ -111,3 +111,18 @@ def test_cohort_scatter_anatomical(tmp_path):
     fig = plot_cohort_hotspots(rows, 'tibia', anatomical=True)
     n = sum(len(c.get_offsets()) for a in fig.axes for c in a.collections)
     assert n == 2 and 'medial positive' in fig._suptitle.get_text()
+
+
+def test_axis_and_colour_bar_labels_name_patient_right_and_the_one_sided_thickness():
+    """
+    Both bones' x axis is the patient-right coordinate (the femur's too, not "medial-lateral",
+    which would suggest an anatomical side); the colour bars say the maps are the one-sided
+    cAB -> AC distance, not the aMe of the tables.
+    """
+    for bone in ('tibia', 'femur'):
+        fig = plot_knee_deltas(_maps(bone), 'K')
+        panels = [a for a in fig.axes if a.get_title()]
+        assert {a.get_xlabel() for a in panels} == {'patient right (mm)'}
+        bars = [a.get_ylabel() for a in fig.axes if not a.get_title() and a.get_ylabel()]
+        assert bars and all('cAB→AC' in label for label in bars)
+        plt.close(fig)
