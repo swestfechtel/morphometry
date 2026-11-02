@@ -15,7 +15,7 @@ import pyvista as pv
 from scipy.spatial.transform import Rotation
 
 from morphometry.cartilage import surface as S
-from morphometry.cartilage.deformation import UnrolledFemur
+from morphometry.cartilage.deformation import UNMAPPED_CAUSES, UnrolledFemur
 from morphometry.cartilage.femur_regions import FEMUR_REGION_KEYS, FemoralFrame, subdivide_femur
 from tests.unit.test_femur_regions import (
     CONDYLE_INNER, CONDYLE_OUTER, CONDYLE_RADIUS, phantom as femur_phantom,
@@ -82,6 +82,46 @@ def test_arc_matches_the_circular_profile(base_sub, base_unrolled):
         assert np.allclose(c[:, 0], (points - frame.notch_point) @ frame.ml_axis, atol=1e-9)
         # The smoothed surface sits a fraction of a voxel inside the nominal circle.
         assert np.allclose(c[:, 1], CONDYLE_RADIUS * (theta_notch - theta), atol=0.6)
+
+
+def test_articular_surface_beyond_the_registration_crop_is_mapped(base_sub, base_unrolled):
+    """
+    Regression (final review, finding 1): the coordinate was built on the distal 40 mm of the
+    bone only (``REGISTRATION_CROP_MM``), so articular surface further up -- the proximal
+    trochlea, up to 50.9 mm above the distal end on the real reference femurs -- had no
+    coordinate. The coordinate is now built on the whole bone: on the phantom (bone from
+    ``w = -22`` to the shaft top) points of the condyle circle 36-43 mm above its distal end
+    read the circular arc like every other point.
+    """
+    frame = base_sub.frame
+    theta_notch = np.arcsin(frame.notch_ap / CONDYLE_RADIUS)
+    theta = np.radians(np.array([130.0, 150.0, 165.0]))        # w = 14.1, 19.1, 21.3 mm
+    distal = (np.asarray(base_sub.bone_mesh.points) @ frame.proximal_axis).min()
+    for u in (-20.0, 20.0):
+        points = np.stack([np.full_like(theta, u), CONDYLE_RADIUS * np.sin(theta),
+                           -CONDYLE_RADIUS * np.cos(theta)], axis=1)
+        assert (points @ frame.proximal_axis - distal).max() > 42.0
+        c = base_unrolled.coordinates(points)
+        assert np.isfinite(c).all()
+        assert np.allclose(c[:, 1], CONDYLE_RADIUS * (theta_notch - theta), atol=0.6)
+        assert not base_unrolled.unmapped_causes(points).any()
+
+
+def test_unmapped_causes_agree_with_coordinates(base_sub, base_unrolled):
+    """
+    ``unmapped_causes`` is 0 exactly where ``coordinates`` maps a point; a point far from the
+    bone reads ``'off_bone'``.
+    """
+    rng = np.random.default_rng(3)
+    vertices = np.asarray(base_sub.bone_mesh.points)
+    points = vertices[rng.choice(len(vertices), 4000, replace=False)]
+    points = points + rng.normal(scale=1.5, size=points.shape)
+    codes = base_unrolled.unmapped_causes(points)
+    mapped = np.isfinite(base_unrolled.coordinates(points)).all(axis=1)
+    assert np.array_equal(codes == 0, mapped)
+    assert set(np.unique(codes)) <= set(range(len(UNMAPPED_CAUSES) + 1))
+    far = base_sub.frame.notch_point + 20 * base_sub.frame.ap_axis
+    assert base_unrolled.unmapped_causes(far[None])[0] == 1 + UNMAPPED_CAUSES.index('off_bone')
 
 
 def test_ml_column_is_patient_right_from_the_notch(base_sub, base_unrolled):
@@ -247,7 +287,8 @@ def test_condyle_lowest_anterior_of_notch_keeps_the_crossing(lowest_in_front_mm)
     assert np.allclose(arc, radius * (theta_notch - theta), atol=0.05)
 
 
-def _side_wall_reference(side_wall=lambda x: x >= 0, extent=10.0, wall_centre=-12.0):
+def _side_wall_reference(side_wall=lambda x: x >= 0, extent=10.0, wall_centre=-12.0,
+                         block=True):
     """
     A two-part bone along world x (ml = +x, ap = +y, proximal = +z, notch plane ``y = 0``),
     reproducing the outer edge of a real condyle (K1_30_unbelastet, patient-right, 33.5-36 mm
@@ -269,6 +310,8 @@ def _side_wall_reference(side_wall=lambda x: x >= 0, extent=10.0, wall_centre=-1
     :param extent: Half-length of the bone along x (mm).
     :param wall_centre: ``y`` of the side-wall part's condyle centre (radius 10, so ``<= -10``
         keeps its distal arc behind the notch plane).
+    :param block: Add the side-wall block; without it the side-wall part's profile does not
+        reach the notch plane at all (no crossing, no corner).
     """
     step = 0.5
     x = np.arange(-extent - 2.0, extent + 2.01, step)
@@ -278,7 +321,7 @@ def _side_wall_reference(side_wall=lambda x: x >= 0, extent=10.0, wall_centre=-1
     wall = side_wall(xx) & (np.abs(xx) <= extent)
     inner = (np.abs(xx) <= extent) & ~wall & ((yy + 5) ** 2 + zz ** 2 <= 100)
     outer = wall & (((yy - wall_centre) ** 2 + zz ** 2 <= 100)
-                    | ((yy >= wall_centre) & (yy <= 8) & (zz >= 6) & (zz <= 15)))
+                    | (block & (yy >= wall_centre) & (yy <= 8) & (zz >= 6) & (zz <= 15)))
     image = pv.ImageData(dimensions=xx.shape, spacing=(step,) * 3,
                          origin=(x[0], y[0], z[0]))
     image.point_data['mask'] = (inner | outer).astype(float).ravel(order='F')
@@ -337,3 +380,30 @@ def test_a_gap_of_unused_levels_is_not_bridged():
                            -10 * np.cos(theta)], axis=1)
         arc = unrolled.coordinates(normal)[:, 1]
         assert np.allclose(arc, 10.0 * (theta_notch - theta), atol=0.8), u
+
+
+def test_unmapped_causes_name_why_a_level_is_not_used():
+    """
+    A level dropped for its detour reads ``'detour'``; one whose profile never reaches the
+    notch plane (the same condyle, moved back, without the side wall) reads ``'no_crossing'``
+    -- the gap cap applies to both kinds of unused level alike. The normal part is mapped.
+    """
+    theta = np.radians(np.array([0.0, -45.0, -90.0]))
+    detour = 1 + UNMAPPED_CAUSES.index('detour')
+    no_crossing = 1 + UNMAPPED_CAUSES.index('no_crossing')
+    for block, expected in ((True, detour), (False, no_crossing)):
+        mesh, frame = _side_wall_reference(block=block)
+        unrolled = UnrolledFemur.from_reference(mesh, frame)
+        outer = np.stack([np.full_like(theta, 6.0), -12 + 10 * np.sin(theta),
+                          -10 * np.cos(theta)], axis=1)
+        assert np.isnan(unrolled.coordinates(outer)).all()
+        assert (unrolled.unmapped_causes(outer) == expected).all(), block
+        inner = np.stack([np.full_like(theta, -5.0), -5 + 10 * np.sin(theta),
+                          -10 * np.cos(theta)], axis=1)
+        assert not unrolled.unmapped_causes(inner).any()
+    mesh, frame = _side_wall_reference(side_wall=lambda x: np.abs(x) <= 4.0, extent=12.0,
+                                       wall_centre=-10.5, block=False)
+    unrolled = UnrolledFemur.from_reference(mesh, frame)
+    lowest = np.array([[u, -10.5, -10.0] for u in (-2.0, 0.0, 2.5)])
+    assert np.isnan(unrolled.coordinates(lowest)).all()
+    assert (unrolled.unmapped_causes(lowest) == no_crossing).all()

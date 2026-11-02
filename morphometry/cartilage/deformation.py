@@ -31,9 +31,17 @@ two different knees are different anatomy.
 
 Construction (:meth:`UnrolledFemur.from_reference`)
 ---------------------------------------------------
-1. The reference bone surface is cropped to its distal ``REGISTRATION_CROP_MM`` along the shaft
-   axis (:func:`~morphometry.cartilage.registration.crop_to_articular_end`), so the proximal
-   field-of-view edge of the shaft never enters a contour.
+1. The coordinate is built on the **whole** reference bone surface, up to the proximal
+   field-of-view cut (where the mesh is open, so a sagittal profile simply ends there). It
+   used to be cropped to the distal ``REGISTRATION_CROP_MM`` (40 mm) like the registration's
+   moving surface, but the femoral articular surface reaches further: on 9 of the 15
+   reference femurs of the current ``dfg_knees`` set covered tAB lies more than 40 mm above
+   the bone's distal end (up to 50.9 mm, the proximal trochlea), and all of it was unmapped.
+   Only the coordinate's domain grew; the registration still crops (its moving surface must
+   lie inside the fixed one). On those 15 femurs the arc of every covered tAB triangle mapped
+   both ways is bit-identical, except at the old cut edge (39.7-42.1 mm above the distal
+   end), where the ragged crop had given the nearest contour points a wrong arc (up to 5 mm
+   off, at most 102 mm^2 of covered tAB per femur).
 2. At every medial-lateral level ``notch_ml + k * slice_mm`` strictly inside the cropped
    bone's extent the mesh is cut by the sagittal plane (normal ``ml_axis``). The arc origin of
    the level is the profile's **crossing of the notch plane** ``ap = notch_ap`` with the
@@ -46,9 +54,11 @@ Construction (:meth:`UnrolledFemur.from_reference`)
    holding the origin is the profile of that level; along it, signed arc length is measured
    from the origin, **positive posteriorly** (the direction in which ``ap`` decreases: round
    the distal condyle to the posterior condyle) and negative anteriorly (up the trochlea). A
-   closed loop (a level whose whole profile lies inside the crop) is opened at its most
-   proximal point, which is non-articular, so the arc runs from there one way round to the
-   other. A level whose origin is not on the distal arc is **not used**: if the profile's arc
+   closed loop (a level whose whole profile lies inside the bone surface, i.e. outside the
+   shaft's medial-lateral extent) is opened at its most proximal point, which is
+   non-articular, so the arc runs from there one way round to the other. A level is **not
+   used** if it has neither a crossing nor a corner (``'no_crossing'``) or if its origin is
+   not on the distal arc (``'detour'``): if the profile's arc
    from the origin to its lowest point is more than ``PROFILE_MAX_DETOUR_MM`` (2 mm) longer than
    the straight line between them, the crossing lies on a side wall the plane grazes, with a
    fold between it and the condyle (the outer ~5 mm of a condyle, whose distal arc lies wholly
@@ -56,10 +66,11 @@ Construction (:meth:`UnrolledFemur.from_reference`)
    length: on K1_30_unbelastet the levels 33.5-36 mm patient-right of the notch read their
    posterior condyle 10-33 mm further along than the level beside them, a strip at arc 50-85 mm
    on every femoral map. Their vertices take the neighbouring levels' values (step 3) or none.
-   A run of unused levels leaves a gap that is **not** bridged: a vertex in a gap wider than
-   ``2 * slice_mm`` takes a kept level's value only within one ``slice_mm`` of it (as beyond the
-   outermost levels) and is ``NaN`` further in, i.e. dropped from the maps and counted.
-3. Every vertex of the cropped bone mesh takes the arc of its nearest contour point (in the
+   Any run of unused levels -- whichever of the two reasons -- leaves a gap that is **not**
+   bridged: a vertex in a gap wider than ``2 * slice_mm`` takes a kept level's value only
+   within one ``slice_mm`` of it (as beyond the outermost levels) and is ``NaN`` further in,
+   i.e. dropped from the maps and counted.
+3. Every vertex of the bone mesh takes the arc of its nearest contour point (in the
    sagittal plane) on the two levels that bracket it, linearly interpolated in the
    medial-lateral coordinate. A level gives no value for the vertex if that nearest point
    belongs to a *different* component than the profile (the shaft, say) or lies further than
@@ -73,6 +84,8 @@ Construction (:meth:`UnrolledFemur.from_reference`)
 points further than ``max_distance_mm`` from the reference bone, or outside the range of
 computed levels, are ``NaN``. Callers count and drop those points rather than mapping them to
 a wrong spot (cartilage of another configuration that extends beyond the reference's bone).
+:meth:`UnrolledFemur.unmapped_causes` says why a point has no coordinate
+(:data:`UNMAPPED_CAUSES`), so the dropped area can be attributed.
 
 The intercondylar region
 ------------------------
@@ -148,6 +161,31 @@ NOTCH_CORNER_DROP_MM = 2.0
 #: of the condyles) except three in the intercondylar fossa (K3 -8 mm, K8 -1.5 and +0.5 mm);
 #: the covered tAB within a quarter level of them is 11-239 mm^2 per femur.
 PROFILE_MAX_DETOUR_MM = 2.0
+
+#: Why a point has no unrolled coordinate (:meth:`UnrolledFemur.unmapped_causes`), in the order
+#: of their integer codes 1, 2, ... (code 0 = mapped):
+#:
+#: * ``'detour'`` -- the point lies in a run of sagittal levels that are not used because their
+#:   origin is not on the distal arc (:data:`PROFILE_MAX_DETOUR_MM`; the outer condyle edges),
+#:   either in an interior gap more than one ``slice_mm`` from a kept level or beyond the
+#:   outermost kept level;
+#: * ``'no_crossing'`` -- the same, for levels not used because their profile has neither a
+#:   notch-plane crossing nor a corner (or the plane cuts nothing);
+#: * ``'no_profile_point'`` -- the bracketing levels are used, but neither has a point of its
+#:   profile within ``max_distance_mm`` of the point's nearest bone vertex (in the sagittal
+#:   plane), e.g. a side wall the planes miss or a contour component other than the profile;
+#: * ``'off_bone'`` -- the point is further than ``max_distance_mm`` from the reference bone.
+UNMAPPED_CAUSES = ('detour', 'no_crossing', 'no_profile_point', 'off_bone')
+
+
+def _cause_code(name: str) -> int:
+    """
+    The integer code of an unmapped cause.
+
+    :param name: One of :data:`UNMAPPED_CAUSES`.
+    :return: ``1 +`` its index (0 is reserved for a mapped point).
+    """
+    return 1 + UNMAPPED_CAUSES.index(name)
 
 
 @dataclass
@@ -242,23 +280,26 @@ def _profile_arc(ordered_2d: np.ndarray, segment: int, t: float,
     return arc if forward < backward else -arc
 
 
-def _level_profile(mesh: pv.PolyData, frame: FemoralFrame, ml: float) -> Optional[_Level]:
+def _level_profile(mesh: pv.PolyData, frame: FemoralFrame,
+                   ml: float) -> Tuple[Optional[_Level], str]:
     """
     Cut one sagittal cross-section and parametrise its distal profile by signed arc length.
 
-    :param mesh: The cropped reference bone surface (world mm).
+    :param mesh: The reference bone surface (world mm).
     :param frame: The reference femoral frame.
     :param ml: The cutting plane's coordinate along ``frame.ml_axis``.
-    :return: A :class:`_Level`, or ``None`` if the cross-section is empty, has neither a
-        notch-plane crossing nor a vertex within ``NOTCH_SNAP_MM`` in front of the plane, or
-        its origin is not on the distal arc: the profile's arc length from the origin to its
-        lowest point (smallest proximal coordinate) exceeds their straight-line distance by
-        more than :data:`PROFILE_MAX_DETOUR_MM` (a side-wall crossing with a fold between it
-        and the condyle, which would shift the whole level's arc by the fold's length).
+    :return: ``(level, reason)``: a :class:`_Level` and ``'ok'``, or ``None`` and why the level
+        is not used -- ``'no_crossing'`` if the cross-section is empty or has neither a
+        notch-plane crossing nor a vertex within ``NOTCH_SNAP_MM`` in front of the plane,
+        ``'detour'`` if its origin is not on the distal arc: the profile's arc length from the
+        origin to its lowest point (smallest proximal coordinate) exceeds their straight-line
+        distance by more than :data:`PROFILE_MAX_DETOUR_MM` (a side-wall crossing with a fold
+        between it and the condyle, which would shift the whole level's arc by the fold's
+        length).
     """
     cut = mesh.slice(normal=frame.ml_axis, origin=ml * frame.ml_axis)
     if cut is None or cut.n_points < 2 or cut.n_cells == 0:
-        return None
+        return None, 'no_crossing'
     points = np.asarray(cut.points, dtype=float)
     plane = np.stack([points @ frame.ap_axis, points @ frame.proximal_axis], axis=1)
     edges = _edge_set(cut.lines)
@@ -289,7 +330,7 @@ def _level_profile(mesh: pv.PolyData, frame: FemoralFrame, ml: float) -> Optiona
     if corner is not None and (crossing is None or corner[0] < crossing[0] - NOTCH_CORNER_DROP_MM):
         best = corner
     if best is None:
-        return None
+        return None, 'no_crossing'
 
     _, index, segment, t = best
     profile = plane[components[index]]
@@ -298,12 +339,12 @@ def _level_profile(mesh: pv.PolyData, frame: FemoralFrame, ml: float) -> Optiona
     lowest = int(np.argmin(profile[:, 1]))
     detour = abs(profile_arc[lowest]) - float(np.linalg.norm(profile[lowest] - origin_point))
     if detour > PROFILE_MAX_DETOUR_MM:
-        return None
+        return None, 'detour'
     all_ids, all_arc = [], []
     for k, ids in enumerate(components):
         all_ids.extend(ids)
         all_arc.append(profile_arc if k == index else np.full(len(ids), np.nan))
-    return _Level(ml=float(ml), tree=cKDTree(plane[all_ids]), arc=np.concatenate(all_arc))
+    return _Level(ml=float(ml), tree=cKDTree(plane[all_ids]), arc=np.concatenate(all_arc)), 'ok'
 
 
 class UnrolledFemur:
@@ -313,7 +354,7 @@ class UnrolledFemur:
     Build it with :meth:`from_reference`; query it with :meth:`coordinates`.
 
     :ivar frame: The reference :class:`FemoralFrame` (world mm).
-    :ivar vertices: ``(V, 3)`` vertices of the cropped reference bone surface (world mm).
+    :ivar vertices: ``(V, 3)`` vertices of the reference bone surface (world mm).
     :ivar arc: ``(V,)`` signed arc length (mm) of each vertex; ``NaN`` where no profile reaches.
     :ivar ml_range: ``(lo, hi)`` absolute medial-lateral range (``p . ml_axis``) covered by
         the computed levels: the outermost levels widened by one ``slice_mm`` each (each level
@@ -321,19 +362,34 @@ class UnrolledFemur:
         Points outside are ``NaN``.
     :ivar max_distance_mm: Largest distance from a bone vertex at which a point is mapped.
     :ivar slice_mm: Spacing of the sagittal levels (mm).
+    :ivar cause: ``(V,)`` int8 per vertex: 0 where ``arc`` is finite, else ``1 +`` the index
+        of its reason in :data:`UNMAPPED_CAUSES`.
+    :ivar level_ml: ``(L,)`` absolute M-L coordinates of **every** sagittal level tried, used
+        or not.
+    :ivar level_reasons: ``(L,)`` per tried level ``'ok'``, ``'detour'`` or ``'no_crossing'``
+        (:func:`_level_profile`).
     """
 
     def __init__(self, frame: FemoralFrame, vertices: np.ndarray, arc: np.ndarray,
-                 ml_range: Tuple[float, float], max_distance_mm: float, slice_mm: float):
+                 ml_range: Tuple[float, float], max_distance_mm: float, slice_mm: float,
+                 cause: Optional[np.ndarray] = None, level_ml: Optional[np.ndarray] = None,
+                 level_reasons: Optional[Sequence[str]] = None):
         """
         Store a precomputed parametrisation (use :meth:`from_reference` to compute one).
 
         :param frame: The reference femoral frame.
-        :param vertices: ``(V, 3)`` cropped reference bone vertices (world mm).
+        :param vertices: ``(V, 3)`` reference bone vertices (world mm).
         :param arc: ``(V,)`` signed arc length per vertex (mm), ``NaN`` allowed.
         :param ml_range: ``(lo, hi)`` absolute M-L range covered by the computed levels.
         :param max_distance_mm: Distance cut-off of :meth:`coordinates` (mm).
         :param slice_mm: Level spacing (mm), kept for the record.
+        :param cause: Optional ``(V,)`` per-vertex cause codes (see the ``cause`` attribute);
+            default: ``'no_profile_point'`` wherever ``arc`` is ``NaN``.
+        :param level_ml: Optional M-L coordinates of every tried level (with
+            ``level_reasons``); without them a point outside ``ml_range`` is attributed to
+            ``'no_crossing'``.
+        :param level_reasons: Optional reason per tried level (``'ok'`` / ``'detour'`` /
+            ``'no_crossing'``).
         """
         self.frame = frame
         self.vertices = np.asarray(vertices, dtype=float)
@@ -341,7 +397,31 @@ class UnrolledFemur:
         self.ml_range = (float(ml_range[0]), float(ml_range[1]))
         self.max_distance_mm = float(max_distance_mm)
         self.slice_mm = float(slice_mm)
+        if cause is None:
+            cause = np.where(np.isfinite(self.arc), 0, _cause_code('no_profile_point'))
+        self.cause = np.asarray(cause, dtype=np.int8)
+        self.level_ml = np.asarray(level_ml if level_ml is not None else [], dtype=float)
+        self.level_reasons = np.asarray(level_reasons if level_reasons is not None else [],
+                                        dtype=object)
         self._tree = cKDTree(self.vertices)
+
+    def _unused_level_cause(self, across: np.ndarray) -> np.ndarray:
+        """
+        Cause code of points lying in a run of unused levels, from the nearest tried level.
+
+        :param across: ``(N,)`` absolute M-L coordinates (``p . ml_axis``).
+        :return: ``(N,)`` int8 codes: ``'detour'`` or ``'no_crossing'`` after the reason of the
+            nearest tried level; a nearest level that *is* used (a point beyond the outermost
+            level, at the bone's very edge, where a plane cuts nothing) reads ``'no_crossing'``.
+        """
+        across = np.asarray(across, dtype=float)
+        if len(self.level_ml) == 0:
+            return np.full(len(across), _cause_code('no_crossing'), dtype=np.int8)
+        k = np.clip(np.rint((across - self.level_ml[0]) / self.slice_mm).astype(np.int64), 0,
+                    len(self.level_ml) - 1)
+        detour = self.level_reasons[k] == 'detour'
+        return np.where(detour, _cause_code('detour'),
+                        _cause_code('no_crossing')).astype(np.int8)
 
     @classmethod
     def from_reference(cls, bone_mesh: pv.PolyData, frame: FemoralFrame, slice_mm: float = 0.5,
@@ -350,8 +430,8 @@ class UnrolledFemur:
         Build the unrolled coordinate on a reference femur.
 
         :param bone_mesh: The reference femoral bone surface (all-triangle ``pv.PolyData``,
-            world mm), e.g. ``FemurSubdivision.bone_mesh``. It is cropped here to its distal
-            ``REGISTRATION_CROP_MM`` along ``frame.proximal_axis``.
+            world mm), e.g. ``FemurSubdivision.bone_mesh``. Used whole (not cropped), so all of
+            the articular surface is inside the coordinate's domain; see the module docstring.
         :param frame: The reference :class:`FemoralFrame` (axes, ``notch_point``,
             ``notch_ap``), in the same world frame as ``bone_mesh``.
         :param slice_mm: Spacing of the sagittal levels (mm); levels sit at
@@ -364,7 +444,7 @@ class UnrolledFemur:
         """
         if not slice_mm > 0:
             raise ValueError(f'slice_mm must be positive, got {slice_mm!r}')
-        mesh = crop_to_articular_end(bone_mesh, frame.proximal_axis, REGISTRATION_CROP_MM, 'min')
+        mesh = bone_mesh
         vertices = np.asarray(mesh.points, dtype=float)
         across = vertices @ frame.ml_axis
         origin = float(frame.notch_point @ frame.ml_axis)
@@ -372,9 +452,10 @@ class UnrolledFemur:
         # nothing).
         k_lo = int(np.floor((across.min() - origin) / slice_mm)) + 1
         k_hi = int(np.ceil((across.max() - origin) / slice_mm)) - 1
-        levels = [_level_profile(mesh, frame, origin + k * slice_mm)
-                  for k in range(k_lo, k_hi + 1)]
-        levels = [level for level in levels if level is not None]
+        tried = [origin + k * slice_mm for k in range(k_lo, k_hi + 1)]
+        results = [_level_profile(mesh, frame, ml) for ml in tried]
+        reasons = [reason for _, reason in results]
+        levels = [level for level, _ in results if level is not None]
         if len(levels) < 2:
             raise ValueError('the reference femur has too few sagittal cross-sections crossing '
                              'the trochlear-notch plane to unroll it')
@@ -399,11 +480,12 @@ class UnrolledFemur:
         # One level without a profile point: fall back to the other one.
         arc = np.where(np.isnan(values[0]), values[1], np.where(np.isnan(values[1]), values[0],
                                                                 arc))
-        # A gap of unused levels (PROFILE_MAX_DETOUR_MM) inside the range: a vertex is not
-        # blended across it. As at the outer edge, a vertex within one slice of a kept level
-        # takes that level's value; further into the gap it has none. Without this cap the
-        # outer-condyle gaps of the real femurs (up to ~8 mm, e.g. K11 35-41 mm) were filled
-        # by a linear blend of two profiles that do not describe the bone in between.
+        # A gap of unused levels inside the range -- whatever made them unused (a detour or
+        # no notch-plane crossing): a vertex is not blended across it. As at the outer edge, a
+        # vertex within one slice of a kept level takes that level's value; further into the
+        # gap it has none. Without this cap the outer-condyle gaps of the real femurs (up to
+        # ~8 mm, e.g. K11 35-41 mm) were filled by a linear blend of two profiles that do not
+        # describe the bone in between.
         gap = level_ml[upper] - level_ml[lower]
         inside = (across >= level_ml[lower]) & (across <= level_ml[upper])
         in_gap = inside & (gap > 2.0 * slice_mm + 1e-9)
@@ -417,8 +499,17 @@ class UnrolledFemur:
         # of a condyle lies there, and a plane through the very edge cuts nothing), and is
         # NaN further out.
         ml_range = (level_ml[0] - slice_mm, level_ml[-1] + slice_mm)
-        arc[(across < ml_range[0]) | (across > ml_range[1])] = np.nan
-        return cls(frame, vertices, arc, ml_range, max_distance_mm, slice_mm)
+        outside = (across < ml_range[0]) | (across > ml_range[1])
+        arc[outside] = np.nan
+        out = cls(frame, vertices, arc, ml_range, max_distance_mm, slice_mm,
+                  level_ml=np.array(tried), level_reasons=reasons)
+        # Why each unmapped vertex has no arc: far into a gap or beyond the outermost levels =
+        # the reason of the unused level it lies at; otherwise no profile point near it.
+        unused = outside | (in_gap & ~(near_lower | near_upper))
+        cause = np.where(np.isfinite(arc), 0, _cause_code('no_profile_point')).astype(np.int8)
+        cause[unused] = out._unused_level_cause(across[unused])
+        out.cause = cause
+        return out
 
     def coordinates(self, points_world: np.ndarray) -> np.ndarray:
         """
@@ -445,6 +536,30 @@ class UnrolledFemur:
         out[ok, 0] = across[ok] - float(self.frame.notch_point @ self.frame.ml_axis)
         out[ok, 1] = arc[ok]
         return out
+
+    def unmapped_causes(self, points_world: np.ndarray) -> np.ndarray:
+        """
+        Why world points have no :meth:`coordinates` (same rules, one code per point).
+
+        :param points_world: ``(N, 3)`` (or a single ``(3,)``) points in world mm, in the
+            reference scan's frame.
+        :return: ``(N,)`` int8: 0 for a point :meth:`coordinates` maps, else ``1 +`` the index
+            of its cause in :data:`UNMAPPED_CAUSES`: ``'off_bone'`` beyond ``max_distance_mm``
+            from the bone; outside ``ml_range`` the reason of the nearest tried level
+            (``'detour'`` / ``'no_crossing'``); otherwise the nearest vertex's cause.
+        """
+        points = np.asarray(points_world, dtype=float).reshape(-1, 3)
+        codes = np.zeros(len(points), dtype=np.int8)
+        if len(points) == 0:
+            return codes
+        across = points @ self.frame.ml_axis
+        distance, nearest = self._tree.query(points)
+        outside = (across < self.ml_range[0]) | (across > self.ml_range[1])
+        no_arc = ~np.isfinite(self.arc[nearest])
+        codes[no_arc] = self.cause[nearest[no_arc]]
+        codes[outside] = self._unused_level_cause(across[outside])
+        codes[distance > self.max_distance_mm] = _cause_code('off_bone')
+        return codes
 
 
 # ----------------------------------------------------------------------------------------
@@ -762,7 +877,10 @@ class BoneDeltaMaps:
         frame-derived start means the ICP slid off it.
     :ivar errors: Per configuration whose registration raised, ``'<ExceptionType>: <message>'``.
     :ivar reference_dropped_fraction: The same as ``dropped_fraction`` for the reference's own
-        covered triangles (non-zero only for a femur, at the unrolling's edges).
+        covered triangles (non-zero only for a femur, see :data:`UNMAPPED_CAUSES`).
+    :ivar reference_unmapped_by_cause: ``reference_dropped_fraction`` split by cause:
+        ``{cause: area fraction}`` for every name of :data:`UNMAPPED_CAUSES` (all 0 for a
+        tibia); the values sum to ``reference_dropped_fraction``.
     """
     bone: str
     grid: MapGrid
@@ -776,6 +894,7 @@ class BoneDeltaMaps:
     rotation_change_deg: Dict[tuple, float]
     errors: Dict[tuple, str] = field(default_factory=dict)
     reference_dropped_fraction: float = 0.0
+    reference_unmapped_by_cause: Dict[str, float] = field(default_factory=dict)
 
 
 def _rotation_angle_deg(a: np.ndarray, b: np.ndarray) -> float:
@@ -837,7 +956,11 @@ def knee_delta_maps(bone: str, reference: BoneMeasurement,
     2. Rigid ICP on **bone only**: the configuration's bone cropped to ``crop_mm`` of its
        articular end (along ``frame_axes[2]``) onto the reference's bone cropped to
        ``crop_mm + REFERENCE_CROP_MARGIN_MM`` (longer, so the moving surface lies within the
-       fixed one's coverage, as the one-sided residual requires).
+       fixed one's coverage, as the one-sided residual requires). For the tibia that crop
+       axis, ``frame_axes[2]``, is the plateau normal of the knee frame, which is derived
+       from the cartilage plates; it only chooses which band of bone enters, as the frames
+       only seed the ICP -- the ICP itself sees bone alone, and the reference's 10 mm longer
+       crop absorbs a few degrees of tilt between the two scans' normals.
     3. The configuration's **covered** tAB triangle centroids are carried into the reference's
        world frame and given map coordinates: the reference :class:`KneeFrame`'s
        ``in_plane`` (tibia) or the reference's :class:`UnrolledFemur` (femur, built once).
@@ -878,13 +1001,19 @@ def knee_delta_maps(bone: str, reference: BoneMeasurement,
     else:
         if reference.femoral_frame is None:
             raise ValueError('the femoral reference measurement has no femoral_frame')
-        to_map = UnrolledFemur.from_reference(reference.bone_mesh,
-                                              reference.femoral_frame).coordinates
+        unrolled = UnrolledFemur.from_reference(reference.bone_mesh, reference.femoral_frame)
+        to_map = unrolled.coordinates
 
     # The reference: its covered triangles for the thickness and positions, its whole tAB for
     # the region codes.
     ref_centroids, ref_areas, ref_thickness, _ = _covered_triangles(reference)
     ref_coords = to_map(ref_centroids)
+    by_cause = dict.fromkeys(UNMAPPED_CAUSES, 0.0)
+    total = float(np.sum(ref_areas))
+    if bone == 'femur' and total > 0:
+        codes = unrolled.unmapped_causes(ref_centroids)
+        by_cause = {name: float(np.sum(ref_areas[codes == _cause_code(name)]) / total)
+                    for name in UNMAPPED_CAUSES}
     all_coords = to_map(triangle_centroids(reference.tab_mesh))
     all_areas = triangle_areas(reference.tab_mesh)
     fixed = crop_to_articular_end(reference.bone_mesh, reference.frame_axes[2],
@@ -922,7 +1051,8 @@ def knee_delta_maps(bone: str, reference: BoneMeasurement,
                          registrations=registrations, dropped_fraction=dropped,
                          reference_positions=positions, rotation_change_deg=rotation_change,
                          errors=errors,
-                         reference_dropped_fraction=_dropped(ref_coords, ref_areas))
+                         reference_dropped_fraction=_dropped(ref_coords, ref_areas),
+                         reference_unmapped_by_cause=by_cause)
 
 
 #: Compartments of the hotspot search; patient-side, ``'both'`` = the whole bone.

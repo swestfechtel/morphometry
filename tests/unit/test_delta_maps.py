@@ -10,6 +10,7 @@ thickness field) and a separate, asymmetric bone surface for the registration --
 no image and run in well under a second each. One test measures the voxelised femoral
 phantom of :mod:`tests.unit.test_femur_regions` and compares it with itself.
 """
+import dataclasses
 import pickle
 
 import numpy as np
@@ -19,9 +20,11 @@ from scipy.spatial.transform import Rotation
 
 from morphometry.cartilage import surface as S
 from morphometry.cartilage.deformation import (
-    COMPARISONS, REFERENCE, BoneDeltaMaps, BoneMeasurement, MapGrid, bone_measurement,
-    knee_delta_maps, rasterise, rasterise_labels,
+    COMPARISONS, REFERENCE, UNMAPPED_CAUSES, BoneDeltaMaps, BoneMeasurement, MapGrid,
+    bone_measurement, find_largest_thinning, knee_delta_maps, rasterise, rasterise_labels,
 )
+from morphometry.cartilage.femur_regions import FEMUR_REGION_KEYS
+from morphometry.cartilage.tibia_regions import TIBIA_REGION_KEYS
 from morphometry.cartilage.knee import Femur
 from morphometry.cartilage.thickness import KneeFrame
 from tests.unit.test_femur_regions import phantom as femur_phantom
@@ -53,13 +56,16 @@ def _plate_thickness(xy: np.ndarray) -> np.ndarray:
     return 2.0 + 0.02 * xy[:, 0] + 0.01 * xy[:, 1]
 
 
-def _synthetic_tibia_measurement(denuded=None, thinned=None) -> BoneMeasurement:
+def _synthetic_tibia_measurement(denuded=None, thinned=None,
+                                 sided: bool = False) -> BoneMeasurement:
     """
     A synthetic tibial measurement in its own (identity) knee frame.
 
     :param denuded: Optional ``(cx, cy, r)``: triangles with centroid inside this disc are
         uncovered (denuded) and carry thickness 0, as ``ThicknessMaps.triangle_thickness`` does.
     :param thinned: Optional ``(cx, cy, r, by)``: thickness reduced by ``by`` mm inside the disc.
+    :param sided: Label the plate with real patient-side region codes (``clt`` for ``x < 0``,
+        ``crt`` for ``x > 0``) instead of the codes 0 / 1, so the hotspot compartments apply.
     :return: A :class:`BoneMeasurement`.
     """
     plate = pv.Plane(center=(0, 0, 0), direction=(0, 0, 1), i_size=40, j_size=30,
@@ -70,6 +76,9 @@ def _synthetic_tibia_measurement(denuded=None, thinned=None) -> BoneMeasurement:
     centroids = S.triangle_centroids(plate)
     xy = centroids[:, :2]
     plate.cell_data['region'] = (xy[:, 0] > 0).astype(np.int64)
+    if sided:
+        plate.cell_data['region'] = np.where(xy[:, 0] > 0, TIBIA_REGION_KEYS.index('crt'),
+                                             TIBIA_REGION_KEYS.index('clt')).astype(np.int64)
     covered = np.ones(plate.n_cells, dtype=bool)
     thickness = _plate_thickness(xy)
     if thinned is not None:
@@ -240,6 +249,35 @@ def test_thinned_patch_appears_where_it_was_made(ref):
     assert np.max(np.abs(outside)) < 0.05
 
 
+def test_thinned_tibial_patch_is_the_hotspot_of_its_compartment():
+    """
+    End to end on the tibia: a 0.5 mm thinning in a 4 mm disc on the patient-right plate of a
+    rigidly moved plate is recovered as the hotspot of the whole bone and of the right
+    compartment (smoothed Δ ~ -0.5, in the disc, subregion ``crt``); the left compartment's
+    hotspot is elsewhere and reads ~0.
+    """
+    centre, radius, by = np.array([5.0, 3.0]), 4.0, 0.5
+    ref = _synthetic_tibia_measurement(sided=True)
+    rotation, translation = _rot(-5, 2, 10), np.array([-4.0, 6.0, 1.0])
+    cfg = _moved(_synthetic_tibia_measurement(thinned=(*centre, radius, by), sided=True),
+                 rotation, translation)
+    d = knee_delta_maps('tibia', ref, {KEY: cfg})
+    transform = d.registrations[KEY].transform
+    assert np.allclose(transform.rotation, rotation.T, atol=1e-6)
+    assert np.allclose(transform.translation, -rotation.T @ translation, atol=1e-5)
+    for compartment in ('both', 'right'):
+        hotspot = find_largest_thinning(d, KEY, compartment)
+        assert not hotspot['fallback']
+        assert np.hypot(*(np.array(hotspot["map_mm"]) - centre)) < radius
+        assert hotspot['smoothed_delta_mm'] == pytest.approx(-by, abs=0.02)
+        assert hotspot['delta_mm'] == pytest.approx(-by, abs=0.02)
+        assert hotspot['subregion'] == 'crt'
+    left = find_largest_thinning(d, KEY, 'left')
+    assert left['subregion'] == 'clt'
+    assert np.hypot(*(np.array(left['map_mm']) - centre)) > radius
+    assert abs(left['smoothed_delta_mm']) < 0.02
+
+
 def test_denuded_triangles_are_excluded_not_zero(ref):
     """Denuded triangles leave their cells empty in the configuration map, never 0."""
     cfg = _moved(_synthetic_tibia_measurement(denuded=(-6.0, -4.0, 4.0)),
@@ -342,3 +380,127 @@ def test_femur_phantom_against_itself_is_exactly_zero():
     assert np.array_equal(np.isfinite(delta), np.isfinite(d.reference))
     # Some regions of the subdivision show up in the map.
     assert len(set(np.unique(d.region_codes)) - {-1}) >= 6
+
+
+# --------------------------------------------------------------- femur: motion and thinning
+
+@pytest.fixture(scope='module')
+def femur_measurement():
+    """The voxelised femoral phantom, subdivided and measured once (a real BoneMeasurement)."""
+    femur = Femur(femur_phantom(), 3)
+    thickness = femur.calculate_thickness()        # builds the subdivision (with bone_mesh)
+    return bone_measurement('femur', femur.subdivision, thickness)
+
+
+#: The thinned patch of the femoral test: a disc of this radius (mm, 3-D distance) round the
+#: patient-left condyle's surface point at ``u = -20``, 20 degrees posterior of distal.
+FEMUR_THINNED_RADIUS = 5.0
+FEMUR_THINNED_BY = 0.5
+
+
+def _femur_thinned_centre(m: BoneMeasurement) -> np.ndarray:
+    """The covered tAB centroid nearest the patient-left condyle point of the thinned disc."""
+    theta = np.radians(-20.0)
+    target = np.array([-20.0, 22.0 * np.sin(theta), -22.0 * np.cos(theta)])
+    centroids = S.triangle_centroids(m.tab_mesh)
+    covered = np.asarray(m.tab_mesh.cell_data['covered'], dtype=bool)
+    candidates = np.flatnonzero(covered)
+    return centroids[candidates[np.argmin(np.linalg.norm(centroids[candidates] - target,
+                                                         axis=1))]]
+
+
+def _moved_femur(m: BoneMeasurement, rotation, translation,
+                 thinned_centre=None) -> BoneMeasurement:
+    """
+    The femoral measurement rigidly moved in world space, optionally thinned.
+
+    :param m: The measurement.
+    :param rotation: ``(3, 3)`` rotation.
+    :param translation: ``(3,)`` translation (mm).
+    :param thinned_centre: Optional ``(3,)`` world point (before the motion): the covered
+        triangles within ``FEMUR_THINNED_RADIUS`` of it are ``FEMUR_THINNED_BY`` thinner.
+    :return: A new :class:`BoneMeasurement` (its femoral frame moved with it).
+    """
+    rotation = np.asarray(rotation, dtype=float)
+    translation = np.asarray(translation, dtype=float)
+
+    def move(mesh):
+        out = mesh.copy()
+        out.points = np.asarray(mesh.points, dtype=float) @ rotation.T + translation
+        return out
+
+    thickness = m.triangle_thickness.copy()
+    if thinned_centre is not None:
+        centroids = S.triangle_centroids(m.tab_mesh)
+        covered = np.asarray(m.tab_mesh.cell_data['covered'], dtype=bool)
+        inside = covered & (np.linalg.norm(centroids - thinned_centre, axis=1)
+                            < FEMUR_THINNED_RADIUS)
+        thickness[inside] -= FEMUR_THINNED_BY
+    f = m.femoral_frame
+    frame = dataclasses.replace(
+        f, proximal_axis=rotation @ f.proximal_axis, ml_axis=rotation @ f.ml_axis,
+        ap_axis=rotation @ f.ap_axis, notch_point=rotation @ f.notch_point + translation)
+    return BoneMeasurement(bone='femur', tab_mesh=move(m.tab_mesh), bone_mesh=move(m.bone_mesh),
+                           triangle_thickness=thickness, statistics=dict(m.statistics),
+                           frame_origin=rotation @ m.frame_origin + translation,
+                           frame_axes=m.frame_axes @ rotation.T, femoral_frame=frame)
+
+
+def test_rigidly_moved_femur_recovers_the_transform_and_reads_zero(femur_measurement):
+    """A femur rigidly moved: the registration recovers the motion and Δ ~ 0 on every cell."""
+    rotation, translation = _rot(15, -6, 9), np.array([4.0, -7.0, 12.0])
+    cfg = _moved_femur(femur_measurement, rotation, translation)
+    d = knee_delta_maps('femur', femur_measurement, {KEY: cfg})
+    transform = d.registrations[KEY].transform
+    assert np.allclose(transform.rotation, rotation.T, atol=1e-6)
+    assert np.allclose(transform.translation, -rotation.T @ translation, atol=1e-5)
+    assert d.registrations[KEY].rms_mm < 0.01
+    delta = d.deltas[KEY]
+    assert np.isfinite(delta).sum() > 1000
+    assert np.nanmax(np.abs(delta)) < 1e-6
+    assert d.dropped_fraction[KEY] == pytest.approx(d.reference_dropped_fraction, abs=1e-9)
+    # The unmapped reference area is attributed in full, and none of it is off the bone.
+    assert set(d.reference_unmapped_by_cause) == set(UNMAPPED_CAUSES)
+    assert sum(d.reference_unmapped_by_cause.values()) == pytest.approx(
+        d.reference_dropped_fraction, abs=1e-12)
+    assert d.reference_unmapped_by_cause['off_bone'] == 0.0
+
+
+def test_thinned_femoral_patch_is_recovered_and_is_the_hotspot(femur_measurement):
+    """
+    End to end on the femur: a 0.5 mm thinning in a 5 mm disc on the patient-left condyle of a
+    rigidly moved femur reads Δ ~ -0.5 inside the disc and ~0 away from it, and is the hotspot
+    of the whole bone and of the left compartment (in a patient-left subregion); the right
+    compartment's hotspot lies elsewhere and reads ~0.
+    """
+    m = femur_measurement
+    centre = _femur_thinned_centre(m)
+    rotation, translation = _rot(-10, 8, 20), np.array([-6.0, 5.0, 9.0])
+    cfg = _moved_femur(m, rotation, translation, thinned_centre=centre)
+    d = knee_delta_maps('femur', m, {KEY: cfg})
+    transform = d.registrations[KEY].transform
+    assert np.allclose(transform.rotation, rotation.T, atol=1e-6)
+    assert np.allclose(transform.translation, -rotation.T @ translation, atol=1e-5)
+
+    delta = d.deltas[KEY]
+    finite = np.isfinite(delta)
+    distance = np.linalg.norm(d.reference_positions - centre, axis=-1)
+    inside = finite & (distance < FEMUR_THINNED_RADIUS - 1.5)
+    outside = finite & (distance > FEMUR_THINNED_RADIUS + 1.5)
+    assert inside.sum() > 20 and outside.sum() > 1000
+    assert np.allclose(delta[inside], -FEMUR_THINNED_BY, atol=1e-6)
+    assert np.max(np.abs(delta[outside])) < 1e-6
+
+    for compartment in ('both', 'left'):
+        hotspot = find_largest_thinning(d, KEY, compartment)
+        assert not hotspot['fallback']
+        i, j = hotspot['cell']
+        assert np.linalg.norm(d.reference_positions[i, j] - centre) < FEMUR_THINNED_RADIUS
+        assert hotspot['smoothed_delta_mm'] == pytest.approx(-FEMUR_THINNED_BY, abs=1e-6)
+        assert hotspot['subregion'][-2] == 'l'
+        assert hotspot['subregion'] in FEMUR_REGION_KEYS
+    right = find_largest_thinning(d, KEY, 'right')
+    i, j = right['cell']
+    assert right['subregion'][-2] == 'r'
+    assert np.linalg.norm(d.reference_positions[i, j] - centre) > FEMUR_THINNED_RADIUS
+    assert abs(right['smoothed_delta_mm']) < 1e-6

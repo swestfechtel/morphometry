@@ -151,3 +151,30 @@ def test_k1_hotspots_keep_off_the_footprint_rims(k1_maps, bone):
         hotspot = find_largest_thinning(k1_maps[bone], LOADED_30, compartment)
         assert hotspot is not None and not hotspot['fallback']
         assert hotspot['edge_distance_mm'] > DEFAULT_HOTSPOT_EDGE_MARGIN_MM
+
+
+def test_k1_reference_unmapped_area_is_attributed_and_not_cut_proximally(k1_records, k1_maps):
+    """
+    The femoral reference's unmapped covered tAB is split by cause in full (nothing off the
+    bone), and none of it lies beyond the registration crop: the unrolled coordinate is built
+    on the whole bone, not on the distal ``REGISTRATION_CROP_MM`` (final review, finding 1).
+    """
+    from morphometry.cartilage.deformation import UNMAPPED_CAUSES
+    from morphometry.cartilage.registration import REGISTRATION_CROP_MM
+    maps = k1_maps['femur']
+    causes = maps.reference_unmapped_by_cause
+    assert set(causes) == set(UNMAPPED_CAUSES)
+    assert sum(causes.values()) == pytest.approx(maps.reference_dropped_fraction, abs=1e-12)
+    assert causes['off_bone'] == 0.0
+    assert maps.reference_dropped_fraction < 0.05
+    femur = k1_records[REFERENCE]['femur']
+    frame = femur.femoral_frame
+    unrolled = UnrolledFemur.from_reference(femur.bone_mesh, frame)
+    covered = np.asarray(femur.tab_mesh.cell_data['covered'], dtype=bool)
+    centroids = triangle_centroids(femur.tab_mesh)[covered]
+    distal = (np.asarray(femur.bone_mesh.points) @ frame.proximal_axis).min()
+    high = centroids @ frame.proximal_axis - distal > REGISTRATION_CROP_MM - 1.0
+    assert high.any()
+    assert np.isfinite(unrolled.coordinates(centroids[high])).all()
+    assert all(m.reference_unmapped_by_cause == dict.fromkeys(UNMAPPED_CAUSES, 0.0)
+               for m in (k1_maps['tibia'],))
