@@ -245,3 +245,64 @@ def test_condyle_lowest_anterior_of_notch_keeps_the_crossing(lowest_in_front_mm)
     arc = unrolled.coordinates(points)[:, 1]
     assert np.isfinite(arc).all()
     assert np.allclose(arc, radius * (theta_notch - theta), atol=0.05)
+
+
+def _side_wall_reference():
+    """
+    A two-part bone along world x (ml = +x, ap = +y, proximal = +z, notch plane ``y = 0``),
+    reproducing the outer edge of a real condyle (K1_30_unbelastet, patient-right, 33.5-36 mm
+    from the notch point):
+
+    * ``x < 0`` -- a condyle: the disc ``(y + 5)^2 + z^2 <= 10^2``. Its profile crosses the
+      notch plane on the distal arc, 1.3 mm above its lowest point.
+    * ``x >= 0`` -- the condyle has moved back, ``(y + 12)^2 + z^2 <= 10^2``, so its distal arc
+      no longer reaches the notch plane, and a block ``-12 <= y <= 8, 6 <= z <= 15`` in front
+      of it (the side wall a sagittal plane grazes) does. The only notch-plane crossings are on
+      the block, 16 mm above the condyle's lowest point, and the profile from there to the
+      condyle runs along the block's underside and down the condyle's front: 26.1 mm of
+      profile for a 20 mm chord.
+
+    Voxelised at 0.5 mm, contoured and Taubin-smoothed like a real bone surface.
+    """
+    step = 0.5
+    x = np.arange(-12.0, 12.01, step)
+    y = np.arange(-26.0, 12.01, step)
+    z = np.arange(-14.0, 19.01, step)
+    xx, yy, zz = np.meshgrid(x, y, z, indexing='ij')
+    inner = (np.abs(xx) <= 10) & (xx < 0) & ((yy + 5) ** 2 + zz ** 2 <= 100)
+    outer = (xx >= 0) & (xx <= 10) & (((yy + 12) ** 2 + zz ** 2 <= 100)
+                                       | ((yy >= -12) & (yy <= 8) & (zz >= 6) & (zz <= 15)))
+    image = pv.ImageData(dimensions=xx.shape, spacing=(step,) * 3,
+                         origin=(x[0], y[0], z[0]))
+    image.point_data['mask'] = (inner | outer).astype(float).ravel(order='F')
+    mesh = image.contour([0.5], scalars='mask').triangulate().clean()
+    mesh = mesh.smooth_taubin(n_iter=20, pass_band=0.1)
+    notch_point = np.array([0.0, 0.0, -np.sqrt(100.0 - 25.0)])
+    frame = FemoralFrame(proximal_axis=np.array([0.0, 0, 1]), ml_axis=np.array([1.0, 0, 0]),
+                         ap_axis=np.array([0.0, 1, 0]), notch_point=notch_point,
+                         notch_ap=0.0, divider=(0.0, 0.0))
+    return mesh, frame
+
+
+def test_level_anchored_on_a_side_wall_is_not_used():
+    """
+    Regression (the femoral strip on K1): a level whose only notch-plane crossings lie on a
+    side wall, with a fold between them and the condyle's distal arc, used to anchor its arc
+    there, so every point of its posterior condyle read ~10-30 mm too far along -- a strip of
+    inflated arc beside the condyle on every map. Such a level is not used: the outer part's
+    condyle is unmapped (NaN, counted as dropped by the delta maps), the inner part unchanged.
+    """
+    mesh, frame = _side_wall_reference()
+    unrolled = UnrolledFemur.from_reference(mesh, frame)
+    theta = np.radians(np.array([0.0, -45.0, -90.0]))          # distal, posterior-distal, posterior
+    for u in (3.0, 6.0, 9.0):
+        outer = np.stack([np.full_like(theta, u), -12 + 10 * np.sin(theta),
+                          -10 * np.cos(theta)], axis=1)
+        assert np.isnan(unrolled.coordinates(outer)).all()
+    theta_notch = np.arcsin(5.0 / 10.0)
+    inner = np.stack([np.full_like(theta, -5.0), -5 + 10 * np.sin(theta),
+                      -10 * np.cos(theta)], axis=1)
+    arc = unrolled.coordinates(inner)[:, 1]
+    assert np.isfinite(arc).all()
+    # voxelised and smoothed: the surface is within a fraction of a voxel of the circle
+    assert np.allclose(arc, 10.0 * (theta_notch - theta), atol=0.8)

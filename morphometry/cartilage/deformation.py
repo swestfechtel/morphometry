@@ -48,7 +48,14 @@ Construction (:meth:`UnrolledFemur.from_reference`)
    the distal condyle to the posterior condyle) and negative anteriorly (up the trochlea). A
    closed loop (a level whose whole profile lies inside the crop) is opened at its most
    proximal point, which is non-articular, so the arc runs from there one way round to the
-   other.
+   other. A level whose origin is not on the distal arc is **not used**: if the profile's arc
+   from the origin to its lowest point is more than ``PROFILE_MAX_DETOUR_MM`` (2 mm) longer than
+   the straight line between them, the crossing lies on a side wall the plane grazes, with a
+   fold between it and the condyle (the outer ~5 mm of a condyle, whose distal arc lies wholly
+   behind the notch plane). Anchored there, the level's whole arc would shift by the fold's
+   length: on K1_30_unbelastet the levels 33.5-36 mm patient-right of the notch read their
+   posterior condyle 10-33 mm further along than the level beside them, a strip at arc 50-85 mm
+   on every femoral map. Their vertices take the neighbouring levels' values (step 3) or none.
 3. Every vertex of the cropped bone mesh takes the arc of its nearest contour point (in the
    sagittal plane) on the two levels that bracket it, linearly interpolated in the
    medial-lateral coordinate. A level gives no value for the vertex if that nearest point
@@ -122,6 +129,22 @@ NOTCH_SNAP_MM = 1.0
 #: of the plane: ~0.1 mm), whereas a crossing that is not distal at all (the shaft's underside
 #: behind a fossa wall) lies ~20 mm above the corner on the phantom.
 NOTCH_CORNER_DROP_MM = 2.0
+
+#: Largest *detour* (mm) the profile may make between its arc origin and its lowest point:
+#: the profile's arc length between the two minus their straight-line distance. A genuine
+#: distal crossing lies on the same convex distal arc as the lowest point, and a circular arc
+#: of radius R spanning a chord c is longer than the chord by only ``R*theta - c``
+#: (``theta = 2*asin(c / 2R)``): 0.7 mm for c = R = 15 mm, 0.9 mm for c = R = 20 mm, chords far
+#: longer than the 1-10 mm between the notch plane and the condyle's lowest point measured on
+#: the 15 reference femurs. A larger detour means the crossing is on something else -- at the
+#: outer edge of a condyle the sagittal plane grazes the bone's side wall, which reaches the
+#: notch plane while the condyle's distal arc lies wholly behind it, and the profile folds
+#: between the two -- and such a level is not used (see :func:`_level_profile`). Measured on
+#: the 15 reference femurs (2300 levels): median 0.05 mm, p90 0.6, p95 2.5, max 34.7; the
+#: levels above 2 mm (134, 5.8%) lie at |ml| >= 29.5 mm from the notch point (the outer edges
+#: of the condyles) except three in the intercondylar fossa (K3 -8 mm, K8 -1.5 and +0.5 mm);
+#: the covered tAB within a quarter level of them is 11-239 mm^2 per femur.
+PROFILE_MAX_DETOUR_MM = 2.0
 
 
 @dataclass
@@ -223,8 +246,12 @@ def _level_profile(mesh: pv.PolyData, frame: FemoralFrame, ml: float) -> Optiona
     :param mesh: The cropped reference bone surface (world mm).
     :param frame: The reference femoral frame.
     :param ml: The cutting plane's coordinate along ``frame.ml_axis``.
-    :return: A :class:`_Level`, or ``None`` if the cross-section is empty or has neither a
-        notch-plane crossing nor a vertex within ``NOTCH_SNAP_MM`` in front of the plane.
+    :return: A :class:`_Level`, or ``None`` if the cross-section is empty, has neither a
+        notch-plane crossing nor a vertex within ``NOTCH_SNAP_MM`` in front of the plane, or
+        its origin is not on the distal arc: the profile's arc length from the origin to its
+        lowest point (smallest proximal coordinate) exceeds their straight-line distance by
+        more than :data:`PROFILE_MAX_DETOUR_MM` (a side-wall crossing with a fold between it
+        and the condyle, which would shift the whole level's arc by the fold's length).
     """
     cut = mesh.slice(normal=frame.ml_axis, origin=ml * frame.ml_axis)
     if cut is None or cut.n_points < 2 or cut.n_cells == 0:
@@ -262,11 +289,17 @@ def _level_profile(mesh: pv.PolyData, frame: FemoralFrame, ml: float) -> Optiona
         return None
 
     _, index, segment, t = best
+    profile = plane[components[index]]
+    profile_arc = _profile_arc(profile, segment, t)
+    origin_point = profile[segment] + t * (profile[segment + 1] - profile[segment])
+    lowest = int(np.argmin(profile[:, 1]))
+    detour = abs(profile_arc[lowest]) - float(np.linalg.norm(profile[lowest] - origin_point))
+    if detour > PROFILE_MAX_DETOUR_MM:
+        return None
     all_ids, all_arc = [], []
     for k, ids in enumerate(components):
         all_ids.extend(ids)
-        all_arc.append(_profile_arc(plane[ids], segment, t) if k == index
-                       else np.full(len(ids), np.nan))
+        all_arc.append(profile_arc if k == index else np.full(len(ids), np.nan))
     return _Level(ml=float(ml), tree=cKDTree(plane[all_ids]), arc=np.concatenate(all_arc))
 
 
