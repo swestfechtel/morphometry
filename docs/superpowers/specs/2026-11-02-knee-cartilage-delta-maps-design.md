@@ -4,7 +4,7 @@ Date: 2026-11-02 · Branch / worktree: `knee-cartilage-delta-maps` (`../morphome
 
 ## Intent
 
-The `dfg_knees` cohort has, for each of 12 knees (`K1`–`K12`), eight MRI segmentations:
+The `dfg_knees` cohort (current label set: 15 knees, see "Input data") has, per knee, up to eight MRI segmentations:
 flexion 0/30/60/90° × unloaded (`unbelastet`) / loaded (`belastet`), named
 `K<subject>_<angle>_<load>.nii.gz`. The earlier work (`scripts/analyse_thinnest_point_flexion.py`)
 asked where the thinnest point sits and how it moves with flexion. This work asks how the
@@ -54,7 +54,7 @@ The work is used in two stages: **inspect knee by knee first, then cohort statis
    thinning** (most negative Δ), per the user — not largest absolute change.
 5. **Cohort statistics** per comparison:
    - per subregion: n, mean, SD, median, min, max of Δ (mm and %), and a Wilcoxon signed-rank
-     test of Δ against 0, reported **uncorrected** and labelled as such (n ≤ 12; 20 subregions ×
+     test of Δ against 0, reported **uncorrected** and labelled as such (n ≤ 15, n ≤ 8 for 90° loaded; 20 subregions ×
      7 comparisons are many tests);
    - hotspots: how often the hotspot lands in each subregion, and a scatter of all knees'
      hotspots over the unrolled femur and over the plateau (on a reference knee's outline or a
@@ -66,9 +66,10 @@ The work is used in two stages: **inspect knee by knee first, then cohort statis
   defined in step 4 of `docs/wirth_eckstein_2008_plan.md`), to the subdivisions, or to any
   existing script's output.
 - No precision / test-retest claim. These are separate acquisitions of a repositioned knee;
-  the existing figures (loaded vs unloaded at the same angle, median |Δ aMe| 0.085 mm per
-  subregion) are the scale of acquisition-to-acquisition spread, and the report should say so
-  next to the Δ values rather than present them as measurement precision.
+  the Δ values contain acquisition-to-acquisition spread (on the outdated label set, loaded vs
+  unloaded at the same angle differed by a median |Δ aMe| 0.085 mm per subregion; not
+  re-measured on the current set), and the report should say so next to the Δ values rather
+  than present them as measurement precision.
 - No medial/lateral naming *by default*: laterality of these knees is unrecorded, so
   compartments and subregions stay **patient-left / patient-right**, as everywhere else in the
   knee code, unless a laterality table is supplied (see "Laterality").
@@ -148,15 +149,28 @@ WARNING, as `find_thinnest_area` does.
 
 ### Input data
 
-- **`/home/simon/Data/dfg_knees/monai_segmentations/labels/original`** (all 96 scans), the set
-  `tests/data_paths.py::DFG_KNEES_DIR` and every quoted `dfg_knees` cohort number use. A sibling
-  `labels/final/` holds different (apparently corrected) labels for 8 of the knee scans (every
-  K10 scan except `K10_90_belastet`, plus `K11_0_belastet`); it is **not** used. A Δ map
-  subtracts two label maps of one knee, so the reference and a configuration must always come
-  from the same label set — never pick files per scan by "newest available".
+- **`/home/simon/Downloads/dfg_knees_segmentations/dfg_knees/segmentations`** — the current
+  label set (user, 2026-11-02). 113 scans of **15 knees** (K1–K11, K14, K15, K23, K25), uint16,
+  labels 0–5, 0.3125 × 0.3125 × 0.75 mm. Every knee has its unloaded 30° reference. **Seven
+  knees have no 90° loaded scan** (K7, K8, K10, K11, K14, K15, K25), so their `90° loaded`
+  comparison is absent, not failed: the figure leaves that panel blank and labelled "no scan",
+  and the CSVs omit the row (or mark it `missing`, builder's call) rather than writing NaN as if
+  measurement had failed.
+- **Outdated sets, not to be used or mixed in**: `/home/simon/Data/dfg_knees/monai_segmentations/
+  labels/original` (96 scans; what `tests/data_paths.py::DFG_KNEES_DIR`, the committed knee
+  goldens and every `dfg_knees` cohort number in `CLAUDE.md` / `docs/wirth_eckstein_2008_plan.md`
+  were produced from) and its sibling `labels/final`. All 84 scans shared with the current set
+  differ voxel-wise (0.02–1.1% of voxels). So **no figure quoted in `CLAUDE.md` for `dfg_knees`
+  — shares, `aMe` means, the 0.085 mm loaded-vs-unloaded spread, the K7/K8/K11 QC flags —
+  is known to hold for the current set**; the report must recompute any such baseline it quotes.
+  A Δ map subtracts two label maps of one knee, so all eight configurations of a knee must come
+  from the same directory.
+- Default `-i` points at the current set's directory only if the builder wants a default; the
+  script must accept any directory. Moving `tests/data_paths.py` / the goldens to the new set is
+  **out of scope** (it would move every committed knee golden) — note it as follow-up.
 - Knees and configurations are discovered generically from `K<subject>_<angle>_<load>` file
-  names (my call), so the not-yet-segmented `K13`–`K25` can be added later without code
-  changes; nothing hard-codes 12 knees.
+  names (my call), so further knees can be added without code changes; nothing hard-codes the
+  knee count or assumes all eight configurations exist.
 
 ### Laterality (user: add support, assume same side for now)
 
@@ -176,13 +190,15 @@ has to confirm, so:
 
 ### Cohort scope and QC
 
-- 12 knees at present. A knee without a usable reference scan is skipped and listed; a configuration that
-  fails (subdivision, thickness, registration) is NaN for that comparison and listed, without
-  dropping the knee's other comparisons.
-- Scans carrying `scan_qc_flags` (K7_90_belastet, K8_90_belastet; K11_90_belastet fails
-  outright) or a registration-residual flag are measured and written but **excluded from the
-  cohort statistics by default**, with `--include-flagged` / `--exclude SCAN ...` as in
-  `scripts/report_knee_cartilage_cohort.py`.
+- 15 knees at present; the `90° loaded` comparison has n = 8, every other comparison n = 15
+  (before QC exclusions). A knee without a usable reference scan is skipped and listed; a
+  configuration that fails (subdivision, thickness, registration) is NaN for that comparison and
+  listed, without dropping the knee's other comparisons.
+- Scans carrying `scan_qc_flags` (orientation, transfer QC) or a registration-residual flag are
+  measured and written but **excluded from the cohort statistics by default**, with
+  `--include-flagged` / `--exclude SCAN ...` as in `scripts/report_knee_cartilage_cohort.py`.
+  Which scans of the current set get flagged is not known yet (the known-bad 90° loaded scans of
+  the old set are absent from it); the report lists them.
 
 ### Deliverables
 
@@ -215,4 +231,4 @@ smoothing kernel / `neighbourhood_mm` default, colour map and colour-scale limit
 a figure; symmetric about 0), how the reference's subregion borders are drawn on the unrolled
 femur, the background used for the cohort hotspot scatter, the registration-residual QC
 threshold (from the data, not from Δ), and caching of per-scan measurements (~20 s per scan,
-96 scans).
+113 scans).
