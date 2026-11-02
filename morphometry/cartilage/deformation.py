@@ -91,6 +91,7 @@ coordinates: the tibial plateau plane of the reference :class:`KneeFrame` for th
 (their cells stay empty), never counted as 0. All maps of one knee and bone share one
 :class:`MapGrid`; ``delta = configuration - reference`` per cell, defined only where both are.
 """
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Sequence, Tuple
 
@@ -98,13 +99,17 @@ import numpy as np
 import pyvista as pv
 from scipy.spatial import cKDTree
 
-from morphometry.cartilage.femur_regions import FemoralFrame, _polyline_components
+from morphometry.cartilage.femur_regions import FEMUR_REGION_KEYS, FemoralFrame, _polyline_components
 from morphometry.cartilage.registration import (
     REGISTRATION_CROP_MM, RegistrationResult, RigidTransform, crop_to_articular_end,
     register_bone,
 )
+from morphometry.cartilage.robust_search import smoothed_argmin
 from morphometry.cartilage.surface import triangle_areas, triangle_centroids
 from morphometry.cartilage.thickness import KneeFrame, ThicknessMaps, knee_frame_from_tibia
+from morphometry.cartilage.tibia_regions import TIBIA_REGION_KEYS
+
+logger = logging.getLogger('morphometry')
 
 #: Largest distance (mm) anterior of the notch plane at which a profile vertex can serve as the
 #: arc origin (a corner) when the profile has no distal crossing of the plane (see
@@ -869,3 +874,85 @@ def knee_delta_maps(bone: str, reference: BoneMeasurement,
                          reference_positions=positions, rotation_change_deg=rotation_change,
                          errors=errors,
                          reference_dropped_fraction=_dropped(ref_coords, ref_areas))
+
+
+#: Compartments of the hotspot search; patient-side, ``'both'`` = the whole bone.
+COMPARTMENTS = ('both', 'left', 'right')
+
+
+def compartment_codes(bone: str, compartment: str) -> Tuple[int, ...]:
+    """
+    Region codes (indices into the bone's region-key tuple) of one compartment.
+
+    Tibia: patient-left keys end in ``'lt'``, patient-right in ``'rt'``. Femur: the patient
+    side letter is the second-to-last character (``iclf``/``alf`` -> ``l``, ``icrf``/``arf``
+    -> ``r``).
+
+    :param bone: ``'tibia'`` or ``'femur'``.
+    :param compartment: One of :data:`COMPARTMENTS`.
+    :return: Tuple of int region codes, in key order.
+    :raises ValueError: On an unknown bone or compartment.
+    """
+    if bone not in ('tibia', 'femur'):
+        raise ValueError(f"unknown bone {bone!r}")
+    if compartment not in COMPARTMENTS:
+        raise ValueError(f"unknown compartment {compartment!r}; expected one of {COMPARTMENTS}")
+    keys = TIBIA_REGION_KEYS if bone == 'tibia' else FEMUR_REGION_KEYS
+    if compartment == 'both':
+        return tuple(range(len(keys)))
+    side = compartment[0]
+    return tuple(c for c, k in enumerate(keys) if k[-2] == side)
+
+
+def find_largest_thinning(maps: BoneDeltaMaps, key: tuple, compartment: str = 'both',
+                          neighbourhood_mm: float = 3.0,
+                          radius_mm: Optional[float] = None) -> Optional[dict]:
+    """
+    Locate the centre of the area that thinned most in one configuration's delta map.
+
+    Runs :func:`smoothed_argmin` on ``maps.deltas[key]`` (delta = configuration - reference,
+    negative = thinner), so the result is the minimum of a median-smoothed map, searched only
+    where the whole smoothing window is measured: a single outlier cell or the rim where one
+    scan's cartilage ends (an edge mismatch reads strongly negative) cannot win. The search is
+    restricted to the cells whose reference region belongs to the compartment.
+
+    :param maps: The bone's :class:`BoneDeltaMaps`.
+    :param key: ``(angle, load)`` of the configuration.
+    :param compartment: ``'both'``, ``'left'`` or ``'right'`` (patient side).
+    :param neighbourhood_mm: Diameter (mm) of the smoothing neighbourhood.
+    :param radius_mm: Refinement-disc radius (mm); default half the neighbourhood.
+    :return: ``None`` if the configuration is absent from ``maps.deltas`` or the compartment
+        has no finite delta cell; else a dict with ``'cell'`` (refined ``(i, j)``),
+        ``'centre'`` (neighbourhood centre ``(i, j)``), ``'map_mm'`` (map coordinates of
+        ``cell``), ``'smoothed_delta_mm'`` (smoothed delta at the centre), ``'delta_mm'`` (raw
+        delta at ``cell``), ``'subregion'`` (region key at ``cell``, ``''`` if none),
+        ``'kernel_size'`` and ``'fallback'`` (True if no fully measured window existed; a
+        WARNING is logged then).
+    """
+    if key not in maps.deltas:
+        return None
+    delta = np.asarray(maps.deltas[key], dtype=float)
+    valid = np.isfinite(delta)
+    restrict = np.isin(maps.region_codes, compartment_codes(maps.bone, compartment))
+    if not (valid & restrict).any():
+        return None
+    res = smoothed_argmin(delta, valid, maps.grid.grid_mm, neighbourhood_mm,
+                          radius_mm=radius_mm, restrict=restrict)
+    if res['fallback']:
+        logger.warning("thinning hotspot %s/%s %s: no fully measured %d-cell window; searched "
+                       "all measured cells (the hotspot may lie on a footprint rim)",
+                       maps.bone, compartment, key, res['kernel_size'])
+    ci, cj = res['center_index']
+    pi, pj = res['point_index']
+    code = int(maps.region_codes[pi, pj])
+    keys = TIBIA_REGION_KEYS if maps.bone == 'tibia' else FEMUR_REGION_KEYS
+    return {
+        'cell': (int(pi), int(pj)),
+        'centre': (int(ci), int(cj)),
+        'map_mm': tuple(float(v) for v in maps.grid.centre_mm(pi, pj)),
+        'smoothed_delta_mm': float(res['smoothed'][ci, cj]),
+        'delta_mm': float(delta[pi, pj]),
+        'subregion': keys[code] if code >= 0 else '',
+        'kernel_size': int(res['kernel_size']),
+        'fallback': bool(res['fallback']),
+    }
