@@ -101,3 +101,16 @@ def test_compartment_codes():
     assert len(compartment_codes('femur', 'both')) == len(FEMUR_REGION_KEYS)
     with pytest.raises(ValueError):
         compartment_codes('femur', 'middle')
+
+
+def test_fallback_stays_inside_the_requested_compartment():
+    delta = np.full((H, W), np.nan)
+    delta[5:7, 5:7] = -0.5      # left: thinner, but only a sliver
+    delta[30:32, 30:32] = -0.1  # right: no full smoothing window either
+    m = _maps(delta)
+    hr = find_largest_thinning(m, KEY, 'right')
+    hl = find_largest_thinning(m, KEY, 'left')
+    assert hr['fallback'] is True
+    assert hr['cell'][0] >= 20 and hr['subregion'].endswith('rt')
+    assert hr['delta_mm'] == pytest.approx(-0.1)
+    assert hl['cell'][0] < 20 and hl['subregion'].endswith('lt')

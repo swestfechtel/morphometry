@@ -939,6 +939,13 @@ def find_largest_thinning(maps: BoneDeltaMaps, key: tuple, compartment: str = 'b
     res = smoothed_argmin(delta, valid, maps.grid.grid_mm, neighbourhood_mm,
                           radius_mm=radius_mm, restrict=restrict)
     if res['fallback']:
+        # smoothed_argmin's fallback drops ``restrict`` (find_thinnest_area relies on that), so
+        # its answer may lie in the other compartment. Redo it on the compartment alone: cells
+        # outside are blanked, so the fallback can only search this compartment's measured cells.
+        delta_c = np.where(restrict, delta, np.nan)
+        res = smoothed_argmin(delta_c, valid & restrict, maps.grid.grid_mm, neighbourhood_mm,
+                              radius_mm=radius_mm, restrict=restrict)
+        res['fallback'] = True
         logger.warning("thinning hotspot %s/%s %s: no fully measured %d-cell window; searched "
                        "all measured cells (the hotspot may lie on a footprint rim)",
                        maps.bone, compartment, key, res['kernel_size'])
