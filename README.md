@@ -52,6 +52,23 @@ whole-leg CT, plus a FastAPI service and batch-processing scripts.
       -o /home/simon/Data/dfg_knees/deformation_<short sha> --workers 16
   ```
 
+  How it works: each configuration's **bone** surface (never the cartilage) is
+  rigidly ICP-registered onto the reference's, cropped to the articular end; on
+  the current run (`/home/simon/Data/dfg_knees/deformation_0d993a3`) the residual
+  RMS is median 0.121 / max 0.208 mm (femur, n = 98) and 0.091 / 0.142 mm (tibia,
+  n = 88), far below the 1.0 mm QC threshold (`REGISTRATION_MAX_RMS_MM`, kept
+  because the residuals show no gap). The tibial map is the reference's plateau
+  plane; the femoral map is *unrolled*: medial-lateral position against signed arc
+  length (mm) along the sagittal bone profile, measured from the trochlear-notch
+  plane (a bone landmark), so trochlea and posterior condyle each appear once.
+  Sagittal levels at the outer condyle edges whose profile folds onto the side
+  wall are not used, which leaves 0.1-7.0% of a femur's covered area unmapped
+  (median 3.1%). The largest-thinning hotspot is searched only more than 2 mm
+  (`--edge-margin-mm`) from each scan's map edge, against the near-zero rim band
+  and the edge mismatch between acquisitions; many hotspots still sit just past
+  that margin, and single-voxel cavities in some cartilage labels (all of K10)
+  read as thin spots that can capture a hotspot — `report.md` lists both caveats.
+
   Outputs: `subregion_delta.csv`, `hotspots.csv`, `registration.csv`,
   `failures.csv`, `<knee>_{tibia,femur}_delta.png`, `{bone}_hotspots_cohort.png`,
   `cohort_summary.csv`, `report.md`, `report.meta.json`. Without

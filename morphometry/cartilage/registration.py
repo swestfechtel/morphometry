@@ -56,7 +56,8 @@ REGISTRATION_CROP_MM = 40.0
 
 #: QC threshold on the registration residual RMS (mm). Set from the residuals alone, never
 #: from the thickness deltas. Rule: a visible gap above the bulk of the observed residuals, or
-#: 1.0 mm if there is none. Observed on the current 15-knee ``dfg_knees`` cohort (commit 552f598,
+#: 1.0 mm if there is none. Observed on the current 15-knee ``dfg_knees`` cohort (commits 552f598
+#: and 0d993a3, identical registrations;
 #: ``registration.csv``): femur n = 98, rms median 0.121 / p90 0.158 / max 0.208 mm; tibia
 #: n = 88, median 0.091 / p90 0.125 / max 0.142 mm -- one continuous bulk with no gap, so
 #: 1.0 mm stays, about 5x the largest residual seen (no comparison flagged). The same run's
