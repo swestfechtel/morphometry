@@ -103,3 +103,11 @@ def test_hotspot_marker_position():
     fig = plot_knee_deltas(_maps(), 'K', hotspots={(60, 'unbelastet'): {'map_mm': (-3.0, -2.0)}})
     x, y = _panel(fig, '60° unloaded').lines[0].get_data()
     assert (list(x), list(y)) == ([-3.0], [-2.0])
+
+
+def test_cohort_scatter_anatomical(tmp_path):
+    rows = [dict(angle=60, load='belastet', bone='tibia', compartment='medial', map_x_mm=1.0, map_y_mm=2.0),
+            dict(angle=60, load='belastet', bone='tibia', compartment='lateral', map_x_mm=-1.0, map_y_mm=2.0)]
+    fig = plot_cohort_hotspots(rows, 'tibia', anatomical=True)
+    n = sum(len(c.get_offsets()) for a in fig.axes for c in a.collections)
+    assert n == 2 and 'medial positive' in fig._suptitle.get_text()

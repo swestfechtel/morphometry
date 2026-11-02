@@ -406,3 +406,241 @@ def test_unexpected_crash_of_one_bone_keeps_the_other_bone(monkeypatch, fake_del
     crash = [f for f in result['failures'] if f['stage'] == 'delta_maps']
     assert len(crash) == 1 and crash[0]['bone'] == 'femur'
     assert 'IndexError' in crash[0]['error']
+
+
+# ---------------------------------------------------------------------------------------
+# Cohort stage: selection, laterality, statistics, report
+# ---------------------------------------------------------------------------------------
+
+def _srow(knee, region, delta, angle=0, load='unbelastet', bone='tibia', status='ok',
+          qc_flags='', ref=2.0):
+    """A subregion_delta row as process_knee writes it."""
+    pct = 100.0 * delta / ref if np.isfinite(delta) else np.nan
+    return {'knee': knee, 'angle': angle, 'load': load, 'bone': bone, 'subregion': region,
+            'anatomical_subregion': '', 'aMe_ref_mm': ref, 'aMe_mm': ref + delta,
+            'delta_mm': delta, 'delta_pct': pct, 'status': status, 'qc_flags': qc_flags}
+
+
+def _hrow(knee, compartment, region, x=3.0, y=1.0, angle=0, load='unbelastet', bone='tibia',
+          status='ok', qc_flags=''):
+    """A hotspots row as process_knee writes it."""
+    return {'knee': knee, 'angle': angle, 'load': load, 'bone': bone,
+            'compartment': compartment, 'map_x_mm': x, 'map_y_mm': y, 'world_x': 10.0,
+            'world_y': 20.0, 'world_z': 30.0, 'subregion': region,
+            'anatomical_subregion': '', 'smoothed_delta_mm': -0.2, 'delta_mm': -0.25,
+            'kernel_size': 3, 'fallback': False, 'status': status, 'qc_flags': qc_flags}
+
+
+def test_flagged_rows_are_excluded_by_default_and_included_on_request():
+    rows = [_srow('K1', 'clt', -0.1),
+            _srow('K2', 'clt', -0.1, qc_flags='registration_rms:1.300'),
+            _srow('K3', 'clt', np.nan, status='failed'),
+            _srow('K4', 'clt', np.nan, status='missing'),
+            _srow('K5', 'clt', -0.1, angle=60),
+            _srow('K6', 'clt', -0.1)]
+    assert [r['knee'] for r in mod.select_rows(rows, False, [])] == ['K1', 'K5', 'K6']
+    assert [r['knee'] for r in mod.select_rows(rows, True, [])] == ['K1', 'K2', 'K5', 'K6']
+    # --exclude names a scan: the configuration's own scan or the knee's reference scan.
+    kept = mod.select_rows(rows, True, ['K5_60_unbelastet', 'K6_30_unbelastet'])
+    assert [r['knee'] for r in kept] == ['K1', 'K2']
+    # A scan name that is neither leaves the row alone.
+    assert [r['knee'] for r in mod.select_rows(rows, False, ['K1_60_unbelastet'])] == \
+        ['K1', 'K5', 'K6']
+    # Hotspot rows are selected the same way.
+    hot = [_hrow('K1', 'both', 'clt'), _hrow('K2', 'both', 'clt', qc_flags='x:1')]
+    assert [r['knee'] for r in mod.select_rows(hot, False, [])] == ['K1']
+
+
+def test_wilcoxon_is_reported_uncorrected_and_nan_for_tiny_n():
+    from scipy.stats import wilcoxon
+    deltas = [-0.1, -0.25, -0.3, -0.42, -0.5]
+    rows = [_srow(f'K{i}', 'clt', d) for i, d in enumerate(deltas, start=1)]
+    rows.append(_srow('K6', 'clt', np.nan))       # an ok row with a NaN aMe: not counted
+    rows.append(_srow('K1', 'crt', -0.2))         # n = 1
+    rows += [_srow(f'K{i}', 'elt', 0.0) for i in range(1, 4)]  # all zero
+    summary = mod.subregion_summary(rows)
+    assert set(mod.SUMMARY_COLUMNS) <= set(summary[0])
+    assert 'wilcoxon_p_uncorrected' in mod.SUMMARY_COLUMNS
+
+    def get(region, unit):
+        [row] = [r for r in summary if r['region'] == region and r['unit'] == unit]
+        return row
+
+    clt = get('clt', 'mm')
+    assert clt['table'] == 'subregion_delta'
+    assert (clt['angle'], clt['load'], clt['bone']) == (0, 'unbelastet', 'tibia')
+    assert clt['n'] == 5
+    assert clt['mean'] == pytest.approx(np.mean(deltas))
+    assert clt['sd'] == pytest.approx(np.std(deltas, ddof=1))
+    assert clt['median'] == pytest.approx(-0.3)
+    assert (clt['min'], clt['max']) == (pytest.approx(-0.5), pytest.approx(-0.1))
+    assert clt['wilcoxon_p_uncorrected'] == pytest.approx(wilcoxon(deltas).pvalue)
+    pct = get('clt', '%')
+    assert pct['n'] == 5 and pct['mean'] == pytest.approx(100 * np.mean(deltas) / 2.0)
+    assert get('crt', 'mm')['n'] == 1 and math.isnan(get('crt', 'mm')['wilcoxon_p_uncorrected'])
+    assert math.isnan(get('crt', 'mm')['sd'])
+    assert get('elt', 'mm')['n'] == 3 and math.isnan(get('elt', 'mm')['wilcoxon_p_uncorrected'])
+
+
+def test_laterality_renames_and_mirrors():
+    rows = [_srow('K1', 'clt', -0.1), _srow('K2', 'clt', -0.1),
+            _srow('K1', 'alf', -0.1, bone='femur')]
+    hot = [_hrow('K1', 'left', 'clt', x=3.0), _hrow('K1', 'both', 'crt', x=-2.0),
+           _hrow('K2', 'left', 'clt', x=3.0), _hrow('K2', 'right', 'crt', x=-2.0),
+           _hrow('K1', 'right', '', x=1.0)]
+    table = {'K1': 'right', 'K2': 'left'}
+    out = mod.to_anatomical(rows, table)
+    # Right knee: the patient-left plate is medial; left knee: it is lateral.
+    assert [r['subregion'] for r in out] == ['cMT', 'cLT', 'aMF']
+    assert [r['anatomical_subregion'] for r in out] == ['cMT', 'cLT', 'aMF']
+    assert rows[0]['subregion'] == 'clt'  # the input rows are not modified
+    hout = mod.to_anatomical(hot, table)
+    assert [r['compartment'] for r in hout] == ['medial', 'both', 'lateral', 'medial', 'lateral']
+    assert [r['subregion'] for r in hout] == ['cMT', 'cLT', 'cLT', 'cMT', '']
+    # Medial positive: a right knee's x is negated, a left knee's kept.
+    assert [r['map_x_mm'] for r in hout] == [-3.0, 2.0, 3.0, -2.0, -1.0]
+    assert all(r['map_y_mm'] == 1.0 for r in hout)
+    # No table: the rows come back unchanged (patient side).
+    assert mod.to_anatomical(hot, {}) == hot
+
+
+def test_knee_missing_from_laterality_table_is_dropped_and_listed():
+    rows = [_srow('K1', 'clt', -0.1), _srow('K3', 'clt', -0.1), _srow('K10', 'crt', -0.2)]
+    table = {'K1': 'right'}
+    assert mod.missing_laterality(rows, table) == ['K3', 'K10']
+    assert [r['knee'] for r in mod.to_anatomical(rows, table)] == ['K1']
+    assert mod.missing_laterality(rows, {}) == []  # without a table nothing is missing
+
+
+def test_hotspot_frequency_counts_per_subregion():
+    hot = [_hrow('K1', 'both', 'clt'), _hrow('K2', 'both', 'clt'), _hrow('K3', 'both', 'crt'),
+           _hrow('K1', 'left', 'clt'), _hrow('K2', 'left', 'plt'),
+           _hrow('K4', 'both', 'clt', angle=60),
+           _hrow('K5', 'both', ''),
+           _hrow('K1', 'both', 'cclf', bone='femur')]
+    freq = mod.hotspot_frequency(hot)
+    assert all(r['table'] == 'hotspot_frequency' for r in freq)
+
+    def count(angle, bone, compartment, region):
+        [row] = [r for r in freq if (r['angle'], r['bone'], r['compartment'], r['region'])
+                 == (angle, bone, compartment, region)]
+        return row['count'], row['n']
+
+    assert count(0, 'tibia', 'both', 'clt') == (2, 4)
+    assert count(0, 'tibia', 'both', 'crt') == (1, 4)
+    assert count(0, 'tibia', 'both', 'none') == (1, 4)
+    assert count(0, 'tibia', 'left', 'plt') == (1, 2)
+    assert count(60, 'tibia', 'both', 'clt') == (1, 1)
+    assert count(0, 'femur', 'both', 'cclf') == (1, 1)
+    assert len(freq) == 7
+    # Comparisons come out in reporting order.
+    keys = [(r['angle'], r['load']) for r in freq]
+    assert keys == sorted(keys, key=list(COMPARISONS).index)
+
+
+def test_load_laterality_table(tmp_path):
+    path = tmp_path / 'lat.csv'
+    path.write_text('subject,laterality\nK1,Right\nK2, left \nK3,\n')
+    assert mod.load_laterality_table(str(path)) == {'K1': 'right', 'K2': 'left'}
+    assert mod.load_laterality_table(None) == {}
+    path.write_text('subject,side\nK1,right\n')
+    with pytest.raises(ValueError, match='subject,laterality'):
+        mod.load_laterality_table(str(path))
+    path.write_text('subject,laterality\nK1,up\n')
+    with pytest.raises(ValueError, match='left or right'):
+        mod.load_laterality_table(str(path))
+
+
+def test_per_knee_rows_gain_anatomical_subregion_but_keep_patient_side_keys():
+    rows = [_srow('K1', 'clt', -0.1), _srow('K2', 'clt', -0.1), _srow('K1', 'prf', 0.1,
+                                                                       bone='femur'),
+            _hrow('K1', 'both', '')]
+    mod.fill_anatomical_subregion(rows, {'K1': 'left'})
+    assert [r['subregion'] for r in rows] == ['clt', 'clt', 'prf', '']
+    assert [r['anatomical_subregion'] for r in rows] == ['cLT', '', 'pMF', '']
+    assert 'anatomical_subregion' in mod.HOTSPOT_COLUMNS
+
+
+def _cohort_context(fake_delta_maps, tmp_path):
+    """A per_knee_stage-shaped context for two synthetic knees (K1 complete, K2 flagged 60°)."""
+    k1 = _process(_knee())
+    k2_measurements = {key: dict(r, scan=r['scan'].replace('K1_', 'K2_'))
+                       for key, r in _knee(configs=ALL_CONFIGS[:-1]).items()}
+    k2_measurements[(60, 'unbelastet')]['qc_flags'] = 'tibia_transfer_far:0.02'
+    k2 = mod.process_knee('K2', k2_measurements, 1.0, 3.0, 1.0)
+    return {'paths': [str(tmp_path / f'K1_{a}_{l}.nii.gz') for a, l in ALL_CONFIGS],
+            'knees': {'K1': {}, 'K2': {}}, 'records': {}, 'results': {'K1': k1, 'K2': k2},
+            'provenance': {'commit': 'abc', 'dirty': False}}
+
+
+def test_report_states_same_side_assumption_without_table(tmp_path, fake_delta_maps):
+    context = _cohort_context(fake_delta_maps, tmp_path)
+    out = tmp_path / 'out'
+    out.mkdir()
+    args = mod.build_parser().parse_args(['-i', str(tmp_path), '-o', str(out)])
+    cohort = mod.cohort_stage(args, context, {})
+    report = (out / 'report.md').read_text()
+    assert 'same side' in report
+    assert 'uncorrected' in report
+    assert 'acquisition' in report  # Δ is acquisition-to-acquisition spread
+    assert str(tmp_path) in report  # the label set used
+    assert 'K2 90° loaded' in report  # the missing comparison is listed
+    assert 'K2 60° unloaded' in report and 'tibia_transfer_far' in report  # flagged, listed
+    assert (out / 'cohort_summary.csv').read_text().splitlines()[0].split(',') == \
+        mod.SUMMARY_COLUMNS
+    assert (out / 'tibia_hotspots_cohort.png').exists()
+    assert (out / 'femur_hotspots_cohort.png').exists()
+    import json
+    meta = json.loads((out / 'report.meta.json').read_text())
+    assert {'commit', 'dirty', 'branch', 'host', 'date', 'args', 'inputs'} <= set(meta)
+    assert meta['n_knees'] == 2
+    # Flagged K2 60° unloaded is out of the statistics: the clt row of 60° unloaded has n = 1.
+    [row] = [r for r in cohort['summary'] if r['table'] == 'subregion_delta'
+             and (r['angle'], r['load'], r['bone'], r['region'], r['unit'])
+             == (60, 'unbelastet', 'tibia', 'clt', 'mm')]
+    assert row['n'] == 1
+    # The 90° loaded comparison only has K1.
+    [row] = [r for r in cohort['summary'] if r['table'] == 'subregion_delta'
+             and (r['angle'], r['load'], r['bone'], r['region'], r['unit'])
+             == (90, 'belastet', 'tibia', 'clt', 'mm')]
+    assert row['n'] == 1
+
+    # With a table: no same-side assumption, anatomical names, and K2 (not in it) listed.
+    lat = tmp_path / 'lat.csv'
+    lat.write_text('subject,laterality\nK1,right\n')
+    args = mod.build_parser().parse_args(['-i', str(tmp_path), '-o', str(out),
+                                          '--laterality-table', str(lat)])
+    cohort = mod.cohort_stage(args, context, mod.load_laterality_table(str(lat)))
+    report = (out / 'report.md').read_text()
+    assert 'same side' not in report
+    assert 'cMT' in report and 'K2' in report
+    assert cohort['missing_laterality'] == ['K2']
+
+
+def test_main_runs_both_stages_and_fills_the_per_knee_anatomical_column(tmp_path, monkeypatch,
+                                                                         fake_delta_maps):
+    data = tmp_path / 'segs'
+    data.mkdir()
+    for angle, load in ALL_CONFIGS:
+        (data / f'K1_{angle}_{load}.nii.gz').write_bytes(b'')
+    knee = _knee()
+
+    def fake_measure(paths, *args, **kwargs):
+        return {p: knee[mod.parse_scan_name(p)[1:]] for p in paths}
+
+    monkeypatch.setattr(mod, 'measure_scans', fake_measure)
+    lat = tmp_path / 'lat.csv'
+    lat.write_text('subject,laterality\nK1,left\n')
+    out = tmp_path / 'out'
+    context = mod.main(['-i', str(data), '-o', str(out), '--workers', '1',
+                        '--laterality-table', str(lat)])
+    import csv as _csv
+    with open(out / 'subregion_delta.csv') as handle:
+        rows = list(_csv.DictReader(handle))
+    clt = [r for r in rows if r['subregion'] == 'clt']
+    assert clt and {r['anatomical_subregion'] for r in clt} == {'cLT'}  # left knee: lateral
+    for name in ('cohort_summary.csv', 'report.md', 'report.meta.json',
+                 'tibia_hotspots_cohort.png'):
+        assert (out / name).exists()
+    assert {r['compartment'] for r in context['cohort']['hotspot_rows']} == \
+        {'both', 'medial', 'lateral'}

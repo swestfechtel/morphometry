@@ -23,6 +23,8 @@ LOADS = ('unbelastet', 'belastet')
 ANGLES = (0, 30, 60, 90)
 #: Colours of the three compartments in the cohort scatter (patient side).
 COMPARTMENT_COLOURS = {'both': 'black', 'left': 'tab:red', 'right': 'tab:blue'}
+#: The same, once a laterality table has renamed the compartments (medial red, lateral blue).
+ANATOMICAL_COMPARTMENT_COLOURS = {'both': 'black', 'medial': 'tab:red', 'lateral': 'tab:blue'}
 #: Minimum half-range (mm) of the shared symmetric delta colour scale.
 MIN_LIMIT_MM = 0.1
 
@@ -170,21 +172,27 @@ def _load_name(load: str) -> str:
     return 'loaded' if load == 'belastet' else 'unloaded'
 
 
-def plot_cohort_hotspots(rows: Sequence[dict], bone: str, path: Optional[str] = None) -> Figure:
+def plot_cohort_hotspots(rows: Sequence[dict], bone: str, path: Optional[str] = None,
+                         anatomical: bool = False) -> Figure:
     """
     Scatter the cohort's hotspot positions, one panel per comparison (seven panels).
 
     Each panel plots ``map_x_mm`` / ``map_y_mm`` of the rows of that ``(angle, load)`` and bone,
     coloured by compartment (``both`` black, ``left`` red, ``right`` blue; patient side).
-    Rows with a non-finite coordinate are ignored. Axis conventions are in the module docstring.
+    Rows with a non-finite coordinate are ignored. Axis conventions are in the module docstring,
+    except with ``anatomical=True``: the compartments are then ``medial`` (red) / ``lateral``
+    (blue) and the horizontal axis is the medial direction (the caller mirrored ``map_x_mm``).
 
     :param rows: Dicts with at least ``angle``, ``load``, ``bone``, ``compartment``,
         ``map_x_mm``, ``map_y_mm`` (already mirrored by the caller when a laterality table is
         used).
     :param bone: ``'tibia'`` or ``'femur'``; other bones' rows are ignored.
     :param path: If given, the figure is saved there (PNG).
+    :param anatomical: ``True`` when the rows carry medial/lateral compartments and a
+        medial-positive ``map_x_mm`` (a laterality table was applied).
     :return: The matplotlib figure.
     """
+    colours = ANATOMICAL_COMPARTMENT_COLOURS if anatomical else COMPARTMENT_COLOURS
     kept = []
     for row in rows:
         if row.get('bone') != bone:
@@ -209,17 +217,20 @@ def plot_cohort_hotspots(rows: Sequence[dict], bone: str, path: Optional[str] = 
                 ax.axis('off')
                 ax.set_title(f'{angle}° {_load_name(load)} (reference)', fontsize=9)
                 continue
-            for comp, colour in COMPARTMENT_COLOURS.items():
+            for comp, colour in colours.items():
                 pts = [(k[3], k[4]) for k in kept if (k[0], k[1]) == key and k[2] == comp]
                 if pts:
                     p = np.array(pts)
                     ax.scatter(p[:, 0], p[:, 1], s=18, c=colour, alpha=0.7, label=comp)
             _style_axes(ax, bone, extent)
+            if anatomical:
+                ax.set_xlabel('medial (mm)', fontsize=7)
             ax.set_aspect('auto')
     handles = [plt.Line2D([], [], marker='o', ls='', color=col, label=name)
-               for name, col in COMPARTMENT_COLOURS.items()]
+               for name, col in colours.items()]
     fig.legend(handles=handles, loc='lower right', fontsize=8)
-    fig.suptitle(f'{bone}: largest-thinning hotspot positions (patient side)', fontsize=11)
+    side = 'medial positive' if anatomical else 'patient side'
+    fig.suptitle(f'{bone}: largest-thinning hotspot positions ({side})', fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     if path is not None:
         fig.savefig(str(path), dpi=130)
