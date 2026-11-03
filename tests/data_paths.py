@@ -86,13 +86,33 @@ _CT_DEFAULT_DIR = Path(
 _CT_DEFAULT_CASE = "case-105094.nii.gz"
 
 
+def _exists(path: Path) -> bool:
+    """Whether ``path`` exists, treating an unreachable filesystem as "no".
+
+    ``Path.exists()`` raises ``OSError`` rather than returning ``False`` when the path sits
+    on a dead mount -- and the CT sample lives on an sshfs mount that goes stale whenever
+    the connection drops. Because this module is imported by ``conftest.py``, that
+    exception surfaced during **collection** and took the whole suite down, not just the 22
+    ``needs_ct`` tests it should have skipped. An unreachable mount is exactly the case the
+    skip exists for, so it is reported as absent.
+
+    :param path: The path to probe.
+    :return: True if it exists and is reachable, False if it is missing or the filesystem
+        holding it cannot be queried.
+    """
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
 def _resolve_ct_sample():
     env = os.environ.get("MORPH_CT_SAMPLE")
     if env:
         p = Path(env)
-        return p if p.exists() else None
+        return p if _exists(p) else None
     candidate = _CT_DEFAULT_DIR / _CT_DEFAULT_CASE
-    return candidate if candidate.exists() else None
+    return candidate if _exists(candidate) else None
 
 
 CT_WHOLE_LEG = _resolve_ct_sample()
