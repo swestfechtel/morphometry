@@ -99,6 +99,25 @@ def calculate_knee_rotation_angle(segmentation_mask: Image | np.ndarray, femur_l
     (see :func:`_knee_rotation_angle` for the sign derivation and the composition it replaced, and
     :data:`KNEE_ROTATION_POSITIVE_SIGN` for the single place the direction is decided, with the
     citation and the caveat that only the sign is comparable with published values).
+
+    **Mirror-equivariant** (backlog task #17): a RIGHT image half is measured as the reflection of
+    a left one -- the mask is reversed along x, both condylar searches run on it, and the angle is
+    composed there with the left-side conventions -- so a knee and its mirror image give the same
+    value. The composition was already symmetric (negating the x components, which is what
+    ``side='right'`` does, is algebraically the same as mirroring both lines), so the asymmetry was
+    entirely in ``knee.get_knee_reference_line``: it rotates the section about the image centre and
+    rounds, and is not invariant under ``x -> n - 1 - x``. Measured on the 100 Augsburg
+    reader-study halves, a half and its mirror disagreed by a median 1.16 degrees, p90 3.06 and max
+    6.21, exact on only 5.
+
+    This also removes an inconsistency *within* one cohort row rather than only between the two
+    sides. ``measurements/femur.py::_mri_torsion`` and
+    ``measurements/tibia.py::_tibial_torsion_points`` already measured a right half as a
+    reflection, so before this change a right-side row's knee rotation angle rested on a
+    **different** posterior condylar line from the femoral and tibial torsion in the same row: over
+    the 50 right halves the tibial line's orientation differed by a median 1.23 degrees (max 4.28,
+    equal on only 8) and the femoral line's by a median 0.62 (max 2.70, equal on 10), while on left
+    halves both consumers agreed exactly on all 50.
     :param segmentation_mask: A 3D segmentation mask of the knee, either as an ``Image`` /
         ``Segmentation`` (preferred: its voxel spacing is then checked against the index-space
         angle's equal-in-plane-spacing precondition without any further argument) or as a bare
@@ -106,9 +125,14 @@ def calculate_knee_rotation_angle(segmentation_mask: Image | np.ndarray, femur_l
     :param femur_label: The segmentation label of the femur.
     :param tibia_label: The segmentation label of the tibia.
     :param side: Side of the image (not patient!), either 'left' or 'right'. A right half holds the
-        mirror-image knee, so it is composed in the mirrored convention and a knee and its mirror
-        twin give the same angle.
-    :param plot: A sequence of two matplotlib Axes to draw the reference lines on, or False.
+        mirror-image knee and is measured as the reflection of a left one (see above), so a knee
+        and its mirror twin give the same angle -- which before task #17 was true of the
+        composition alone and not of the landmark search it rests on.
+    :param plot: A sequence of two matplotlib Axes to draw the reference lines on, or False. On a
+        right image half the overlay is drawn on the **reflected** mask, so the knee appears
+        mirrored; the lines drawn are the ones the returned angle was composed from, which is the
+        point of the overlay, and ``measurements.hip.calculate_ccd_ct`` documents the same
+        consequence of the same construction.
     :param spacing: Voxel spacing of ``segmentation_mask`` (a bare array carries no geometry), e.g.
         ``knee_segmentation.spacing``. Only needed when ``segmentation_mask`` is a bare array:
         pass the ``Segmentation`` instead and the spacing is taken from it. Given either way, it is
@@ -126,8 +150,17 @@ def calculate_knee_rotation_angle(segmentation_mask: Image | np.ndarray, femur_l
     """
     G.validate_side(side)
     segmentation_mask, image_spacing = mask_and_spacing(segmentation_mask)
-    G.validate_in_plane_isotropy(spacing if spacing is not None else image_spacing,
-                                 'knee rotation angle segmentation')
+    resolved_spacing = spacing if spacing is not None else image_spacing
+    G.validate_in_plane_isotropy(resolved_spacing, 'knee rotation angle segmentation')
+
+    if side == 'right':
+        # Measure the right half as the reflection of a left one, so both condylar searches run on
+        # one canonical orientation -- the rule the two torsions already follow, and the reason a
+        # right-side row no longer carries a different condylar line from them. Only the angle is
+        # returned, so no landmark has to be mapped back; the spacing is forwarded already resolved
+        # so the recursion checks the same value instead of losing it with the Image wrapper.
+        return calculate_knee_rotation_angle(segmentation_mask[::-1], femur_label, tibia_label,
+                                             side='left', plot=plot, spacing=resolved_spacing)
 
     femur_mask = np.where(segmentation_mask == femur_label, 1, 0)
     proximal_layer, femur_start, femur_end = get_knee_reference_line(femur_mask, 'femur')

@@ -208,6 +208,15 @@ def _two_lobe_section(shape, centre, half_gap, angle_deg, radii=(11, 6)):
 #: Pinned so that a degenerate search (which would return 0.0, or the same number for both bones)
 #: cannot pass the bit-identity test below.
 PHANTOM_KNEE_ROTATION = -12.200468727380784
+#: The same phantom measured as a RIGHT half. **Not** the negation of the value above, and that
+#: is not a defect: since backlog task #17 a right half is measured as the reflection of a left
+#: one, so the condylar search runs on the reversed array and finds its own lines there. The old
+#: exact-negation identity came from the composition alone -- negating both lines' x components,
+#: which is what ``side='right'`` did, negates the signed angle between them exactly -- and it
+#: held for any pair of lines, which is precisely why it said nothing about the search. The
+#: property that does hold now is the mirror one (a knee and its mirror image read the same), and
+#: it is pinned on real data in ``tests/characterization/test_knee_rotation_equivariance.py``.
+PHANTOM_KNEE_ROTATION_RIGHT = 12.68038349181982
 
 
 @pytest.fixture
@@ -240,10 +249,11 @@ def test_knee_rotation_angle_is_bit_identical_with_a_conforming_spacing(knee_pha
 
     The reference value is pinned rather than merely asserted finite, so a landmark search that
     degenerated into returning the same line for both bones (0.0) would be caught here instead of
-    making the bit-identity claim vacuous. ``side='right'`` holds the mirror-image knee, hence the
-    sign flip.
+    making the bit-identity claim vacuous. The two sides are pinned as two independent constants
+    because the right one is no longer the negation of the left -- see
+    :data:`PHANTOM_KNEE_ROTATION_RIGHT`.
     """
-    expected = PHANTOM_KNEE_ROTATION if side == 'left' else -PHANTOM_KNEE_ROTATION
+    expected = PHANTOM_KNEE_ROTATION if side == 'left' else PHANTOM_KNEE_ROTATION_RIGHT
     reference = calculate_knee_rotation_angle(knee_phantom, 1, 2, side=side)
     assert reference == pytest.approx(expected, abs=1e-9)
     for spacing in CONFORMING_SPACINGS:

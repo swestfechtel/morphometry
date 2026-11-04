@@ -401,9 +401,15 @@ def test_two_blob_phantom_actually_has_the_defect():
 def test_ct_two_blob_top_slice_still_measures_the_head(side):
     """The measurement must survive a two-island top slice.
 
-    Both halves of the assertion carry their own side: with the defect present the left
-    side returns a plausible-looking 27.1 mm radius centred 37 mm away from the head,
-    while the right side returns a 15.1 mm radius. Only checking both catches both.
+    When this was written the two sides were separate code paths and carried their own
+    failures: with the defect present the left side returned a plausible-looking 27.1 mm
+    radius centred 37 mm away from the head, while the right side returned a 15.1 mm
+    radius, so only checking both caught both. That is no longer what the parametrisation
+    does -- since backlog task #11 a right half is measured as the reflection of a left
+    one, so ``side='right'`` here measures the *reflected* phantom through the same code
+    and returns the exact mirror of the left answer. The case is kept because it still
+    exercises the reflect-and-map-back path on a two-island slice, not because it probes a
+    second implementation.
     """
     image = _segmentation(two_blob_femur())
     truth = np.asarray(image.transform_index_to_physical_point(TWO_BLOB_HEAD_INDEX), dtype=float)
