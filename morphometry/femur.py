@@ -91,12 +91,51 @@ def contour_femoral_neck(mask: np.ndarray, contour: np.ndarray, layer_selected: 
 
 def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarray, r: float) -> np.ndarray:
     """
-    Get the centre of the femoral neck as described by Lee et al.
+    Get the proximal femoral neck axis, the method this project labels "Lee".
 
-    :param segmentation_mask: A 3D segmentation mask of the femur.
-    :param center: The center of the femoral head.
-    :param r: The radius of the femoral head.
-    :return: The centre of the femoral neck.
+    **The label is a shorthand and the citation matters** (backlog task #2). What is implemented
+    here is the automatic method of Schock et al., *Artificial intelligence-based automatic
+    assessment of lower limb torsion on MRI*, Sci Rep 11:23244 (2021) -- the paper this pipeline
+    derives from -- which the authors describe as "closest to the method of Lee", not as Lee's
+    method: "While our method identified the femoral head to locate the peripheral femoral neck,
+    Lee used it as part of the reference line. Also, our method defined the femoral neck *axis* as
+    the reference line, whereas Lee estimated the femoral neck *centre* as part of the reference
+    line." Lee's own method is in Lee et al., *3D femoral neck anteversion measurements based on
+    the posterior femoral plane in ORTHODOC*, Med Biol Eng Comput 44:895-906 (2006). So the
+    contour-fitted neck **axis** below is the published design and not a misreading of a
+    point-based definition.
+
+    The method takes the most proximal axial slice on which the femur is a single outline and a
+    circle of radius ``2 * r`` about the head centre still meets bone, keeps the neck contour in a
+    ring around the head centre and near the neck's own centre of mass, and fits a straight line
+    through the head centre and those points (two fits averaged where the contour is split). Only
+    the fitted direction reaches the angle: the returned point is the head centre displaced 80
+    voxels along it, and the torsion composition aligns the axial coordinate, so the 80 and the
+    returned ``layer_selected`` do not enter the result.
+
+    **Being a proximal landmark, this reads systematically LOWER than Murphy, and that is
+    anatomy rather than error.** Schock et al.'s own radiologists measured 16.1 deg by the Lee
+    method against 32.2 by Murphy, a 16.1 deg gap, and explain it: "Because the distal femoral
+    neck is more posterior, femoral torsion was higher" for the more distal landmarks. Their
+    algorithm and their Lee reader did not differ significantly (p = 0.859). Lee et al. quantify
+    the same effect as a law, the local neck-axis anteversion rising as
+    ``theta = 25.3 * (L / D) - 5.4`` for ``L / D`` in 0.1-0.6, where ``L`` is the distal distance
+    from the proximal-most neck confluence and ``D`` the femoral head diameter. On the 50 Augsburg
+    reader-study hips this slice sits a median 12.8 mm below the head centre and Murphy's 44.9 mm,
+    a 32.1 mm separation, for which that law predicts about 19 deg -- against the 18.97 deg
+    measured. The ~21% of legs this method calls retrotorted is likewise not a defect: it is
+    21.0% observed against 21.3% expected from its own mean and SD (11.59 +/- 14.58 deg).
+
+    What does *not* reconcile is the Augsburg readers' Lee-minus-Murphy gap of 4.3-5.8 deg, which
+    is too narrow for landmarks this far apart by both the pipeline and the literature; see
+    ``docs/augsburg_reader_bias.md``.
+    :param segmentation_mask: A 3D segmentation mask of the femur, binarised to the femur label.
+    :param center: The centre of the femoral head, as a voxel index (cast to ``int16`` by the
+        caller, because the slice search below indexes the mask with it).
+    :param r: The radius of the femoral head, in in-plane voxels.
+    :return: A point on the fitted neck axis, 80 voxels from the head centre, as a voxel index.
+        Only its direction from the head centre is meaningful.
+    :raises ValueError: If no slice satisfies the single-outline and ``2 * r`` circle conditions.
     """
     layer_selected = None
     for i in range(segmentation_mask.shape[2]):

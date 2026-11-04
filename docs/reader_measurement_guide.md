@@ -72,7 +72,22 @@ Common first step (both methods):
 
 1. **Femoral head centre.** Fit a sphere to the contour of the femoral head, and take its centre and radius (r).
 
-**Method "Lee" — femoral neck centre:**
+**Method "Lee" — proximal femoral neck axis:**
+
+> **Two warnings before you follow these steps.** (a) The label "Lee" is a
+> shorthand. What the pipeline implements is the automatic method of **Schock et
+> al., Sci Rep 11:23244 (2021)**, which its authors describe as *"closest to the
+> method of Lee"* rather than as Lee's method — they define the neck *axis* as the
+> reference line where Lee defines the neck *centre* (Lee et al., Med Biol Eng
+> Comput 44:895–906, 2006). (b) **Steps 2–4 describe an algorithm, not a
+> hand-measurable procedure.** Selecting "the first slice where a circle of radius
+> 2·r still meets bone", and then least-squares-fitting a line through filtered
+> contour points and averaging two slopes, is not something a reader can reproduce
+> with an angle tool. If you are measuring by hand, record what you actually drew
+> and how, because the pipeline's value and yours will not be the same quantity.
+> This matters: the readers' Lee-minus-Murphy gap came out at 4.3–5.8°, where both
+> this pipeline (18.97°) and Schock et al.'s own radiologists (16.1°) put it near
+> 16–19°.
 
 2. Going inferiorly from the head, find the first transverse slice on which (a)
    the femur forms a *single* connected outline and (b) a circle of radius `2·r`
@@ -88,10 +103,19 @@ Common first step (both methods):
 
 **Method "Murphy" — femoral neck base:**
 
-2. **Lesser trochanter.** Find the transversal slice where the lesser trochanter's protrusion is most prominent.
-3. The **femoral neck base** is the centre of mass of the femoral shaft
-   cross-section on that lesser-trochanter slice. The proximal reference line
-   runs from the femoral head centre to this neck-base point.
+2. **Lesser trochanter.** Find the lesser trochanter's **superior extent** — the
+   most proximal transversal slice on which it is still present.
+3. The **femoral neck base** is the centre of mass of the femur cross-section on
+   the **first slice above** that extent (10 mm up on the Augsburg hip MRI, 3 mm
+   on whole-leg CT, 1 mm on isotropic NaKo — as close above the trochanter as the
+   acquisition resolves). The proximal reference line runs from the femoral head
+   centre to this neck-base point.
+
+   > **Corrected 2026-11-04.** This step previously said the centroid was taken on
+   > the lesser-trochanter slice *itself*. The implementation moved to the first
+   > slice above it, following Murphy's published "just above the lesser
+   > trochanter", and that change was worth ~1–1.5° of Murphy's bias. A reader
+   > following the old wording measured a different landmark from the pipeline.
 
 ### 1.2 Distal reference line (posterior condylar line)
 
@@ -107,13 +131,20 @@ Common first step (both methods):
 
 ### 1.3 Computation
 
-- Measure the angle of the proximal reference line to the medial–lateral axis,
-  and the angle of the posterior condylar line to the medial–lateral axis, **in
-  the transverse plane**.
-- Both partial angles are folded into the 0–90° range. They are **added** when
-  the neck and the condylar line tilt in opposite antero-posterior directions
-  and **subtracted** when they tilt the same way. The result is the net
-  transverse-plane angle between femoral neck axis and posterior condylar line.
+- The torsion is the **signed angle, in the transverse plane, from the posterior
+  condylar line to the neck axis**, folded into (−90°, +90°]. **Positive =
+  antetorsion, negative = retrotorsion.** Both reference lines are undirected, so
+  neither endpoint order enters, and only the two directions do — which is what
+  makes the result independent of how the limb happens to lie in the scanner.
+
+  > **Corrected 2026-11-04.** This section previously said the two partial angles
+  > were each folded into 0–90° against the medial–lateral axis and then **added**
+  > or **subtracted** according to whether the two lines tilt the same way
+  > antero-posteriorly. That was the pipeline's old composition and it was
+  > replaced because it is **not rotation-invariant**: rotating the patient in the
+  > scanner changed the answer, and on the real Augsburg condylar-line pairs it
+  > flipped sign on 98 of 100 halves across a full rotation. A reader following
+  > the old rule can get the opposite sign from the pipeline on the same knee.
 
 ---
 

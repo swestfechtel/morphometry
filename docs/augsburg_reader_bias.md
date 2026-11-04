@@ -10,6 +10,38 @@ python scripts/analyse_reader_bias.py -o out/reader_bias
 
 ## Conclusion
 
+> ### Retracted in part, 2026-11-04 — read this first
+>
+> The two central claims below — that the shared landmarks are unbiased and that
+> the pipeline's Lee axis is ~13° "too wide" of the readers' — **invert** once the
+> methods are checked against their own published sources (backlog task #2).
+>
+> The pipeline's Lee−Murphy gap of 18.97° is **correct and expected**. Lee's
+> landmark is proximal and Murphy's distal, and a proximal neck axis reads
+> systematically lower: Schock et al. (Sci Rep 11:23244, 2021 — the paper this
+> pipeline's "Lee" implements) measured **16.1° by Lee against 32.2° by Murphy**
+> with their own radiologists, and Lee et al. (Med Biol Eng Comput 44:895, 2006)
+> give the law `θ = 25.3·(L/D) − 5.4`, which predicts ≈19° for the 32.1 mm
+> separating our two landmarks. Our Murphy (30.55°) sits essentially on their
+> Murphy (32.2°).
+>
+> So **it is the readers' 4.3–5.8° gap that does not reconcile**, with either the
+> pipeline or the literature — it is ~11° too *narrow* for landmarks this far
+> apart. The decomposition below therefore rests on reference values whose
+> internal structure is wrong, and its "shared ≈ 0 / method-specific ±4.6°" split
+> is an artefact of that: the shared term is near zero only because Lee's expected
+> proximal-low reading is being counted as an error. A plausible cause is that
+> `docs/reader_measurement_guide.md`'s Lee steps describe an algorithm no reader
+> can execute by hand (and were stale for Murphy's slice and for the composition
+> until 2026-11-04); Jonathan also measured in 2025-10, before that guide existed.
+>
+> **What survives unchanged:** the inter-reader disagreement table (the scale
+> every bias has to be read against), the sign-convention finding (no negative in
+> 198 reader values), and the left–right agreement table. **What does not:** the
+> conclusion that the residual localises to the proximal neck axis, and the
+> framing of Lee's −6° as a defect. Backlog task #2 is closed as "premise
+> refuted", not as "fixed".
+
 **The landmarks Lee and Murphy share are no longer biased. The whole residual is
 the proximal neck axis, and the two methods err in opposite directions.**
 
@@ -25,9 +57,12 @@ the proximal axis:
 
 The shared term is zero to within a tenth of its own spread. Directly: the
 pipeline's two proximal axes sit **−18.0° / −17.8°** apart (Lee minus Murphy,
-sd 4.4 / 5.0) where the readers' sit **−4.3° to −5.8°** apart (sd 4.0–7.7). The
-pipeline's gap is ~13° too wide, and it is consistent rather than noisy — its
-spread is *narrower* than the readers'. The per-case correlation between the
+sd 4.4 / 5.0) where the readers' sit **−4.3° to −5.8°** apart (sd 4.0–7.7). This
+paragraph originally read "the pipeline's gap is ~13° too wide"; **that is
+backwards** — see the retraction above. The pipeline's gap matches both Schock et
+al.'s 16.1° and Lee et al.'s level law, so the readers' gap is the narrow one.
+That the pipeline's spread is *narrower* than the readers' was already a hint in
+this direction. The per-case correlation between the
 pipeline's gap and the readers' is only +0.11 to +0.39, so it is not a constant
 offset either: the pipeline's Lee axis does not follow the anatomy the readers see.
 
@@ -101,8 +136,13 @@ named cases, not general scatter.
 
 ## What this leaves open
 
-* The proximal neck axis is the whole remaining story for Lee and Murphy. Lee's is
-  the larger error and already has backlog task #2; Murphy's +4.5° has no item yet.
+* ~~The proximal neck axis is the whole remaining story for Lee and Murphy.~~
+  **Superseded** (see the retraction): the Lee−Murphy separation is anatomy, not
+  error, and task #2 is closed as premise-refuted. What is open instead is the
+  **validity of the readers' Lee and Murphy columns**, whose 4.3–5.8° gap cannot
+  be reconciled with the 16–19° that both the pipeline and two independent
+  publications give. Until that is settled, no bias computed against these two
+  columns should be read as a pipeline defect.
 * CCD's absolute level (pipeline ~138° vs a 125–135° literature range) cannot be
   settled against these readers and needs a reference with a stated protocol.
 * Only the sign-unambiguous legs can test the torsion sign at all. Asking the
