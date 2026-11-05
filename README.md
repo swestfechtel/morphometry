@@ -76,7 +76,11 @@ whole-leg CT, plus a FastAPI service and batch-processing scripts.
 
   Outputs: `subregion_delta.csv`, `hotspots.csv`, `registration.csv`,
   `failures.csv`, `<knee>_{tibia,femur}_delta.png`, `{bone}_hotspots_cohort.png`,
-  `cohort_summary.csv`, `report.md`, `report.meta.json`. Without
+  `cohort_summary.csv`, `report.md`, `report.meta.json`. Every figure carries
+  a caption under its panels explaining the setup, the sign of Δ (scan −
+  reference: negative/blue = thinner), the colour scales, the markers, the axes
+  and the subregion abbreviations; the per-knee reference panel names its
+  subregions, and grey marks cells with no value (white is Δ = 0). Without
   `--laterality-table` all knees are pooled by patient side (assumed same side).
   The existing knee goldens and `report_knee_cartilage_cohort.py`'s quoted tables
   still use the older label set under `/home/simon/Data/dfg_knees/monai_segmentations`

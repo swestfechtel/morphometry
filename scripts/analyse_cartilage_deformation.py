@@ -677,12 +677,13 @@ def process_knee(knee: str, measurements: Dict[tuple, dict], grid_mm: float = 1.
     :param edge_margin_mm: Minimum distance (mm) of a hotspot cell from each scan's map
         footprint edge (:func:`~morphometry.cartilage.deformation.find_largest_thinning`).
     :return: ``{'subregion_rows', 'hotspot_rows', 'registration_rows', 'failures', 'maps',
-        'hotspots', 'panel_titles'}``: the rows of the three CSVs (column sets
+        'hotspots', 'panel_titles', 'hotspot_settings'}``: the rows of the three CSVs (column sets
         :data:`SUBREGION_COLUMNS` / :data:`HOTSPOT_COLUMNS` / :data:`REGISTRATION_COLUMNS`) and
         of ``failures.csv``; ``maps`` ``{bone: BoneDeltaMaps or None}`` (``None`` when the
         reference failed for that bone); ``hotspots`` ``{bone: {(angle, load): whole-bone
         hotspot dict or None}}`` and ``panel_titles`` ``{bone: {(angle, load): 'no scan' |
-        'failed'}}`` for :func:`~morphometry.cartilage.deformation_plot.plot_knee_deltas`.
+        'failed'}}`` for :func:`~morphometry.cartilage.deformation_plot.plot_knee_deltas`;
+        ``hotspot_settings`` ``{'neighbourhood_mm', 'edge_margin_mm'}``, quoted in its caption.
     """
     out = {'subregion_rows': [], 'hotspot_rows': [], 'registration_rows': [], 'failures': [],
            'maps': {}, 'hotspots': {}, 'panel_titles': {}}
@@ -787,6 +788,9 @@ def process_knee(knee: str, measurements: Dict[tuple, dict], grid_mm: float = 1.
                                  or rotation > MAX_ROTATION_CHANGE_DEG)))
         out['hotspots'][bone] = hotspots
         out['panel_titles'][bone] = titles
+    # Quoted in the figure captions, so a figure states the search it shows.
+    out['hotspot_settings'] = {'neighbourhood_mm': neighbourhood_mm,
+                               'edge_margin_mm': edge_margin_mm}
     return out
 
 
@@ -813,7 +817,7 @@ def write_knee_figures(knee: str, result: dict, out_dir: Path) -> List[str]:
         try:
             figure = plot_knee_deltas(maps, knee, hotspots=result['hotspots'][bone],
                                       panel_titles=result['panel_titles'][bone],
-                                      path=str(path))
+                                      path=str(path), **result.get('hotspot_settings', {}))
             plt.close(figure)
         except Exception as error:
             message = f'{type(error).__name__}: {error}'
@@ -1773,7 +1777,12 @@ def cohort_stage(args: argparse.Namespace, context: dict,
         try:
             figure = plot_cohort_hotspots(cohort['hotspot_rows'], bone,
                                           path=str(out_dir / f'{bone}_hotspots_cohort.png'),
-                                          anatomical=bool(laterality))
+                                          anatomical=bool(laterality),
+                                          neighbourhood_mm=getattr(args, 'neighbourhood_mm',
+                                                                   3.0),
+                                          edge_margin_mm=getattr(
+                                              args, 'edge_margin_mm',
+                                              DEFAULT_HOTSPOT_EDGE_MARGIN_MM))
             plt.close(figure)
         except Exception as error:  # a figure never costs the tables or the report
             log.error('%s cohort hotspot figure failed: %s: %s', bone, type(error).__name__,

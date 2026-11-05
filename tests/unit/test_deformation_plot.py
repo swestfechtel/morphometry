@@ -126,3 +126,43 @@ def test_axis_and_colour_bar_labels_name_patient_right_and_the_one_sided_thickne
         bars = [a.get_ylabel() for a in fig.axes if not a.get_title() and a.get_ylabel()]
         assert bars and all('cAB→AC' in label for label in bars)
         plt.close(fig)
+
+
+def _figure_text(fig):
+    return '\n'.join(t.get_text() for t in fig.texts)
+
+
+def test_knee_caption_explains_sign_scale_and_search_settings():
+    """The caption under the panels states the sign of delta, the scale and the hotspot search."""
+    fig = plot_knee_deltas(_maps(), 'K', neighbourhood_mm=4.0, edge_margin_mm=1.5)
+    text = _figure_text(fig).replace('\n', ' ')
+    assert 'Δ < 0 (BLUE) = cartilage THINNER' in text
+    assert 'Δ = thickness(this scan) − thickness(reference)' in text
+    assert 'over 4 mm' in text and 'at least 1.5 mm' in text
+    assert 'LT / RT' in text  # tibial abbreviations
+    text = _figure_text(plot_knee_deltas(_maps('femur'), 'K')).replace('\n', ' ')
+    assert 'trochlear notch' in text and 'LF / RF' in text
+
+
+def test_reference_panel_names_subregions_and_no_data_is_grey():
+    from morphometry.cartilage.deformation_plot import NO_DATA_GREY, region_display_name
+    from matplotlib.colors import to_rgba
+    fig = plot_knee_deltas(_maps(), 'K')
+    ref = _panel(fig, '30° unloaded')
+    # codes 0 and 1 of the synthetic map are 'clt' and 'ilt'
+    assert sorted(t.get_text() for t in ref.texts) == ['cLT', 'iLT']
+    assert not _panel(fig, '60° unloaded').texts
+    assert _panel(fig, '60° unloaded').get_facecolor() == to_rgba(NO_DATA_GREY)
+    assert region_display_name('iclf') == 'icLF' and region_display_name('alf') == 'aLF'
+    femur_ref = _panel(plot_knee_deltas(_maps('femur'), 'K'), '30° unloaded')
+    assert sorted(t.get_text() for t in femur_ref.texts) == ['cc', 'ic']  # thirds shortened
+
+
+def test_cohort_whole_bone_hotspot_is_a_ring_drawn_last_and_caption_present():
+    rows = [dict(angle=60, load='belastet', bone='tibia', compartment=c, map_x_mm=1.0, map_y_mm=2.0)
+            for c in ('both', 'left')]
+    fig = plot_cohort_hotspots(rows, 'tibia', neighbourhood_mm=3.0, edge_margin_mm=2.0)
+    ax = _panel(fig, '60° loaded')
+    last = ax.collections[-1]
+    assert len(last.get_facecolors()) == 0 or last.get_facecolors()[0][3] == 0  # hollow
+    assert 'ONE KNEE' in _figure_text(fig)
