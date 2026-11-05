@@ -32,7 +32,6 @@ from morphometry.measurements.femur import _proximal_angle
 
 from scipy.ndimage import center_of_mass, label, map_coordinates
 from scipy.spatial import KDTree
-from scipy.stats import zscore
 from typing import Sequence, Tuple, Optional
 from skimage.measure import find_contours
 from sklearn.cluster import KMeans

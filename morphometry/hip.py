@@ -17,7 +17,6 @@ from morphometry import geometry as G
 
 from scipy.ndimage import center_of_mass, label, rotate
 from scipy.spatial import KDTree
-from scipy.stats import zscore
 from typing import Tuple, Optional
 from skimage.measure import find_contours
 from sklearn.cluster import KMeans
@@ -216,6 +215,87 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     diameter by :func:`_femoral_head_slab_bound` so a column that stays inside bone past
     the head cannot drag neck and shaft into the sphere fit.
 
+    **The slab starts at the topmost slice holding a femur voxel, with nothing skipped.** It used
+    to try to skip a top-of-head slice with "too few mask points" by z-scoring the per-slice voxel
+    counts over the array's **full** z extent -- one zero per empty slice -- and advancing while the
+    first slice's ``|z| > 2``. That guard was removed (2026-11-05) rather than corrected, and the
+    reason is a property of the statistic, not of our cohorts.
+
+    **Its trigger is anti-correlated with its stated purpose.** Write ``f`` for the fraction of the
+    array's z extent that holds femur and ``c^2 = 1 + CV^2`` for the normalised second moment of
+    the non-empty slice areas. For a near-empty first slice the z-score is
+    ``|z| = sqrt(f) / sqrt(c^2 - f)``, so the guard fires iff ``f > 0.8 * c^2``.
+
+    That form holds only while the apex slice is small against the mean slice area, and **slice
+    thickness is what decides whether it does**. At 1 mm (NaKo) the top-of-head slice is a thin cap
+    at a median 4.1% of the mean area, the assumption holds, and the form predicts the true
+    ``|z|`` to within a median +4.2% and gets the fire / no-fire verdict right on 112 of 120 halves.
+    At 10 mm (Augsburg) that first slice already cuts a median 52% of the mean area, the assumption
+    fails outright, and the form over-predicts by a median +108% (verdict right on 78 of 100). The
+    phantom in ``tests/unit/test_femoral_head_slab_start.py`` sits in between, at 95 voxels, where
+    it over-predicts by 8% and misjudges one padding. So use it on thin-sliced data and compute the
+    statistic directly on thick-sliced data.
+
+    The guard fires most readily when the slice areas are **uniform** (``c^2`` near 1) -- when no
+    slice is an outlier and there is nothing to reject -- and is suppressed exactly when the areas
+    genuinely vary, which is when an outlier top slice might really exist.
+
+    That anti-correlation is measured, not just algebra. Holding ``f = 1`` (the most favourable case
+    for firing) over 56 slices with the first one at 6% of the mean of the rest -- a genuine
+    top-of-head cap, exactly what the guard was written to reject -- the first slice's ``|z|`` falls
+    monotonically as the remaining areas are made more variable: 7.42 / 6.01 / 4.24 / 3.15 / 2.49 /
+    2.06 / 1.56 / 1.18 at a slice-area CV of 0.00 / 0.10 / 0.20 / 0.30 / 0.40 / 0.50 / 0.70 / 1.00
+    (lognormal areas; a linear ramp gives 7.42 / 5.76 / 3.89 / 2.82 / 2.19 / 1.78 / 1.55 / 1.55).
+    So the apex cap is flagged when the stack is featureless and goes unflagged once the stack has
+    any real spread -- the opposite of an outlier test.
+
+    And whichever side of the threshold a scan falls on is decided partly by ``f``, i.e. **by the
+    field of view rather than by the anatomy**: empty slices drag the mean down and inflate the
+    standard deviation, so padding an array switches the guard off and cropping it switches the
+    guard on. That half of the argument needs no statistics at all.
+
+    **What that cost in practice.** Trimming the empty leading and trailing z slices -- which
+    removes no labelled voxel and must therefore change nothing -- moved the centre by more than
+    1e-9 mm on 108 of the 120 NaKo halves (none of the 120 was bitwise exact), by a median 0.26 and
+    up to 1.96 mm. Removing the guard is **bit-identical on every half measured**: the centre and
+    radius match the pre-change code exactly on all 220 -- the 120 NaKo sample halves (isotropic
+    path) and the 100 Augsburg reader-study halves (consensus path) -- so no golden and no cohort
+    row moves.
+
+    That bit-identity is a measured result on those 220, **scoped to the frames production uses and
+    not a structural guarantee**: the guard fires on 0 of them, but it is not inert by construction.
+    The direct evidence is the first femur slice's ``|z|`` against the threshold of 2: in the
+    as-given frames it maxes at 0.847 on NaKo and 1.325 on Augsburg, so neither fires. **Trim the
+    empty slices and NaKo does**: its ``|z|`` rises to a median 2.466 (max 3.307) and the guard
+    fires on 108 of 120 halves, where Augsburg's rises only to a median 0.904 and fires on 2 of 100.
+    Removal moves the NaKo centre there by a median 0.265 and up to 1.960 voxel. So "zero movement"
+    is a property of how much empty z these cohorts carry, not of the code -- which is the argument
+    *for* removing it.
+
+    Note what that rules out: a tight crop **alone** is sufficient on 1 mm isotropic data, because
+    NaKo's ``c^2`` is already a median 1.155 and 116 of its 120 halves sit inside the firing regime
+    once trimmed. It is not sufficient at 10 mm, where the slice areas vary enough to hold ``c^2``
+    up. Whether cropping is enough is therefore a question about the cohort's slice thickness, and
+    on thin-sliced data the answer is yes.
+
+    **Reachability of the firing configuration is a mechanism claim, not a measurement.**
+    ``api/ingest/dicom.py``'s ``_detect_slabs`` / ``_split_volume`` cut an ingested series at
+    position gaps and changepoints, so a slab the femur nearly fills -- the firing configuration --
+    is producible there; no such volume exists locally to test, so this is reasoning about the
+    mechanism and is labelled as such. It is also **bounded**: that path reaches the non-isotropic
+    consensus fit, where the slab start only seeds a refit that re-converges, and removal there
+    moves the centre by at most 0.0195 voxel even on the halves where the guard does fire. The
+    large numbers belong to the isotropic path, where ``layer_high`` delimits the point cloud handed
+    to ``sphere_fit`` directly. The phantom in ``tests/unit/test_femoral_head_slab_start.py`` is in
+    the firing regime, which is why it fails against the old code.
+
+    Whether a tiny top-of-head slice *should* be skipped is a separate, open question. Correcting
+    the statistic instead (z-scoring over the non-empty slices only) is a different measurement,
+    not a better one -- it moves 108 of the 120 NaKo halves by a median 0.26 mm, with no evidence
+    that the resulting centre is more accurate -- so it would need its own accuracy case, the
+    natural check being the top-slice full-contour circle fits that validated the consensus centre.
+    Do not reinstate a guard whose only support is that the old one existed.
+
     For non-isotropic images the sphere is fitted with :func:`_fit_femoral_head_consensus`, in
     millimetres from ``spacing``. Without ``spacing`` the geometry is derived from ``x_ratio``
     alone, i.e. voxels of ``(1, 1, x_ratio)`` with the in-plane voxel taken as 1 mm (exact for 1 mm
@@ -287,16 +367,12 @@ def get_femoral_head_center(segmentation_mask: np.ndarray, side: str = 'left', s
     contour_pts = get_contour_points(segmentation_mask)
 
     # get highest layer with a mask point, its centroid
-    # and lowest layer with mask point on this centroid
+    # and lowest layer with mask point on this centroid. Nothing is skipped here: the former
+    # z-score guard z-scored the per-slice voxel counts over the array's full z extent, so whether
+    # it fired depended on the number of EMPTY slices, and it fired most readily when the slice
+    # areas were uniform -- when there was no outlier to reject. See the docstring before adding
+    # any top-slice rejection back.
     layer_high = np.amin(contour_pts[:, 2])
-    layer_sizes = np.zeros(segmentation_mask.shape[2])
-    for i in range(segmentation_mask.shape[2]):
-        layer = segmentation_mask[:, :, i]
-        layer_sizes[i] = np.sum(layer)
-
-    layer_zscores = np.abs(zscore(layer_sizes))
-    while layer_zscores[layer_high] > 2:
-        layer_high += 1  # go to the next layer if the current one has too few mask points, i.e. its size is more than 2 standard deviations away from the mean of all slices
 
     # if layer_high has two connected components, choose the larger one
     label_mask, num_features = label(segmentation_mask[:, :, layer_high])
