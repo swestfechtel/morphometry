@@ -38,10 +38,11 @@ against the pre-change code, which is the only reason they are worth having.
 **What is still open.** A translation is not a rotation: the line is read in the index frame, where
 "posterior" is the largest coronal index, so an obliquely acquired knee still gives a different
 line, and the layer is still chosen by convex area per index slice. Position *and rotation*
-dependence is task #9, and the one strict xfail left in ``test_head_centre_translation.py``
-(Lee torsion, hip-side, through ``contour_femoral_neck``'s slice rotations) records what remains of
-it. The alpha angle was the second of those until its oblique reslice was rewritten to sample the
-section on a grid anchored to the head centre; see ``test_alpha_angle_invariance.py``.
+dependence is task #9, whose *translation* half is now closed everywhere that carried it --
+``test_head_centre_translation.py`` holds no expected failure any more: the alpha angle's oblique
+reslice samples its section on a grid anchored to the head centre (see
+``test_alpha_angle_invariance.py``), and the Lee neck notch its raster likewise (see
+``tests/unit/test_femoral_neck_notch.py``). The rotation half is untouched by any of them.
 """
 import numpy as np
 import pytest

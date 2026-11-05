@@ -26,6 +26,13 @@ CASES = [
 ]
 
 # Lee under-reads these readers by ~9 degrees on average across the cohort, so allow a loose margin.
+# **The headroom is no longer comfortable on both cases.** The task #9 notch fix moved the two in
+# OPPOSITE directions against the reader mean: PA001023 left 19.886 -> 25.607 (reader mean 27.20, so
+# headroom 4.69 -> 10.41 degrees) and PA000147 right 21.488 -> 15.766 (reader mean 24.85, headroom
+# 8.64 -> 2.92). The second now sits 2.9 degrees from failing this assertion, so a further change to
+# the Lee path is likely to break it; re-derive the margin then rather than widening it. That the two
+# moved in opposite directions is also why the reader comparison is no evidence either way here --
+# backlog task #2 closed the premise that the Lee-minus-reader gap measures a pipeline defect.
 READER_TOLERANCE = 12.
 
 

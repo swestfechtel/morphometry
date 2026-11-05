@@ -2,90 +2,398 @@ import math
 import numpy as np
 import nibabel as nib
 from matplotlib import pyplot as plt
-from scipy.ndimage import center_of_mass, label
+from scipy.ndimage import center_of_mass, label, map_coordinates
 from scipy.optimize import curve_fit
 from skimage.measure import find_contours
 from morphometry.hip import get_femoral_head_center, get_femoral_head_center_ct
-from morphometry.utils import rotate_mask_dorsal_points, find_notch, transform_point, points_on_circle, \
-    get_contour, circle_fit, draw_circle, draw_line, extract_connected_components_2d
+from morphometry.utils import find_notch, points_on_circle, \
+    get_contour, circle_fit, draw_circle, draw_line, extract_connected_components_2d, \
+    vec_parallel_rotation_angle
 from morphometry.image_io import Image, Segmentation, reflect_image_left_right, split_ct_image
 from morphometry import constants as C
-from morphometry.geometry import mirror_index_x, validate_in_plane_isotropy
+from morphometry.geometry import mirror_index_x, rotate_indices, validate_in_plane_isotropy
 from typing import Tuple
+
+#: Refinement passes of the dorsal frame the femoral-neck notch is searched in (see
+#: :func:`_dorsal_frame_angle`). Two, because the replaced implementation rotated the section twice,
+#: re-measuring the frame on the result of the first rotation; it is an iterative refinement of one
+#: frame and not two different frames, so the count is part of the published construction rather
+#: than a tunable.
+_NECK_FRAME_PASSES = 2
+
+#: Voxels either side of the section's own sagittal centre of mass that are excluded when the second
+#: dorsal point is picked, so that the two points cannot come from the same side. The coordinate
+#: reading of the ``mask[thresh + 3:]`` / ``mask[:thresh - 3]`` slicing of the replaced
+#: ``utils.dorsal_points_rotation_angle`` call, including its one-voxel asymmetry between the two
+#: sides (see :func:`_dorsal_frame_angle`, which reproduces it deliberately).
+_NECK_FRAME_HALF_GAP = 3
+
+#: Voxels of zero margin left around the anatomy when the notch section is sampled
+#: (:func:`_sample_section_in_frame`). One is enough and is load-bearing: ``utils.get_contour`` is a
+#: ``binary_erosion`` with the default ``border_value=0``, so a mask voxel on the window border
+#: would be reported as contour and invent a straight edge for the notch search. With
+#: nearest-neighbour sampling a cell returns a mask voxel only if that voxel is within half a voxel
+#: of it on every input axis, i.e. within ``0.5 * (|cos a| + |sin a|) <= 0.708`` of it along either
+#: axis of the rotated frame, which is less than one cell.
+_NECK_SECTION_MARGIN = 1
+
+
+def _most_dorsal_coordinate(points: np.ndarray) -> np.ndarray:
+    """
+    Return the most dorsal (posterior) of a set of 2D coordinates.
+
+    The coordinate-space reading of :func:`morphometry.utils.get_dorsal_mask_point` with
+    ``knee=False``: the point with the greatest coronal coordinate, and where several points tie for
+    it, the *mean* of their sagittal coordinates floored to an integer. (``get_dorsal_mask_point``
+    takes the contour points, but every mask point at the section's greatest coronal coordinate is a
+    contour point by definition, so the two see the same set.)
+
+    **The floor is the published behaviour, preserved on purpose.** It coarsens a landmark that
+    indexes no array, which this repo would normally keep continuous, and once the frame has been
+    rotated the tie is a single point whose sagittal coordinate it simply truncates. It is kept so
+    that the first pass of :func:`_dorsal_frame_angle` reproduces the replaced implementation
+    bitwise, which is what makes the movement of this change attributable to the one mechanism it
+    is about. ``floor`` rather than the original's ``int()``: the two agree on the positive index
+    coordinates the original saw, and unlike truncation towards zero ``floor`` commutes exactly with
+    an integer translation, so the invariance is provable rather than merely observed. The caller
+    passes coordinates *relative* to an integer origin, where this floor is the same quantity as the
+    absolute one the original took, by ``floor(x + m) == floor(x) + m``.
+
+    :param points: An Nx2 array of (sagittal, coronal) coordinates; must not be empty.
+    :return: The most dorsal point as a float ``(sagittal, coronal)`` pair, its sagittal coordinate
+        integral.
+    :raises RuntimeError: If ``points`` is empty, which means the section has no mask point on that
+        side of its own centre of mass.
+    """
+    points = np.asarray(points, dtype=float)
+    if points.size == 0:
+        raise RuntimeError('No mask points to take the dorsal femoral-neck landmark from; the '
+                           'section does not reach past its own centre of mass.')
+    most_dorsal = points[:, 1].max()
+    tied = points[points[:, 1] == most_dorsal]
+    return np.array([np.floor(tied[:, 0].mean()), most_dorsal])
+
+
+def _dorsal_frame_angle(points: np.ndarray, origin: np.ndarray) -> float:
+    """
+    Return the rotation that levels the two dorsal points of a proximal-femur section.
+
+    The frame the femoral-neck notch is searched in: the section is turned until the line between
+    its most dorsal (posterior) point and the most dorsal point on the other side of its sagittal
+    centre of mass is parallel to the sagittal axis. The frame is then re-measured in that frame and
+    the rotations accumulate (:data:`_NECK_FRAME_PASSES` passes), which is the refinement the
+    replaced implementation performed by rotating the *image* twice.
+
+    **It is carried out in coordinates, which is what makes it a function of the anatomy.** The
+    replaced implementation obtained the second pass's input by resampling the section with
+    ``skimage.transform.rotate(mask, -angle, resize=True) > 0``, so the second angle was measured on
+    a re-binarised raster whose grid was sized and placed by the *array's* bounds. Measured over the
+    100 Augsburg reader-study halves under four pads of the section (which shift every index and
+    move no anatomy), the first pass was already exactly invariant on 100 of 100, while the second
+    reproduced itself on only 9 of 100, by a median 1.40 and up to 21.19 degrees. Rotating
+    coordinates is exact instead: with an integer ``origin``, ``points - origin`` is exact integer
+    arithmetic, so a translated section reproduces every rotated coordinate bitwise, and every
+    quantity below is either such a coordinate or a floor of one, which commutes with an integer
+    translation. The accumulated angle is therefore invariant by construction, not by measurement
+    (observed: exact on 400 of 400 probes).
+
+    **The pass is a faithful replica of ``utils.dorsal_points_rotation_angle``, including two
+    quirks, so that the first pass stays bitwise identical** (verified on all 100 reader-study
+    halves) and the whole movement of this change belongs to the resampling it removes:
+
+    * the exclusion band around the centre of mass is asymmetric by one voxel
+      (``>= centre + 3`` against ``<= centre - 4``), because it came from the array slices
+      ``mask[centre + 3:]`` and ``mask[:centre - 3]``;
+    * the far-side point is reported **three voxels medial of where it is**. The replaced code
+      sliced the mask at ``centre + 3`` and then added back ``centre`` rather than ``centre + 3``,
+      so on the branch that takes a far-side point (and only on that branch) the dorsal line is
+      sheared by three voxels. That is a real defect of the published construction, but it is an
+      index-frame-*invariant* one -- a constant shift, whatever the array bounds -- so it is out of
+      scope here and preserved rather than silently fixed. Measured: removing it moves the Lee
+      torsion on 13 of the 100 Augsburg reader-study halves, by a median 1.15 and up to 10.34
+      degrees (p90 over all 100: 0.62). It wants its own backlog item.
+
+    The passes iterate rather than reach a fixed point -- the three-voxel shear above is what denies
+    them one -- which is why their count is part of the construction and not a convergence
+    criterion. Measured on the 100 halves: the first pass turns the frame by a median 23.47 degrees,
+    the second by a median 3.46 (p90 16.68, max 42.89), the third by 0.03 (p90 0.62, max 16.64) and
+    the fourth by 0.0008 (max 1.50), so two passes land a median 0.03, p90 0.63 and at most 14.93
+    degrees from the frame six passes converge to.
+
+    :param points: An Nx2 array of the section's mask-point ``(sagittal, coronal)`` indices.
+    :param origin: The rotation origin, as an integer ``(sagittal, coronal)`` index pair. It does
+        not enter the angle (an angle between two points is translation-invariant), but an integer
+        origin makes the arithmetic exact; see :func:`morphometry.geometry.rotate_indices`.
+    :return: The accumulated rotation angle in degrees, in
+        :func:`morphometry.utils.rotate_point`'s sense.
+    :raises RuntimeError: If the section holds no mask point past the exclusion band on the side the
+        second dorsal point has to come from.
+    """
+    angle = 0.0
+    for _ in range(_NECK_FRAME_PASSES):
+        # the coordinates stay RELATIVE to the integer origin, which is what makes the floors below
+        # exactly translation-equivariant: `floor(x + m) == floor(x) + m` for an integer `m`, so a
+        # relative floor is the same quantity as the absolute one the replaced code took -- but
+        # computed on a bitwise-invariant value. Flooring `origin + relative` instead costs one
+        # float addition whose rounding need not commute with the translation, which was measured to
+        # move the frame by up to 0.32 degrees under a bounding-box crop (and the divider by a
+        # voxel) on 3 of 100 Augsburg halves.
+        rotated = rotate_indices(points, origin, angle)
+        divider = np.floor(rotated[:, 0].mean())
+        start = _most_dorsal_coordinate(rotated)
+        if start[0] < divider:
+            end = _most_dorsal_coordinate(rotated[rotated[:, 0] >= divider + _NECK_FRAME_HALF_GAP])
+            end = end - np.array([_NECK_FRAME_HALF_GAP, 0.0])  # the replaced slice-offset arithmetic
+        else:
+            end = start
+            start = _most_dorsal_coordinate(rotated[rotated[:, 0] <= divider - _NECK_FRAME_HALF_GAP - 1])
+        angle += vec_parallel_rotation_angle(end - start, np.array([1.0, 0.0]))
+
+    return angle
+
+
+def _sample_section_in_frame(mask_layer: np.ndarray, origin: np.ndarray, angle: float) -> \
+        Tuple[np.ndarray, np.ndarray]:
+    """
+    Sample a 2D section on a grid rotated about ``origin``, sized from the anatomy's own extent.
+
+    :func:`morphometry.utils.find_notch` scans an array, so one resampling of the section is
+    unavoidable; what matters is that the grid is anchored to a landmark and not to the array. The
+    window is placed on ``origin`` and sized to cover every mask voxel's rotated position with
+    :data:`_NECK_SECTION_MARGIN` voxels of zero margin, so translating the array translates
+    ``origin`` by the same shift and every cell reads the same anatomy at the same ``(i, j)``.
+
+    What it replaced is ``utils.rotate_mask_by_angle``, i.e.
+    ``skimage.transform.rotate(mask, -angle, resize=True, preserve_range=True) > 0``, which rotates
+    about the *image* centre and sizes the output to hold the rotated array: both the grid's origin
+    and its extent moved with the array bounds (over the 100 Augsburg reader-study halves, padding
+    the section changed the rotated array's shape on 100 of 100, by a median 12 and up to 53
+    voxels). Sampling is nearest-neighbour, as the binarised interpolation it replaces effectively
+    was, and ``mode='grid-constant'`` rather than ``'constant'``: scipy's ``'constant'`` returns
+    ``cval`` for any coordinate outside the *closed* ``[0, n - 1]``, i.e. it discards the outer half
+    voxel of every axis, which is itself a dependence on where the array ends (it was measured to be
+    worth 15 degrees on a shallow-FOV case in the alpha-angle reslice).
+
+    **How strong the invariance is, stated precisely.** The window's bounds and the cell grid are
+    derived from ``rotate_indices`` about an integer origin and are therefore bitwise invariant under
+    a translation. The sampled *coordinates* are not provably so: they add the (translated) integer
+    origin to those cells, and that float addition need not commute with the translation, so a
+    coordinate sitting within rounding noise of an ``order=0`` boundary could in principle take a
+    different voxel. Measured over the 100 Augsburg reader-study halves (501,220 sampled
+    coordinates), the closest any coordinate comes to such a boundary is 2.6e-6, about eight orders
+    of magnitude above the noise, and every probe -- four pads and a bounding-box crop -- reproduces
+    the window and the notch exactly. So: bitwise on everything measured and probabilistically safe,
+    not provable. (The same caveat the alpha angle's reslice carries, for the same reason.)
+
+    :param mask_layer: A 2D binary section (non-zero inside the bone).
+    :param origin: The rotation origin and window anchor, as an integer ``(sagittal, coronal)``
+        index pair.
+    :param angle: The rotation angle in degrees, in
+        :func:`morphometry.utils.rotate_point`'s sense (the frame
+        :func:`morphometry.geometry.rotate_indices` maps into).
+    :return: ``(section, origin_cell)`` -- the sampled 2D section as ``uint8``, and the integer cell
+        of the window that ``origin`` itself landed on. A point found in the section at cell ``q``
+        lies at ``q - origin_cell`` in the rotated frame, so its distance from ``origin`` is
+        ``|q - origin_cell|`` with no inverse transform involved.
+    :raises RuntimeError: If ``mask_layer`` holds no mask voxel.
+    """
+    points = np.argwhere(np.asarray(mask_layer) > 0)
+    if points.size == 0:
+        raise RuntimeError('The femoral neck section holds no mask points.')
+
+    rotated = rotate_indices(points, origin, angle)
+    # the window covers the anatomy and the origin itself, with a zero margin all round
+    low = np.minimum(np.floor(rotated.min(axis=0)), 0.0).astype(int) - _NECK_SECTION_MARGIN
+    high = np.maximum(np.ceil(rotated.max(axis=0)), 0.0).astype(int) + _NECK_SECTION_MARGIN
+    shape = tuple(int(n) for n in (high - low + 1))
+    origin_cell = -low
+
+    cells = np.stack(np.meshgrid(np.arange(low[0], high[0] + 1), np.arange(low[1], high[1] + 1),
+                                 indexing='ij'), axis=-1).reshape(-1, 2)
+    # rotating the cells back by -angle about a zero origin inverts rotate_indices exactly
+    coords = np.asarray(origin, dtype=float) + rotate_indices(cells, np.zeros(2), -angle)
+    section = map_coordinates(np.asarray(mask_layer), coords.T, order=0, mode='grid-constant',
+                              cval=0).reshape(shape)
+    section = (section > 0).astype(np.uint8)
+
+    # the margin is load-bearing (see _NECK_SECTION_MARGIN), so it is checked rather than argued
+    assert not (section[0].any() or section[-1].any() or section[:, 0].any() or section[:, -1].any()), (
+        'The sampled femoral neck section reaches the window border, so its contour would be '
+        'invented by the erosion; the window margin is wrong.')
+    return section, origin_cell
 
 
 def contour_femoral_neck(mask: np.ndarray, contour: np.ndarray, layer_selected: int, center: np.ndarray, r: float) -> \
         Tuple[np.ndarray, np.ndarray, float, float]:
     """
     Get the contour of the femoral neck.
+
+    The notch of the selected layer is used for one thing only: the distance ``a`` from the femoral
+    head centre to it, in units of the head radius, which sets the two radii ``r_1 = (a - 0.1) * r``
+    and ``r_2 = (a + 0.1) * r`` of the ring the neck contour is kept in. Everything downstream of
+    the notch search depends on that one scalar.
+
+    **The notch is found in coordinates and in a window anchored to the head centre** (backlog task
+    #9), so ``a`` is invariant under translation of the anatomy within the array, where it used to
+    depend on where in the array the anatomy sat. It is **not** a pure function of the anatomy: the
+    window is anchored on the head centre's *rounded* cell, so the sampling grid's phase is set by
+    which integer cell the centre falls in -- see the residual at the end of this docstring. The replaced
+    implementation rotated the 2D layer twice with ``skimage.transform.rotate(..., resize=True)``,
+    found the notch in the second resampling, and mapped it back through offsets derived from that
+    array's *shape* (both ``int()``-truncated) — every one of which depends on where the bone sits
+    in the array. Decomposed over the 100 Augsburg reader-study halves under four pads of the
+    section (which shift every index while leaving every voxel's physical position untouched): the
+    first rotation angle was exactly invariant on 100 of 100, the second on 9 of 100 (median 1.40,
+    max 21.19 degrees), the rotated array's shape on 0 of 100 (median 12, max 53 voxels), the
+    mapped-back notch on 0 of 100 (median 1.21, max 10.56 voxels) and ``a`` on 0 of 100 (median
+    0.046, max 0.527; the notch figures are Euclidean norms of the error, not per-axis maxima). So
+    both mechanisms leaked and fixing only the map-back would not have been enough. End to end on the
+    production path, over eight pads (the four above at the low end of the axes and the same four at
+    the **high** end, which change no anatomy index at all and so must leave the landmark
+    *bit-identical* rather than merely shifted), the Lee neck centre was reproduced on **5 of 100**
+    halves, median 3, max **30** voxels, and the proximal axis angle on the same 5, by a median 2.06,
+    p90 6.42 and up to **20.27** degrees — against a cohort SD of 14.58 degrees for the Lee torsion
+    itself. The high-end pads are the harsher half (exact 12 of 100, max 30 voxels / 20.27 degrees,
+    against 11 of 100 and 16 / 11.42 at the low end). Now: **100 of 100 on all three, exactly**, at
+    both ends.
+
+    There is no inverse transform left, which is what removes the truncations: ``a`` is a distance,
+    distances are invariant under rotation, and the head centre is the window's own anchor, so it is
+    measured in the sampled frame as ``|notch_cell - head_cell|``.
+
+    **The construction is preserved where it could be, and two things about it did change.** Kept:
+    the two-pass dorsal frame (:func:`_dorsal_frame_angle`, whose first pass is bitwise the published
+    one), the ``percentage=0.8`` / ``thresh=5`` notch search, the ``0.9`` / ``1.1`` factors on ``a``
+    and the contour fit. Changed, and both move values:
+
+    * the **raster the notch is counted on is no longer dilated**. The replaced resampling was
+      ``skimage.transform.rotate(..., order=1, preserve_range=True) > 0``, i.e. a *linear*
+      interpolation thresholded above zero, which grows the mask by a one-voxel fringe: on the real
+      selected layers it carried a mean 1.079 times the mask area (max 1.124), where the
+      nearest-neighbour sampling here carries 1.0003 (max 1.004). ``find_notch`` thresholds the
+      *number* of empty cells across a row, so the same ``thresh=5`` is a materially easier test on a
+      dilated raster than on this one. The constant is unchanged; what it tests is not.
+    * the **second frame pass** is measured on coordinates instead of on that resampled raster. The
+      frame it lands on differs from the old one by a median 0.46, p90 1.19 and at most 18.2 degrees.
+
+    **Attributed, because the two could each have carried the movement and only one does.** Holding
+    the frame at the *old* angle and changing only the window (anchored, undilated, no map-back)
+    moves ``a`` on 100 of 100 halves by a median 0.0274 (p90 0.0897, max 0.5224); changing the angle
+    on top of that moves it on 55 of 100 by a median 0.0060 (p90 0.0551, max 0.6186), against a
+    combined median of 0.0269. So the window is what moves values at the median, and the angle only
+    in the tail -- note this is the *contribution*, not the *sensitivity*: ``a`` responds to the
+    sampling angle at roughly 0.025 per degree, so the small contribution is because the new frame
+    lands near the old one, not because the angle does not matter.
+
+    **It buys invariance, not accuracy, and one half is made worse.** There is no second cue
+    favouring the new numbers: scored against the ``a`` the *same implementation* reads on the
+    neighbouring layers of the same leg -- the within-leg corroboration that decided the condylar
+    line's case -- it is a dead heat at best. Over the 99 halves with such a neighbour, |selected
+    minus median of own neighbours| is 0.076 (median) / 0.108 (mean) for the replaced code against
+    0.089 / 0.127 here, with the new answer closer on 41 halves and further on 58. (An independent
+    measurement with a wider notion of "neighbouring eligible layer" split 49 to 50; either way
+    there is no support in the leg for calling the movement a correction.) And ``PA000346``
+    image-left is a **degradation**: its Lee
+    torsion goes 35.755 -> 3.168 degrees, the only mover above 10 degrees and the whole tail of the
+    distribution, because its ``a`` becomes 0.768 -- so ``r_1 = 0.67 r`` and the whole "neck" ring
+    sits *inside* the fitted femoral head, which is anatomically impossible, and the contour it keeps
+    is head cortex rather than neck. Its own neighbouring layer says 1.753 under both
+    implementations, so the new value is the one that disagrees with the leg. (That layer was poor
+    before this change too: its old ``a`` of 1.190 was the cohort minimum and left only 7 contour
+    points in the fit against a cohort median of 53.) An ``a < 1`` condition would catch it, by the
+    same argument as ``murphy_base_in_head``, and is deliberately **not** implemented here: 1 of 100
+    is not the prevalence evidence that gate earned its thresholds from, and turning returned values
+    into NaN rows is a separate behavioural decision.
+
+    **Residual: the grid's phase.** The window is anchored on ``np.rint`` of the head centre, so the
+    sampling grid's phase relative to the anatomy is set by which integer cell the centre rounds
+    into -- the result is a function of the anatomy *and* of that rounded cell, not of the anatomy
+    alone. Measured over the 100 halves, moving the anchor by one voxel moves ``a`` by a median
+    0.012-0.018, p90 0.038-0.047 and at most 0.366 (per direction), with the notch still resolving on
+    100 of 100 in all four: roughly half the magnitude at the median of the dependence this change
+    removes (0.027), though both tails are of the same order. It is not a
+    regression -- the replaced code had the same sensitivity with the *array* centre in place of the
+    head centre, which is exactly what made it position-dependent -- and the rounding is kept
+    deliberately, because an unrounded anchor would trade the exact integer-offset argument for
+    empirical invariance and move every Lee value a third time for a different measurement with no
+    evidence it is better. The forward-looking consequence is the useful half: **any future change to
+    the MRI femoral-head fit will move every Lee value again, at about half the scale of this one.**
+
     :param mask: 3D segmentation mask of the proximal femur.
     :param contour: contour of segmentation mask
     :param layer_selected: index of layer with femoral neck
-    :param center: center coordinates of femur head
+    :param center: center coordinates of femur head. Its in-plane part anchors the sampling window;
+        the Lee path casts it to ``int16``, and an integer anchor is what makes the rotated
+        coordinates exact (a continuous one is handled correctly, but is then invariant only to
+        floating-point noise).
     :param r: radius of femur head
-    :return: adjusted mask, contour of the femoral neck and radii of two circles around the femoral head center with
-    0.9 and 1.1 times the radius of the femoral head
+    :return: adjusted mask, contour of the femoral neck and radii of two circles around the femoral
+    head center with 0.9 and 1.1 times the radius of the femoral head
+    :raises RuntimeError: If the layer holds no mask voxel, if its dorsal frame cannot be built, or
+        if no notch is found.
     """
-    # rotate mask and find notch to regulate the radii of the spheres
-
     mask_new = mask[:, :, layer_selected].copy()
+    center_2d = np.array([center[0], center[1]], dtype=float)  # (sagittal, coronal)
 
-    rotated_mask, angle1 = rotate_mask_dorsal_points(mask_new,
-                                                     np.array(center_of_mass(mask_new)).astype(np.int16))
+    # the sampling grid is anchored to the head centre's cell, which keeps the window's offset
+    # arithmetic exact; the head centre's own sub-voxel position is carried separately below
+    anchor = np.rint(center_2d).astype(np.int64)
+    points = np.argwhere(mask_new > 0)
+    if points.size == 0:
+        raise RuntimeError('The femoral neck layer holds no mask points.')
 
-    rotated_mask, angle2 = rotate_mask_dorsal_points(rotated_mask,
-                                                     np.array(center_of_mass(rotated_mask)).astype(np.int16))
-    angle = angle1 + angle2
+    angle = _dorsal_frame_angle(points, anchor)
+    section, anchor_cell = _sample_section_in_frame(mask_new, anchor, angle)
 
-    notch_rot = find_notch(rotated_mask,
-                           percentage=0.8,
-                           thresh=5,
-                           break_after_first=True)
-    if notch_rot is None:
+    notch = find_notch(section,
+                       percentage=0.8,
+                       thresh=5,
+                       break_after_first=True)
+    if notch is None:
         raise RuntimeError('No notch found.')
 
-    rot_offset = np.array([
-        _rot_dim - _orig_dim
-        for _rot_dim, _orig_dim in zip(rotated_mask.shape, mask_new.shape)
-    ])
-    rot_center = np.array([int(
-        (rotated_mask.shape[0] - 1) / 2), int((rotated_mask.shape[1] - 1) / 2)])
-    if angle == 0:
-        notch = notch_rot
-    else:
-        notch = transform_point(notch_rot,
-                                rot_center,
-                                -angle,
-                                offset=-rot_offset / 2)
-
-    # get 2 new radii a little closer and further to the center than the notch
-    center_2d = np.array([center[0], center[1]])  # (sagittal, coronal)
-
-    a = np.linalg.norm(notch - center_2d) / r
+    # get 2 new radii a little closer and further to the center than the notch. The notch is in the
+    # rotated frame and so is the head centre (exactly at `anchor_cell` whenever the caller's centre
+    # is an integer index, as the Lee path's is); a rotation preserves distances, so `a` needs no
+    # transform back into the caller's index frame.
+    head_cell = anchor_cell + rotate_indices(center_2d[None, :], anchor, angle)[0]
+    a = np.linalg.norm(np.asarray(notch, dtype=float) - head_cell) / r
     r_1 = (-0.1 + a) * r
     r_2 = (0.1 + a) * r
 
     # mask_new = mask[layer_selected].copy()
 
-    # get contour only between the two circles on the selected layer
-    for s in range(mask.shape[0] - 1):  # all sagittal coordinates
+    # get contour only between the two circles on the selected layer. The slice bounds are CLAMPED
+    # to the array rather than guarded: the replaced code skipped a nulling outright when the ring
+    # reached past the array edge (`if center[1] + c_a < mask.shape[1]`, `if center[1] - c_a > 0`),
+    # so on an array cropped close around the hip part of the contour that the ring is supposed to
+    # cut survived into the fit, and a negative `center[1] - c_a` even wrapped the anterior slice
+    # round to null almost the whole row. Clamping is what the guards were reaching for and is a
+    # no-op wherever the ring fits: on all 100 Augsburg reader-study halves no guard fires in the
+    # production framing, so no value moves (verified end to end, torsion and endpoint identical on
+    # 100 of 100), while an in-plane crop to the mask's bounding box fires them on every half. The
+    # loop also covers the whole sagittal extent now; it used to stop at `shape[0] - 1`, leaving
+    # whatever lay in the last row uncut, which is the same kind of array-bounds dependence (it too
+    # is a no-op on all 100 halves -- the ring never reaches that row in the production framing).
+    coronal_extent = mask.shape[1]
+    for s in range(mask.shape[0]):  # all sagittal coordinates
         if r_2 ** 2 - (s - center[0]) ** 2 >= 0:
             c_a = int(round(math.sqrt(r_2 ** 2 - (s - center[0]) ** 2)))
-            if center[1] + c_a < mask.shape[1]:
-                contour[s, center[1] + c_a:, layer_selected] = 0
-                mask_new[s, center[1] + c_a:] = 0  # mask_new is 2D
-            if center[1] - c_a > 0:
-                contour[s, :center[1] - c_a, layer_selected] = 0
-                mask_new[s, :center[1] - c_a] = 0
+            posterior = min(center[1] + c_a, coronal_extent)
+            anterior = max(center[1] - c_a, 0)
+            contour[s, posterior:, layer_selected] = 0
+            mask_new[s, posterior:] = 0  # mask_new is 2D
+            contour[s, :anterior, layer_selected] = 0
+            mask_new[s, :anterior] = 0
         else:
             contour[s, :, layer_selected] = 0
             mask_new[s] = 0
 
         if r_1 ** 2 - (s - center[0]) ** 2 >= 0:
             c_b = int(round(math.sqrt(r_1 ** 2 - (s - center[0]) ** 2)))
-            if center[1] - c_b > 0 and center[1] + c_b < mask.shape[1]:
-                contour[s, center[1] - c_b:center[1] + c_b, layer_selected] = 0
-                mask_new[s, center[1] - c_b:center[1] + c_b] = 0
+            inner_low, inner_high = max(center[1] - c_b, 0), min(center[1] + c_b, coronal_extent)
+            contour[s, inner_low:inner_high, layer_selected] = 0
+            mask_new[s, inner_low:inner_high] = 0
 
     return mask_new, contour, r_1, r_2
 
@@ -112,6 +420,32 @@ def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarra
     the fitted direction reaches the angle: the returned point is the head centre displaced 80
     voxels along it, and the torsion composition aligns the axial coordinate, so the 80 and the
     returned ``layer_selected`` do not enter the result.
+
+    **Index-frame invariant as of task #9, except for the layer choice.** Padding the hip half
+    (which shifts every index and moves no anatomy) left the reported axis unchanged on only 5 of the
+    100 Augsburg reader-study halves while the notch was read off a rotated resampling of the layer;
+    with :func:`contour_femoral_neck`'s read-out fixed it is unchanged on 100 of 100, at both ends of
+    every axis. An in-plane crop to the femur's own bounding box is the harder probe, and the clamped
+    ring bounds (see :func:`contour_femoral_neck`) take it from **3 of 96** measurable halves to
+    **86 of 96**. The remaining 10 are attributed and are not the notch -- given the same selected
+    layer and crop-corrected landmarks the notch frame, the notch cell and ``a`` are exact on 100 of
+    100:
+
+    * on **8 of the 10** the crop selects a **different layer**, because the loop below is itself
+      array-bounds dependent: ``points_on_circle`` silently drops the samples of its ``2 * r`` circle
+      that fall outside the array, and ``find_contours`` sees a different outline once the bone
+      touches the border. Four further halves stop resolving a notch on the cropped array for the
+      same reason. **So the crop residual is the layer selection**, a separate and pre-existing array
+      dependence of this function that the notch fix never touched: re-choosing layers would move
+      values, so it is left as its own backlog item.
+    * the other **2** (``PA000012`` image-right, ``PA000667`` image-left, 0.68 and 0.67 degrees, one
+      quantisation step of the reported endpoint) are the bone touching the array border, where
+      ``utils.get_contour``'s ``binary_erosion`` (``border_value=0``) reports the border row as
+      contour and adds points to the fit below. Both are exact with a one-voxel margin round the
+      bounding box, which is what identifies the cause.
+
+    None of this is realised in production: the guards that the clamp replaced fired on 0 of the 100
+    halves in the production framing, and no production caller crops in plane.
 
     **Being a proximal landmark, this reads systematically LOWER than Murphy, and that is
     anatomy rather than error.** Schock et al.'s own radiologists measured 16.1 deg by the Lee
@@ -166,22 +500,17 @@ def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarra
                        center_fn[0]) ** 2 + (contour_pts_l[1] - center_fn[1]) ** 2
     r_3 = math.sqrt(np.median(distance_center)) * 1.5
 
-    x = []
-    y = []
     # get contour also only with small distance to center_fn on the selected layer
     # basically what this does is draw a circle with a certain radius around center_fn and exclude all contour points
-    # that are outside of that circle
-    for s in range(segmentation_mask.shape[0] - 1):  # all sagittal coordinates
+    # that are outside of that circle. As in ``contour_femoral_neck``, the slice bounds are clamped
+    # to the array instead of the nulling being skipped when the circle reaches past its edge.
+    coronal_extent = segmentation_mask.shape[1]
+    for s in range(segmentation_mask.shape[0]):  # all sagittal coordinates
         if r_3 ** 2 - (s - center_fn[0]) ** 2 >= 0:  # if less than r_3 from center_fn
             c_a = int(round(math.sqrt(r_3 ** 2 - (s - center_fn[0]) ** 2)))
-            if center_fn[1] + c_a < segmentation_mask.shape[1]:  # if coronal coordinate of center_fn + c_a is within the mask, null contour points posterior to that
-                contour[s, center_fn[1] + c_a:, layer_selected] = 0
-                x.append(s)
-                y.append(center_fn[1] + c_a)
-            if center_fn[1] - c_a > 0:  # if coronal coordinate of center_fn - c_a is within the mask, null contour points anterior to that
-                contour[s, :center_fn[1] - c_a, layer_selected] = 0
-                x.append(s)
-                y.append(center_fn[1] - c_a)
+            # null the contour points posterior and anterior of the circle on this row
+            contour[s, min(center_fn[1] + c_a, coronal_extent):, layer_selected] = 0
+            contour[s, :max(center_fn[1] - c_a, 0), layer_selected] = 0
         else:
             contour[s, :, layer_selected] = 0
 

@@ -5,6 +5,7 @@ from scipy.ndimage import center_of_mass
 from sklearn.decomposition import PCA
 from morphometry.utils import get_layer_with_biggest_convex_area, find_notch, \
     dorsal_points_rotation_angle, extract_connected_components_2d
+from morphometry.geometry import rotate_indices
 from morphometry.image_io import Segmentation
 from typing import Tuple
 from matplotlib import pyplot as plt
@@ -77,30 +78,6 @@ CONDYLAR_POSTERIOR_TIE_VOXELS = 0.5
 #: whichever came out smaller would reintroduce an index-frame dependence (see the tie-break in
 #: :func:`get_condylar_tangent_points`).
 CONDYLAR_TANGENT_TIE_DEG = 1e-9
-
-
-def rotate_indices(points: np.ndarray, origin: np.ndarray, angle: float) -> np.ndarray:
-    """
-    Rotate 2D index coordinates about an origin, in the sense of :func:`morphometry.utils.rotate_point`.
-
-    The vectorised equivalent of calling :func:`morphometry.utils.rotate_point` on every row, and
-    the coordinate-space equivalent of :func:`morphometry.utils.rotate_mask_by_angle`: a mask point
-    ``p`` of an image rotated by ``angle`` lands at ``R(angle) @ (p - c)``, with
-    ``R(a) = [[cos a, sin a], [-sin a, cos a]]`` and ``c`` the array centre. Unlike the image
-    rotation this is exact and loses nothing, and the result is returned relative to ``origin``
-    rather than re-indexed into an array of a new shape.
-
-    :param points: An Nx2 array of (sagittal, coronal) coordinates.
-    :param origin: The centre of the rotation, as (sagittal, coronal). The result is expressed
-        relative to it, so ``origin`` itself maps to ``(0, 0)``.
-    :param angle: The rotation angle in degrees.
-    :return: An Nx2 float array of rotated coordinates, relative to ``origin``.
-    """
-    radians = np.deg2rad(angle)
-    cos, sin = np.cos(radians), np.sin(radians)
-    rotation = np.array([[cos, sin], [-sin, cos]])
-    offsets = np.asarray(points, dtype=float) - np.asarray(origin, dtype=float)
-    return offsets @ rotation.T
 
 
 def get_condylar_tangent_points(mask_layer: np.ndarray, divider: np.ndarray, angle: float) -> Tuple[

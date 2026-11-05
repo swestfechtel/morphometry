@@ -6,16 +6,18 @@ centre by exactly the padding, keep its radius, and leave the measurements built
 The former head fit trimmed the slab at ``0.9`` times an absolute voxel index, so none of that held.
 
 Scope: the head centre and radius (both image sides, x / y / z), and, with the knee left in place,
-Murphy femoral torsion, femoral anteversion and CCD (x / y). The knee condylar line **follows the
-shift as of task #5** (``knee.get_knee_reference_line`` now finds its endpoints in coordinates
-instead of reading them off a resampled rotated section) and the **alpha angle is invariant as of
-the oblique-reslice fix** (``measurements.hip._reslice_femoral_neck_section`` samples the neck
-section on a grid anchored to the head centre instead of slicing a
-``scipy.ndimage.rotate(..., reshape=True)`` of the whole volume), so the two probes below that used
-to be strict xfails are ordinary tests. Lee torsion still depends on the position, through the
-slice rotations about the image centre in ``contour_femoral_neck``
-(``utils.rotate_mask_dorsal_points`` / ``rotate_mask_by_angle``); it stays pinned as an expected
-failure until that is redesigned (task #9).
+Murphy femoral torsion, femoral anteversion, CCD (x / y), the knee condylar line, the alpha angle
+and Lee femoral torsion. **Nothing here is an expected failure any more**, which closes the task #9
+family: the knee condylar line followed the shift as of task #5
+(``knee.get_knee_reference_line`` finds its endpoints in coordinates instead of reading them off a
+resampled rotated section), the alpha angle as of the oblique-reslice fix
+(``measurements.hip._reslice_femoral_neck_section`` samples the neck section on a grid anchored to
+the head centre instead of slicing a ``scipy.ndimage.rotate(..., reshape=True)`` of the whole
+volume), and Lee torsion as of the neck-notch fix (``femur._dorsal_frame_angle`` accumulates the
+dorsal frame in coordinates and ``femur._sample_section_in_frame`` samples the notch raster on a
+grid anchored to the head centre's cell, where ``contour_femoral_neck`` used to rotate the layer
+twice with ``skimage.transform.rotate(..., resize=True)`` and map the notch back through offsets
+derived from the rotated array's shape).
 """
 import nibabel as nib
 import numpy as np
@@ -92,14 +94,19 @@ def test_ccd_is_unchanged(halves, side, shift):
     np.testing.assert_allclose(after[:2], before[:2], atol=1e-4)
 
 
-# --- still position-dependent, independently of the head fit (task #9) ---------------------------
-
-TASK_9 = 'slice rotations about the image centre make this position-dependent (task #9)'
-
-
-@pytest.mark.xfail(reason=TASK_9, strict=True)
 @pytest.mark.parametrize('side', ['left', 'right'])
 def test_lee_torsion_is_unchanged(halves, side):
+    """Padding the hip leaves the Lee femoral torsion unchanged.
+
+    A strict xfail until the femoral-neck notch frame was fixed (task #9's last member): the notch
+    that sets the neck ring was found by rotating the 2-D layer twice with
+    ``skimage.transform.rotate(..., resize=True)`` and mapped back through offsets derived from that
+    array's *shape*, so the ring radii -- and with them the fitted neck axis -- depended on where the
+    hip sat in the array. Measured over the 100 reader-study halves under four pads the pre-change
+    code was exact on 11 of 100, off by a median 1.41 and up to 11.42 degrees; it is now exact on
+    100 of 100. ``tests/unit/test_femoral_neck_notch.py`` carries the frame and the window on a
+    phantom.
+    """
     hip, knee = halves['hip'][side], halves['knee'][side].array
     before = calculate_femoral_torsion(hip, knee, side, 'lee', x_ratio=halves['x_ratio'])
     for shift in IN_PLANE_SHIFTS:

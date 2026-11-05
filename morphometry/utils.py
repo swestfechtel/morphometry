@@ -4,12 +4,11 @@ import numpy as np
 import nibabel as nib
 import nibabel.orientations as nio
 
-from typing import Tuple, Optional
+from typing import Tuple
 from scipy.ndimage import binary_erosion, center_of_mass
 from scipy.ndimage import label as scipy_label
 from scipy.spatial import KDTree
 from scipy import optimize
-from skimage.transform import rotate
 from skimage.measure import regionprops, label
 from morphometry.bresenham import bresenhamline
 from tempfile import NamedTemporaryFile
@@ -466,11 +465,14 @@ def dorsal_points_rotation_angle(mask: np.ndarray, thresh_point: np.ndarray) -> 
     """
     Return the rotation angle that makes the two dorsal condylar points parallel to the sagittal axis.
 
-    This is the *angle* half of :func:`rotate_mask_dorsal_points`, split out so that a caller which
-    only needs the frame (and not a resampled image of it) can rotate coordinates instead of
-    resampling the mask. The two points are the most dorsal (posterior) mask point on either side
-    of ``thresh_point`` on the sagittal axis; the angle is the signed rotation, in the sense of
-    :func:`rotate_point`, that turns the line between them onto ``+x``.
+    This is the *angle* half of the former ``rotate_mask_dorsal_points``, which rotated the mask
+    itself; it was split out so that a caller which only needs the frame (and not a resampled image
+    of it) can rotate coordinates instead of resampling the mask, and the image-rotating half has
+    since been deleted along with its last caller. The two points are the most dorsal (posterior)
+    mask point on either side of ``thresh_point`` on the sagittal axis; the angle is the signed
+    rotation, in the sense of :func:`rotate_point`, that turns the line between them onto ``+x``.
+    :func:`morphometry.femur._dorsal_frame_angle` is the same construction carried out entirely on
+    coordinates, for the femoral-neck notch frame, which has to iterate it.
 
     :param mask: The 2D mask.
     :param thresh_point: A threshold point, given as (x, y), where x is the sagittal axis and y is
@@ -487,18 +489,6 @@ def dorsal_points_rotation_angle(mask: np.ndarray, thresh_point: np.ndarray) -> 
         start = get_dorsal_mask_point(mask[:thresh_point[0] - 3])
 
     return vec_parallel_rotation_angle(np.array(end) - np.array(start), np.array([1, 0]))
-
-
-def rotate_mask_dorsal_points(mask: np.ndarray, thresh_point: np.ndarray) -> Tuple[np.ndarray, Optional[float]]:
-    """
-    Rotate the mask so that a line between the most dorsal (posterior) point right and left (on the sagittal axis)
-    of the notch would be parallel to the sagittal axis.
-    :param mask: The 2D mask.
-    :param thresh_point: A threshold point, given as (x, y), where x is the sagittal axis and y is the coronal axis.
-    :return: The rotated mask and optionally the rotation angle.
-    """
-    angle = dorsal_points_rotation_angle(mask, thresh_point)
-    return rotate_mask_by_angle(mask, angle), angle
 
 
 def vec_parallel_rotation_angle(vec1: np.ndarray, vec2: np.ndarray) -> float:
@@ -521,25 +511,6 @@ def vec_parallel_rotation_angle(vec1: np.ndarray, vec2: np.ndarray) -> float:
         angle = -angle
 
     return angle
-
-
-def rotate_mask_by_angle(mask: np.ndarray, angle: float) -> np.ndarray:
-    """
-    Resample a 2D mask into the frame rotated by ``angle``, growing the array to hold all of it.
-
-    In index coordinates this is the same rotation :func:`rotate_point` applies, i.e. a mask point
-    ``p`` lands at ``R(angle) @ (p - c)`` with ``c`` the array centre and
-    ``R(a) = [[cos a, sin a], [-sin a, cos a]]`` — hence the negated angle handed to
-    :func:`skimage.transform.rotate`, whose own rotation runs the other way in ``(row, col)``.
-    Resampling is lossy (it binarises an interpolated image and the array origin moves with the
-    output shape), so prefer rotating coordinates where the rotated *image* is not itself needed.
-
-    :param mask: The 2D mask to rotate.
-    :param angle: The rotation angle in degrees, in :func:`rotate_point`'s sense.
-    :return: The rotated mask as ``uint8``, with its own (larger) shape.
-    """
-    rotated_mask = rotate(mask, -angle, resize=True, preserve_range=True) > 0
-    return rotated_mask.astype(np.uint8)
 
 
 def rotate_point(origin: np.ndarray, point: np.ndarray, angle: float, deg: bool = True) -> np.ndarray:
@@ -615,23 +586,6 @@ def sphere_fit(point_cloud: np.ndarray) -> Tuple[float, np.ndarray]:
     radius = math.sqrt(t.item())
 
     return radius, np.array([C[0], C[1], C[2]]).T[0]  # not sure why this is necessary, returns a column vector otherwise
-
-
-def transform_point(point: np.ndarray, origin: np.ndarray, angle: float, offset: np.ndarray = None) -> np.ndarray:
-    """
-    Transform a point on a layer (2D) into the rotated mask.
-    Points are given as (y, z) where y is the coronal axis and z is the sagittal axis.
-    :param point: The point to transform, given as (y, z).
-    :param origin: The origin of the rotation, given as (y, z).
-    :param angle: The angle of rotation in degrees.
-    :param offset: The offset to apply to the point after rotation, given as (y, z).
-    """
-    new_point = rotate_point(origin, point, angle)
-
-    if offset is not None:
-        new_point = new_point + offset
-
-    return new_point
 
 
 def extract_connected_components_2d(mask: np.ndarray) -> list:

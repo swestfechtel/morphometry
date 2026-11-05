@@ -231,6 +231,42 @@ def split_left_right(array: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     return array[:half], array[half:]
 
 
+def rotate_indices(points: np.ndarray, origin: np.ndarray, angle: float) -> np.ndarray:
+    """
+    Rotate 2D index coordinates about an origin, in the sense of :func:`morphometry.utils.rotate_point`.
+
+    The vectorised equivalent of calling :func:`morphometry.utils.rotate_point` on every row, and
+    the coordinate-space replacement of resampling a mask into a rotated frame: a mask point ``p``
+    of an image rotated by ``angle`` lands at ``R(angle) @ (p - c)``, with
+    ``R(a) = [[cos a, sin a], [-sin a, cos a]]`` and ``c`` the array centre. Unlike the image
+    rotation this is exact and loses nothing, and the result is returned relative to ``origin``
+    rather than re-indexed into an array of a new shape.
+
+    Both landmark searches that rotate a 2D section build their frame with this — the posterior
+    condylar tangent (:func:`morphometry.knee.get_condylar_tangent_points`, backlog task #5) and
+    the femoral neck notch (:func:`morphometry.femur.contour_femoral_neck`, task #9) — which is why
+    it lives here rather than in either region module. Rotating by ``-angle`` about a zero origin
+    inverts it, since ``R`` is orthogonal; that is how a point found in the rotated frame is mapped
+    back into the caller's index frame.
+
+    **Pass an integer ``origin`` wherever the invariance has to be exact.** With an integer origin
+    ``points - origin`` is exact integer arithmetic, so a translated array (a pad, a crop, a
+    half-split) reproduces the rotated coordinates *bitwise*; with a continuous one the invariance
+    holds only to floating-point noise.
+
+    :param points: An Nx2 array of (sagittal, coronal) coordinates.
+    :param origin: The centre of the rotation, as (sagittal, coronal). The result is expressed
+        relative to it, so ``origin`` itself maps to ``(0, 0)``.
+    :param angle: The rotation angle in degrees.
+    :return: An Nx2 float array of rotated coordinates, relative to ``origin``.
+    """
+    radians = np.deg2rad(angle)
+    cos, sin = np.cos(radians), np.sin(radians)
+    rotation = np.array([[cos, sin], [-sin, cos]])
+    offsets = np.asarray(points, dtype=float) - np.asarray(origin, dtype=float)
+    return offsets @ rotation.T
+
+
 def mirror_sagittal_coordinate(coord: float, half_extent: int) -> float:
     """Mirror a sagittal coordinate about the image midline.
 

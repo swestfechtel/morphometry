@@ -15,7 +15,7 @@ from morphometry.bresenham import bresenhamline
 from morphometry import constants as C
 from morphometry import geometry as G
 
-from scipy.ndimage import center_of_mass, label, rotate
+from scipy.ndimage import center_of_mass, label
 from scipy.spatial import KDTree
 from typing import Tuple, Optional
 from skimage.measure import find_contours
