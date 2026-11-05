@@ -102,6 +102,16 @@ Outputs (into ``-o``)
 * ``<knee>_tibia_delta.png`` / ``<knee>_femur_delta.png`` -- the 2 x 4 grid of
   :func:`~morphometry.cartilage.deformation_plot.plot_knee_deltas` (not drawn for a bone whose
   reference failed).
+* ``<knee>_<bone>_registration_residual.png`` -- the same grid showing the signed
+  bone-to-bone distance after registration (``BoneDeltaMaps.residuals``,
+  :func:`~morphometry.cartilage.deformation_plot.plot_knee_residuals`), to judge whether a Δ
+  pattern could be alignment error.
+* ``<knee>_<bone>_registration_sections.png`` -- sagittal cuts through each plate/condyle:
+  reference bone, the scan's bone at the ICP start (frames matched) and after ICP
+  (:func:`~morphometry.cartilage.deformation_plot.plot_registration_sections`).
+* ``registration_cohort.png`` -- rms residual, ICP rotation change and dropped area per
+  comparison for every registered knee, with the QC thresholds
+  (:func:`~morphometry.cartilage.deformation_plot.plot_registration_cohort`).
 * ``cohort_summary.csv`` -- :data:`SUMMARY_COLUMNS`: the ``subregion_delta`` table (units
   ``mm`` and ``%``) and the ``hotspot_frequency`` table (``compartment`` filled, ``count`` of
   ``n``).
@@ -155,7 +165,10 @@ from morphometry.cartilage.deformation import (
     COMPARISONS, COMPARTMENTS, DEFAULT_HOTSPOT_EDGE_MARGIN_MM, REFERENCE, UNMAPPED_CAUSES,
     bone_measurement, find_largest_thinning, knee_delta_maps,
 )
-from morphometry.cartilage.deformation_plot import plot_cohort_hotspots
+from morphometry.cartilage.deformation_plot import (
+    plot_cohort_hotspots, plot_knee_residuals, plot_registration_cohort,
+    plot_registration_sections,
+)
 from morphometry.cartilage.femur_regions import (
     FEMUR_REGION_KEYS, ZONE_THICKNESS_KEYS, anatomical_femur_names,
 )
@@ -794,16 +807,27 @@ def process_knee(knee: str, measurements: Dict[tuple, dict], grid_mm: float = 1.
     return out
 
 
-def write_knee_figures(knee: str, result: dict, out_dir: Path) -> List[str]:
+def write_knee_figures(knee: str, result: dict, out_dir: Path,
+                       measurements: Optional[Dict[tuple, dict]] = None) -> List[str]:
     """
-    Draw ``<knee>_tibia_delta.png`` and ``<knee>_femur_delta.png``.
+    Draw the per-knee figures of each bone.
+
+    * ``<knee>_<bone>_delta.png`` -- :func:`~morphometry.cartilage.deformation_plot.plot_knee_deltas`.
+    * ``<knee>_<bone>_registration_residual.png`` -- the bone-to-bone residual after
+      registration on the same map
+      (:func:`~morphometry.cartilage.deformation_plot.plot_knee_residuals`).
+    * ``<knee>_<bone>_registration_sections.png`` -- sagittal bone outlines before / after ICP
+      (:func:`~morphometry.cartilage.deformation_plot.plot_registration_sections`); only when
+      ``measurements`` is given, since it needs the bone surfaces.
 
     :param knee: Knee id.
     :param result: Its :func:`process_knee` result.
     :param out_dir: Output directory.
+    :param measurements: The knee's ``{(angle, load): measure_scan record}`` (for the
+        cross-section figure); ``None`` skips that figure.
     :return: The paths written (a bone whose reference failed has no map and no figure). A
         figure that cannot be drawn or saved is logged and appended to ``result['failures']``
-        with stage ``figure``; it never touches the knee's rows.
+        with stage ``figure``; it never touches the knee's rows or the other figures.
     """
     import matplotlib.pyplot as plt
 
@@ -813,21 +837,34 @@ def write_knee_figures(knee: str, result: dict, out_dir: Path) -> List[str]:
         if maps is None:
             log.warning('%s %s: no delta maps (reference failed); no figure', knee, bone)
             continue
-        path = Path(out_dir) / f'{knee}_{bone}_delta.png'
-        try:
-            figure = plot_knee_deltas(maps, knee, hotspots=result['hotspots'][bone],
-                                      panel_titles=result['panel_titles'][bone],
-                                      path=str(path), **result.get('hotspot_settings', {}))
-            plt.close(figure)
-        except Exception as error:
-            message = f'{type(error).__name__}: {error}'
-            log.error('%s %s: figure failed: %s', knee, bone, message)
-            result['failures'].append({'knee': knee, 'angle': REFERENCE[0],
-                                       'load': REFERENCE[1], 'bone': bone, 'stage': 'figure',
-                                       'error': message})
-            plt.close('all')
-            continue
-        written.append(str(path))
+        titles = result['panel_titles'][bone]
+        jobs = [
+            ('delta', lambda path: plot_knee_deltas(
+                maps, knee, hotspots=result['hotspots'][bone], panel_titles=titles,
+                path=path, **result.get('hotspot_settings', {}))),
+            ('registration_residual', lambda path: plot_knee_residuals(
+                maps, knee, panel_titles=titles, path=path)),
+        ]
+        records = measurements or {}
+        reference = (records.get(REFERENCE) or {}).get(bone)
+        if reference is not None:
+            configs = {key: rec[bone] for key, rec in records.items()
+                       if key != REFERENCE and rec is not None and rec.get(bone) is not None}
+            jobs.append(('registration_sections', lambda path: plot_registration_sections(
+                maps, reference, configs, knee, panel_titles=titles, path=path)))
+        for name, draw in jobs:
+            path = Path(out_dir) / f'{knee}_{bone}_{name}.png'
+            try:
+                plt.close(draw(str(path)))
+            except Exception as error:
+                message = f'{type(error).__name__}: {error}'
+                log.error('%s %s: %s figure failed: %s', knee, bone, name, message)
+                result['failures'].append({'knee': knee, 'angle': REFERENCE[0],
+                                           'load': REFERENCE[1], 'bone': bone,
+                                           'stage': 'figure', 'error': f'{name}: {message}'})
+                plt.close('all')
+                continue
+            written.append(str(path))
     return written
 
 
@@ -869,7 +906,7 @@ def _knee_job(arguments: tuple) -> Tuple[str, dict]:
                                      for k, r in measurements.items()},
                               grid_mm, neighbourhood_mm, max_rms_mm, edge_margin_mm)
     # Figures after, and isolated: a PNG that cannot be drawn never fails the knee's rows.
-    write_knee_figures(knee, result, out_dir)
+    write_knee_figures(knee, result, out_dir, measurements)
     return knee, result
 
 
@@ -1788,6 +1825,15 @@ def cohort_stage(args: argparse.Namespace, context: dict,
             log.error('%s cohort hotspot figure failed: %s: %s', bone, type(error).__name__,
                       error)
             plt.close('all')
+    try:
+        # Every registered comparison, flagged or not: this figure is the QC.
+        plt.close(plot_registration_cohort(
+            collect('registration_rows'), path=str(out_dir / 'registration_cohort.png'),
+            max_rms_mm=getattr(args, 'max_registration_rms', REGISTRATION_MAX_RMS_MM),
+            max_rotation_deg=MAX_ROTATION_CHANGE_DEG))
+    except Exception as error:
+        log.error('cohort registration figure failed: %s: %s', type(error).__name__, error)
+        plt.close('all')
     write_report(out_dir / DEFAULT_REPORT, args, cohort)
     write_meta(out_dir / DEFAULT_META, args, context, cohort)
     return cohort

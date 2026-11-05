@@ -80,7 +80,14 @@ whole-leg CT, plus a FastAPI service and batch-processing scripts.
   a caption under its panels explaining the setup, the sign of Δ (scan −
   reference: negative/blue = thinner), the colour scales, the markers, the axes
   and the subregion abbreviations; the per-knee reference panel names its
-  subregions, and grey marks cells with no value (white is Δ = 0). Without
+  subregions, and grey marks cells with no value (white is Δ = 0).
+  Registration figures: `<knee>_<bone>_registration_residual.png` (the signed
+  bone-to-bone distance after alignment, on the same map as the Δ figure — a Δ
+  much larger than the residual at that spot is not alignment error),
+  `<knee>_<bone>_registration_sections.png` (sagittal bone outlines through each
+  plate/condyle: reference, scan at the ICP start, scan after ICP) and
+  `registration_cohort.png` (rms residual, ICP rotation change and dropped area
+  per comparison for every knee, with the QC thresholds). Without
   `--laterality-table` all knees are pooled by patient side (assumed same side).
   The existing knee goldens and `report_knee_cartilage_cohort.py`'s quoted tables
   still use the older label set under `/home/simon/Data/dfg_knees/monai_segmentations`

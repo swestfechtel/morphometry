@@ -129,7 +129,8 @@ def test_axis_and_colour_bar_labels_name_patient_right_and_the_one_sided_thickne
 
 
 def _figure_text(fig):
-    return '\n'.join(t.get_text() for t in fig.texts)
+    # Whitespace-normalised, so a phrase can be found across the caption's line wraps.
+    return ' '.join(' '.join(t.get_text() for t in fig.texts).split())
 
 
 def test_knee_caption_explains_sign_scale_and_search_settings():
@@ -166,3 +167,44 @@ def test_cohort_whole_bone_hotspot_is_a_ring_drawn_last_and_caption_present():
     last = ax.collections[-1]
     assert len(last.get_facecolors()) == 0 or last.get_facecolors()[0][3] == 0  # hollow
     assert 'ONE KNEE' in _figure_text(fig)
+
+
+# ---- registration figures -------------------------------------------------------------------
+
+def test_residual_figure_uses_fixed_scale_and_rms_titles():
+    from morphometry.cartilage.deformation_plot import RESIDUAL_LIMIT_MM, plot_knee_residuals
+    from morphometry.cartilage.registration import RegistrationResult, RigidTransform
+    m = _maps()
+    m.residuals = {k: np.full(m.grid.shape, 0.05) for k in m.deltas}
+    key = (60, 'unbelastet')
+    m.registrations[key] = RegistrationResult(RigidTransform.identity(), 0.123, 0.1, 0.2, 100, 5, True)
+    m.rotation_change_deg[key] = 2.5
+    fig = plot_knee_residuals(m, 'K')
+    images = [im for ax in fig.axes for im in ax.get_images()]
+    assert images and {im.get_clim() for im in images} == {(-RESIDUAL_LIMIT_MM, RESIDUAL_LIMIT_MM)}
+    assert 'rms 0.12 mm' in _panel(fig, '60° unloaded').get_title()
+    text = _figure_text(fig).replace('\n', ' ')
+    assert 'Orange/brown (> 0)' in text and 'purple (< 0) = inside' in text
+
+
+def test_section_segments_of_a_sphere_cut_through_its_centre():
+    import pyvista as pv
+    from morphometry.cartilage.deformation_plot import _section_segments
+    sphere = pv.Sphere(radius=10.0, theta_resolution=80, phi_resolution=80).triangulate()
+    segs = _section_segments(sphere, np.zeros(3), np.eye(3))
+    r = np.linalg.norm(segs.reshape(-1, 2), axis=1)
+    assert len(segs) > 50 and np.allclose(r, 10.0, atol=0.05)
+    assert len(_section_segments(sphere, np.array([20.0, 0, 0]), np.eye(3))) == 0
+
+
+def test_registration_cohort_figure(tmp_path):
+    from morphometry.cartilage.deformation_plot import plot_registration_cohort
+    rows = [dict(knee=f'K{i}', angle=a, load=l, bone=b, rms_mm=0.1 * i,
+                 rotation_change_deg=float(i), dropped_fraction=0.02)
+            for i in (1, 2) for a, l in COMPARISONS for b in ('tibia', 'femur')]
+    rows.append(dict(knee='K9', angle=0, load='belastet', bone='femur', rms_mm='nan',
+                     rotation_change_deg='', dropped_fraction=None))
+    fig = plot_registration_cohort(rows, path=tmp_path / 'r.png', max_rms_mm=1.0)
+    assert (tmp_path / 'r.png').exists()
+    names = {t.get_text() for ax in fig.axes for t in ax.texts}
+    assert 'K2' in names and 'K9' not in names  # the max is named, non-finite rows skipped

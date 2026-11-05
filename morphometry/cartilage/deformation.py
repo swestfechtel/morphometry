@@ -586,6 +586,72 @@ REFERENCE_CROP_MARGIN_MM = 10.0
 _ARTICULAR_END = {'tibia': 'max', 'femur': 'min'}
 
 
+def reference_registration_surface(bone: str, reference: 'BoneMeasurement',
+                                   crop_mm: float = REGISTRATION_CROP_MM) -> pv.PolyData:
+    """
+    The fixed surface every configuration of a knee's bone is registered onto.
+
+    The reference's bone cropped to ``crop_mm + REFERENCE_CROP_MARGIN_MM`` of its articular end
+    along ``frame_axes[2]`` -- exactly what :func:`knee_delta_maps` registers onto, exposed so a
+    figure can draw the same surface.
+
+    :param bone: ``'tibia'`` or ``'femur'``.
+    :param reference: The reference scan's :class:`BoneMeasurement`.
+    :param crop_mm: Length of the configuration's crop (mm); the reference keeps
+        :data:`REFERENCE_CROP_MARGIN_MM` more.
+    :return: The cropped reference bone surface (world mm).
+    """
+    return crop_to_articular_end(reference.bone_mesh, reference.frame_axes[2],
+                                 crop_mm + REFERENCE_CROP_MARGIN_MM, _ARTICULAR_END[bone])
+
+
+def configuration_registration_start(bone: str, reference: 'BoneMeasurement',
+                                     configuration: 'BoneMeasurement',
+                                     crop_mm: float = REGISTRATION_CROP_MM
+                                     ) -> Tuple[pv.PolyData, RigidTransform]:
+    """
+    The moving surface of one configuration's registration and the ICP's initial estimate.
+
+    The moving surface is the configuration's bone cropped to ``crop_mm`` of its articular
+    end; the initial estimate maps the configuration's anatomical frame onto the reference's
+    (``RigidTransform.from_frames``). Exactly what :func:`knee_delta_maps` hands to
+    :func:`~morphometry.cartilage.registration.register_bone`, so a figure can show the pose
+    before ICP.
+
+    :param bone: ``'tibia'`` or ``'femur'``.
+    :param reference: The reference scan's :class:`BoneMeasurement`.
+    :param configuration: The configuration's :class:`BoneMeasurement`.
+    :param crop_mm: Length of the configuration's crop (mm).
+    :return: ``(moving, initial)``: the cropped configuration bone surface (its own world mm)
+        and the configuration -> reference :class:`RigidTransform` the ICP starts from.
+    """
+    initial = RigidTransform.from_frames(configuration.frame_origin, configuration.frame_axes,
+                                         reference.frame_origin, reference.frame_axes)
+    moving = crop_to_articular_end(configuration.bone_mesh, configuration.frame_axes[2],
+                                   crop_mm, _ARTICULAR_END[bone])
+    return moving, initial
+
+
+def signed_surface_distance(points: np.ndarray, surface: pv.PolyData) -> np.ndarray:
+    """
+    Signed distance (mm) of points to a surface: positive outside, negative inside.
+
+    Uses VTK's implicit poly-data distance (exact point-to-triangle distance, sign from the
+    triangles' outward winding, which :func:`~morphometry.cartilage.surface.bone_surface_mesh`
+    guarantees). Near an open edge of the surface (the FOV cut of a shaft) the sign is only
+    meaningful close to the surface, which is where registered bone lies.
+
+    :param points: ``(K, 3)`` points (world mm).
+    :param surface: All-triangle surface (world mm) with outward winding.
+    :return: ``(K,)`` signed distances (mm); empty for no points.
+    """
+    points = np.asarray(points, dtype=float).reshape(-1, 3)
+    if len(points) == 0:
+        return np.zeros(0)
+    cloud = pv.PolyData(points).compute_implicit_distance(surface)
+    return np.asarray(cloud.point_data['implicit_distance'], dtype=float)
+
+
 @dataclass
 class BoneMeasurement:
     """
@@ -881,6 +947,12 @@ class BoneDeltaMaps:
     :ivar reference_unmapped_by_cause: ``reference_dropped_fraction`` split by cause:
         ``{cause: area fraction}`` for every name of :data:`UNMAPPED_CAUSES` (all 0 for a
         tibia); the values sum to ``reference_dropped_fraction``.
+    :ivar residuals: Per configuration, ``(H, W)`` registration residual (mm) on the same
+        grid: the area-weighted mean **signed** distance of the configuration's registered
+        cartilage-covered bone (its covered tAB triangle centroids after the transform) to the
+        reference's whole bone surface, positive where the configuration's bone lies outside
+        the reference bone; ``NaN`` where none. Read it next to ``deltas``: a delta much larger
+        than the residual at the same cell is not an alignment error.
     """
     bone: str
     grid: MapGrid
@@ -895,6 +967,7 @@ class BoneDeltaMaps:
     errors: Dict[tuple, str] = field(default_factory=dict)
     reference_dropped_fraction: float = 0.0
     reference_unmapped_by_cause: Dict[str, float] = field(default_factory=dict)
+    residuals: Dict[tuple, np.ndarray] = field(default_factory=dict)
 
 
 def _rotation_angle_deg(a: np.ndarray, b: np.ndarray) -> float:
@@ -994,7 +1067,6 @@ def knee_delta_maps(bone: str, reference: BoneMeasurement,
     for key, m in [('reference', reference)] + list(configurations.items()):
         if m.bone != bone:
             raise ValueError(f'measurement {key!r} is a {m.bone}, expected a {bone}')
-    end = _ARTICULAR_END[bone]
     if bone == 'tibia':
         if reference.knee_frame is None:
             raise ValueError('the tibial reference measurement has no knee_frame')
@@ -1017,22 +1089,23 @@ def knee_delta_maps(bone: str, reference: BoneMeasurement,
                     for name in UNMAPPED_CAUSES}
     all_coords = to_map(triangle_centroids(reference.tab_mesh))
     all_areas = triangle_areas(reference.tab_mesh)
-    fixed = crop_to_articular_end(reference.bone_mesh, reference.frame_axes[2],
-                                  crop_mm + REFERENCE_CROP_MARGIN_MM, end)
+    fixed = reference_registration_surface(bone, reference, crop_mm)
 
     mapped, registrations, rotation_change, dropped, errors = {}, {}, {}, {}, {}
+    residual_values = {}
     for key, cfg in configurations.items():
         try:
-            initial = RigidTransform.from_frames(cfg.frame_origin, cfg.frame_axes,
-                                                 reference.frame_origin, reference.frame_axes)
-            moving = crop_to_articular_end(cfg.bone_mesh, cfg.frame_axes[2], crop_mm, end)
+            moving, initial = configuration_registration_start(bone, reference, cfg, crop_mm)
             result = register_bone(moving, fixed, initial)
             centroids, areas, thickness, _ = _covered_triangles(cfg)
         except (RuntimeError, ValueError, AssertionError) as error:
             errors[key] = f'{type(error).__name__}: {error}'
             continue
-        coords = to_map(result.transform.apply(centroids))
+        registered = result.transform.apply(centroids)
+        coords = to_map(registered)
         mapped[key] = (coords, thickness, areas)
+        # Distance to the reference's WHOLE bone (not the crop), so no crop edge enters.
+        residual_values[key] = signed_surface_distance(registered, reference.bone_mesh)
         registrations[key] = result
         rotation_change[key] = _rotation_angle_deg(result.transform.rotation, initial.rotation)
         dropped[key] = _dropped(coords, areas)
@@ -1050,13 +1123,15 @@ def knee_delta_maps(bone: str, reference: BoneMeasurement,
                                     all_areas)
     config_maps = {key: rasterise(grid, *value) for key, value in mapped.items()}
     deltas = {key: value - reference_map for key, value in config_maps.items()}
+    residuals = {key: rasterise(grid, mapped[key][0], residual_values[key], mapped[key][2])
+                 for key in mapped}
     return BoneDeltaMaps(bone=bone, grid=grid, reference=reference_map,
                          region_codes=region_codes, configurations=config_maps, deltas=deltas,
                          registrations=registrations, dropped_fraction=dropped,
                          reference_positions=positions, rotation_change_deg=rotation_change,
                          errors=errors,
                          reference_dropped_fraction=_dropped(ref_coords, ref_areas),
-                         reference_unmapped_by_cause=by_cause)
+                         reference_unmapped_by_cause=by_cause, residuals=residuals)
 
 
 #: Compartments of the hotspot search; patient-side, ``'both'`` = the whole bone.

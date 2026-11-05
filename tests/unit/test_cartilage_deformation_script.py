@@ -396,13 +396,18 @@ def test_figure_failure_keeps_the_knee_rows_and_is_recorded(fake_delta_maps, mon
     def broken_plot(*args, **kwargs):
         raise OSError('No space left on device')
 
-    monkeypatch.setattr(mod, 'plot_knee_deltas', broken_plot)
+    for name in ('plot_knee_deltas', 'plot_knee_residuals', 'plot_registration_sections'):
+        monkeypatch.setattr(mod, name, broken_plot)
     knee, result = mod._knee_job(('K1', _knee(), 1.0, 3.0, 1.0, 2.0, tmp_path))
     assert knee == 'K1'
     assert {r['status'] for r in result['subregion_rows']} == {'ok'}
     assert {r['status'] for r in result['hotspot_rows']} == {'ok'}
     figure = [f for f in result['failures'] if f['stage'] == 'figure']
-    assert [f['bone'] for f in figure] == ['tibia', 'femur']
+    # Every figure of every bone is attempted and recorded on its own.
+    by_bone = {bone: sorted(f['error'].split(':')[0] for f in figure if f['bone'] == bone)
+               for bone in ('tibia', 'femur')}
+    assert by_bone['tibia'] == by_bone['femur']
+    assert {'delta', 'registration_residual'} <= set(by_bone['tibia'])
     assert all('OSError' in f['error'] for f in figure)
     assert not list(tmp_path.glob('*.png'))
 

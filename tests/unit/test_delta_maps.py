@@ -213,6 +213,38 @@ def test_rigidly_moved_identical_scan_gives_zero_delta(ref):
     # Footprints coincide: Δ defined exactly where both maps are.
     both = np.isfinite(d.reference) & np.isfinite(d.configurations[KEY])
     assert np.array_equal(np.isfinite(delta), both)
+    # The registration residual lives on the configuration's footprint and, for an exactly
+    # recovered motion, equals the reference's own residual against itself (this phantom's
+    # plate floats above its bone, so that is not 0; on real data the tAB is the bone surface).
+    residual = d.residuals[KEY]
+    assert np.array_equal(np.isfinite(residual), np.isfinite(d.configurations[KEY]))
+    itself = knee_delta_maps('tibia', ref, {KEY: ref}).residuals[KEY]
+    both = np.isfinite(residual) & np.isfinite(itself)
+    assert both.sum() > 500
+    assert np.max(np.abs(residual[both] - itself[both])) < 1e-3
+
+
+def test_signed_surface_distance_is_positive_outside():
+    from morphometry.cartilage.deformation import signed_surface_distance
+    sphere = pv.Sphere(radius=10.0, theta_resolution=60, phi_resolution=60).triangulate()
+    d = signed_surface_distance(np.array([[0, 0, 11.0], [0, 0, 9.0], [12.0, 0, 0]]), sphere)
+    assert d[0] == pytest.approx(1.0, abs=0.02) and d[1] == pytest.approx(-1.0, abs=0.02)
+    assert d[2] == pytest.approx(2.0, abs=0.05)
+    assert signed_surface_distance(np.zeros((0, 3)), sphere).shape == (0,)
+
+
+def test_registration_helpers_match_what_the_maps_register(ref):
+    """The figure helpers give exactly the surfaces and start the delta maps use."""
+    from morphometry.cartilage.deformation import (
+        configuration_registration_start, reference_registration_surface,
+    )
+    from morphometry.cartilage.registration import register_bone
+    cfg = _moved(ref, _rot(4, -3, 7), [5.0, 2.0, -3.0], frame_error=_rot(0, 0, 3))
+    d = knee_delta_maps('tibia', ref, {KEY: cfg})
+    moving, initial = configuration_registration_start('tibia', ref, cfg)
+    again = register_bone(moving, reference_registration_surface('tibia', ref), initial)
+    assert np.array_equal(again.transform.rotation, d.registrations[KEY].transform.rotation)
+    assert again.rms_mm == d.registrations[KEY].rms_mm
 
 
 def test_icp_corrects_an_imperfect_initial_frame(ref):
