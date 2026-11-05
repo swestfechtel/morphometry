@@ -18,8 +18,8 @@ from morphometry.utils import sphere_fit, get_contour_points, calculate_angle_be
     get_minimum_distance_between_line_and_point, num_connected_components, \
     extract_connected_components_2d, circumference_points, intersect_ndarrays, \
     sort_points_clockwise, sort_points_by_x, fit_circle_to_points
-from morphometry.image_io import (Image, Segmentation, mirror_image_left_right, reflect_image_left_right,
-                                  split_image_left_right)
+from morphometry.image_io import (Image, Segmentation, mask_and_spacing, mirror_image_left_right,
+                                  reflect_image_left_right, split_image_left_right)
 from morphometry.bresenham import bresenhamline
 from morphometry import constants as C
 from morphometry import geometry as G
@@ -30,10 +30,10 @@ from morphometry.hip import (get_femoral_head_center, get_femoral_head_center_ct
 from morphometry.femur import get_proximal_reference_line
 from morphometry.measurements.femur import _proximal_angle
 
-from scipy.ndimage import center_of_mass, label, rotate
+from scipy.ndimage import center_of_mass, label, map_coordinates
 from scipy.spatial import KDTree
 from scipy.stats import zscore
-from typing import Tuple, Optional
+from typing import Sequence, Tuple, Optional
 from skimage.measure import find_contours
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
@@ -346,25 +346,236 @@ def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmenta
 
     return angle
 
-def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1, plot: plt.Axes | bool = False) -> float:
+def _reslice_femoral_neck_section(femur: np.ndarray, head_center: np.ndarray, neck_center: np.ndarray,
+                                  rotation_angle: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Sample the oblique section through the femoral neck axis on a grid anchored to the head centre.
+
+    The alpha angle is read in the plane that contains the femoral neck axis: the mask is turned
+    about the coronal axis by ``rotation_angle`` until the neck axis lies in a fixed-z section,
+    and the section is then the femoral head and neck in profile. This resamples that section
+    **directly**, which is what makes the measurement independent of where the anatomy sits in
+    the array.
+
+    What it replaced, and why: the section used to be obtained by rotating the whole volume with
+    ``scipy.ndimage.rotate(mask, axes=(0, 2), angle=rotation_angle, reshape=True, order=0)`` and
+    slicing the result, with the head and neck landmarks transported through the same rotation by
+    painting a 3x3x3 cube, rotating it, re-centroiding and rounding. ``reshape=True`` rotates
+    about the **input array's centre** and sizes the output to fit, so both the sampling grid and
+    the transported landmarks moved with the array bounds rather than with the anatomy: over the
+    120 NaKo sample halves, padding the array by (3, 0, 2) voxels (which leaves every voxel's
+    physical position untouched) reproduced the resampled slice exactly on only 2 of 120 and the
+    contour on 13 of 120, and moved the end-to-end angle on 120 of 120, by a median 0.75, p90 3.10
+    and up to 7.32 degrees. The upstream was already clean -- the head radius and the rotation angle were
+    exact on all 120 -- so the whole defect lay in this read-out.
+
+    The grid is anchored to the (float) head centre and sized from the **anatomy's** own extent,
+    never from the array's. With ``theta = rotation_angle``, one step along output axis 0 is the
+    input-space offset ``u = (cos theta, 0, -sin theta)`` and one step along output axis 1 is
+    ``v = (0, 1, 0)``; the unused section normal is ``(sin theta, 0, cos theta)``. That sense (and
+    not its opposite) is the one ``scipy.ndimage.rotate(axes=(0, 2))`` applies -- verified by
+    reproducing all 53 slices of a ``rotate(..., angle=37.0, reshape=True, order=0)`` of an
+    asymmetric phantom bitwise with ``map_coordinates`` on these offsets. Sample ``i, j`` therefore
+    reads the input at ``head_center + (i - Ru) * u + (j - Rv) * v``, so translating the array
+    translates ``head_center`` by the same shift and every sample lands on the same anatomy at the
+    same ``(i, j)``.
+
+    **How strong that invariance is, stated precisely.** It is *bitwise* on everything measured
+    (120 of 120 NaKo halves and 100 of 100 Augsburg halves, every probe, 0.000e+00), but it is not
+    structurally guaranteed the way task #5's condylar divider was: that one translated an integer
+    index, this one translates a float. The head centre is not exactly translation-equivariant
+    either -- it moves up to 5.19e-11 voxels beyond the pad -- so the margin is that the closest a
+    sampled coordinate comes to an ``order=0`` rounding boundary, over the whole cohort, is
+    1.248e-06, about 2.4e4 times that noise. Extrapolated to the 30,407-case NaKo cohort that is
+    roughly 1e3 of headroom, not 1e8: probabilistically safe, not provable. One mode would fail
+    *globally* rather than one cell at a time: because ``v = (0, 1, 0)``, every sampled y
+    coordinate shares ``frac(head_y)``, so a head centre whose y fraction sat within noise of 0.5
+    would tie the whole window at once. The cohort minimum of ``|frac(head_y) - 0.5|`` is 0.051
+    over 16 halves, so it is not a live concern, but it is the one to watch.
+
+    The one place the sampling deliberately differs from the ``rotate`` call is its boundary mode:
+    see the comment at the ``map_coordinates`` call. ``rotate``'s default ``mode='constant'``
+    discards the outer half voxel of every axis, which is itself a dependence on where the array
+    ends, so this uses ``'grid-constant'``. **That is a stated exception to "preserves the
+    pre-change construction", and the only one**: the two sample identically except where the
+    anatomy reaches within half a voxel of the array border, which is exactly the band in which
+    the shipped construction was wrong. (Measured on a corner phantom: identical on all 22,644
+    samples strictly inside the domain, differing at 6 of 8 angles in the border band.) It is why
+    the bitwise reproduction above is checked on a phantom whose anatomy does not touch the
+    border.
+
+    ``Ru, Rv`` are chosen so that the window covers every femur voxel's projection with a
+    one-voxel zero margin all round, which keeps ``utils.get_contour`` (a ``binary_erosion`` with
+    the default ``border_value=0``) from reading the window border as contour. One voxel is
+    enough: ``order=0`` rounds each input coordinate to the nearest voxel, so a sample that
+    returns a mask voxel is within half a voxel of it on every axis and therefore within
+    ``0.5 * (|cos theta| + |sin theta|) <= 0.708`` of it along ``u`` and within 0.5 along ``v``.
+    The head centre lands on the integer cell ``(Ru, Rv)`` by construction, so every comparison
+    the caller makes against it (anterior/posterior split, the lateral restriction, the circle-fit
+    band) works in window coordinates unchanged.
+
+    :param femur: A binary 3D mask of the proximal femur (1 inside the bone, 0 outside), in the
+        caller's index frame.
+    :param head_center: The femoral head centre as a continuous voxel index ``(x, y, z)``.
+    :param neck_center: The femoral neck centre as a continuous voxel index ``(x, y, z)``.
+    :param rotation_angle: The rotation about the coronal axis, in degrees, that brings the neck
+        axis into the section (the unsigned 3D angle between the neck axis and ``-ex``; see
+        :func:`calculate_alpha_angle`).
+    :return: ``(section, head_cell, neck_cell)`` -- the resampled 2D section indexed as
+        ``(rotated x, y)``, the head centre's integer cell ``(Ru, Rv)``, and the neck centre's
+        **continuous** cell in the same frame. The neck cell is deliberately not rounded: nothing
+        indexes an array with it (it is used only as the direction ``neck_cell - circle_centre``),
+        and the repo's rule is that only index coordinates that actually index an array are
+        rounded.
+    :raises ValueError: If ``femur`` holds no voxel, so the section has no extent to cover.
+    """
+    theta = np.deg2rad(float(rotation_angle))
+    u = np.array([np.cos(theta), 0.0, -np.sin(theta)])
+    v = np.array([0.0, 1.0, 0.0])
+
+    head = np.asarray(head_center, dtype=float)
+    neck = np.asarray(neck_center, dtype=float)
+
+    voxels = np.argwhere(femur > 0)
+    if voxels.size == 0:
+        raise ValueError('alpha angle: the femur mask is empty, so the neck section has no extent.')
+
+    # the anatomy's extent in the section frame, relative to the head centre. Differenced before
+    # the projection, not as a difference of two dot products of magnitude ~100-200 voxels: it is
+    # algebraically the same and costs nothing, and it keeps the one quantity a rounding boundary
+    # could in principle be decided by as clean as the sample coordinates themselves
+    offsets = voxels.astype(float) - head[None, :]
+    du = offsets @ u
+    dv = offsets[:, 1]
+
+    # one voxel of zero margin on every side; >= 1 cell between the head centre and the border so
+    # the head cell is always inside the window even if the centre were to fall outside the bone
+    r_u = int(np.ceil(max(1.0, 1.0 - du.min())))
+    r_v = int(np.ceil(max(1.0, 1.0 - dv.min())))
+    n_u = r_u + int(np.ceil(max(1.0, du.max() + 1.0))) + 1
+    n_v = r_v + int(np.ceil(max(1.0, dv.max() + 1.0))) + 1
+
+    i, j = np.meshgrid(np.arange(n_u), np.arange(n_v), indexing='ij')
+    coords = (head[None, :]
+              + (i.ravel() - r_u)[:, None] * u[None, :]
+              + (j.ravel() - r_v)[:, None] * v[None, :])
+    # 'grid-constant', not 'constant': scipy's 'constant' returns cval for any coordinate outside
+    # [0, n - 1], i.e. it drops the outer half voxel at both ends of every axis, which makes the
+    # sample depend on where the array happens to end -- the very defect this function exists to
+    # remove. It was reached on real data: on PA000668 image-right (12 slices) the section's plane
+    # runs through z = 11.26, so a whole column of the femur read as background until 3 empty
+    # slices were appended, which moved the alpha angle by 14.98 degrees. 'grid-constant' treats
+    # the domain as [-0.5, n - 0.5], so a sample within half a voxel of a real voxel reads it
+    # whether or not the array continues past it.
+    section = map_coordinates(femur, coords.T, order=0, mode='grid-constant', cval=0).reshape(i.shape)
+
+    # the margin is load-bearing, so it is checked rather than argued: a mask voxel on the window
+    # border would be reported as contour by ``get_contour``'s ``binary_erosion`` (border_value=0)
+    # and invent a straight edge for the circle fit. With no margin at all a voxel reaches the
+    # border on 37 of the 120 NaKo halves; with this one, on none.
+    assert not (section[0].any() or section[-1].any() or section[:, 0].any() or section[:, -1].any()), (
+        'alpha angle: the resliced section reaches the window border, so the contour would be '
+        'invented by the erosion; the window margin is wrong.')
+
+    head_cell = np.array([r_u, r_v])
+    # u is a unit vector, so the dot product IS the coordinate along it; v is axis 1 exactly
+    neck_cell = np.array([r_u + float((neck - head) @ u), r_v + float(neck[1] - head[1])])
+    return section, head_cell, neck_cell
+
+
+def calculate_alpha_angle(segmentation_mask: Image | np.ndarray, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1, plot: plt.Axes | bool = False, spacing: Optional[Sequence[float]] = None) -> Tuple[float, float]:
     """
     Calculate the alpha angle from the femoral head center and the femoral neck transition.
-    :param segmentation_mask: A segmentation mask of the proximal femur.
-    :param side: Side of the image (not patient!), either 'left' or 'right'.
-    :param segmentation_label: The label of the femur in the segmentation mask.
+
+    The femoral head and neck are brought into profile by turning the mask about the coronal axis
+    until the femoral neck axis lies in a fixed-z section (see
+    :func:`_reslice_femoral_neck_section`, which samples that section directly rather than
+    rotating the volume). A circle is then fitted to the head contour of the section and the two
+    angles are measured at its centre, from the neck axis to the first contour point lateral of
+    the centre that leaves the fitted circle by more than ``tol``, anteriorly and posteriorly.
+
+    **Index-frame invariant as of this change, but still index-space.** The section used to be
+    read off a ``scipy.ndimage.rotate(..., reshape=True)`` resampling, which rotates about the
+    array's centre, so the measurement depended on where the hip sat in the array: over the 120
+    NaKo sample halves it was exact on **0 of 120** under a (3, 0, 2) pad (median 0.75, max 7.32
+    degrees), 0 of 120 under a (1, 1, 1) pad and 0 of 120 under a pad at the *high* end, which
+    changes no anatomy index at all. It is now exact on 120 of 120 under all three, and on the
+    non-isotropic Augsburg path (100 reader-study halves, no production caller) on 0 of 100 before
+    against 100 of 100 after.
+
+    **What that invariance does and does not cover, attributed.** A crop to the femur's bounding
+    box is exact in the two in-plane axes (120 of 120) but not when it also drops empty *slices*
+    (12 of 120, against 1 of 120 before). That residue is **entirely upstream**, and the
+    attribution is clean: the four quantities this function hands the reslice (head centre, neck
+    centre, rotation angle, head radius) are unchanged on exactly those 12 halves, and on those 12
+    the angle is bit-identical, 12 of 12 at 0.000e+00; on the 108 where a landmark moved it is
+    exact on none. A z-only crop reproduces the 3-axis crop on every statistic to the digit, so
+    the slice axis contributes all of it. The cause is ``get_femoral_head_center``'s slab walk,
+    which z-scores the per-slice label counts over the *whole array*: each NaKo half is 264 slices
+    with the femur in 90-142 of them, so trimming the 122-174 empty slices moves the mean and sd
+    enough to change the walk (head centre median 0.265 / max 1.960 voxels, radius median 0.086 /
+    max 0.619, rotation angle median 0.278 / max 1.201 degrees). Padding adds zeros to a vector
+    already dominated by them, which is why every pad probe is exact. So the claim here is
+    invariance under translation, and exactness *given its landmarks* under any crop -- the slab
+    walk is a separate concern, with a blast radius far beyond this measurement. **Do not pool values across this change**: every NaKo half moves, by
+    a median 0.93 degrees anteriorly (p90 2.80, max 4.48) and 0.87 posteriorly (p90 2.19, max
+    6.63), with no half gaining or losing a value and the cohort means essentially unchanged
+    (anterior 31.096 -> 31.145, posterior 34.747 -> 34.744).
+
+    What that does **not** fix is the geometry: the rotation and the whole contour construction are
+    carried out on voxel *indices*, which is a rotation of the anatomy only on isotropic voxels.
+    Hence the spacing guard below -- on anisotropic data this function now refuses to answer rather
+    than returning an invariantly sheared number.
+
+    The rotation is driven by the **unsigned** 3D angle between the neck axis and ``-ex``, not by
+    the signed angle of the axis's x-z projection, which is what geometrically brings the axis into
+    the section. That is deliberate and preserved: on all 120 NaKo halves the projection angle is
+    positive (the neck runs supero-medially, ``axis_x < 0 < axis_z``), the over-rotation the y
+    component contributes is a median 0.128 and at most 3.94 degrees, and the neck axis's residual
+    out-of-plane component after the rotation is a median 0.049 and at most 1.32 voxels -- i.e. the
+    section does contain the axis on real anatomy. Changing it would move every value.
+
+    :param segmentation_mask: A segmentation mask of the proximal femur, as an ``Image`` /
+        ``Segmentation`` or as a bare array. Passing the image lets the isotropy precondition be
+        checked with no extra argument (see ``spacing``); a bare array keeps the old behaviour.
+    :param side: Side of the image (not patient!), either 'left' or 'right'. A right half is
+        measured as the reversal of a left one, so the construction below is left-side only.
+    :param segmentation_label: The label of the femur in the segmentation mask. Note that it is
+        used for the head and neck landmarks only: the section's contour is taken from label 1
+        regardless, which is the shipped behaviour and a no-op for every caller in the repo (all
+        of them pass 1).
     :param isotropic: Whether the image has isotropic voxels.
     :param x_ratio: Slice-axis scale factor for the head and neck landmarks (see
-        ``hip.get_femoral_neck_center``; backlog task #6). This function takes a bare array, so it
+        ``hip.get_femoral_neck_center``; backlog task #6). Given a bare array this function
         cannot know the real spacing: on anisotropic data the head centre falls back to
         ``(1, 1, x_ratio)`` voxels and can sit ~5 mm (max 14) in z from the spacing fit. Harmless
         in production only because the alpha angle's callers are the isotropic NaKo scripts.
-    :param plot: Whether to plot the reference lines.
-    :return: The alpha angle.
+    :param plot: Whether to plot the reference lines. An ``Axes`` draws the overlay on it. On a
+        right half the section is reversed back for display, so the hip appears in its original
+        orientation.
+    :param spacing: Voxel spacing in mm along the three index axes, for the isotropy check. An
+        explicit value wins over the spacing of an ``Image`` passed as ``segmentation_mask``;
+        ``None`` with a bare array means the spacing is unknown and the check is skipped
+        silently, exactly as ``geometry.validate_in_plane_isotropy`` does (see
+        :func:`morphometry.geometry.validate_isotropy` for why there is no warning). It is not
+        forwarded to the head-centre fit, which keeps taking its geometry from ``x_ratio``.
+        Placed last, after ``plot``, to match the three sibling entry points task #10 gave the
+        same parameter to for the same reason
+        (``measurements.knee.calculate_knee_rotation_angle``,
+        ``measurements.tibia.calculate_tibial_torsion`` and ``get_tibial_torsion_landmarks``) --
+        which also means a caller passing ``plot`` positionally cannot silently bind an ``Axes``
+        to it.
+    :return: The anterior and posterior alpha angle, in degrees.
+    :raises ValueError: If the spacing is known and not isotropic (the index-space rotation would
+        shear the anatomy), or if the femur mask is empty.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
 
-    mask = segmentation_mask.copy()
-    if side == 'right':  # need to flip because rotation behaves weirdly with right side images
+    mask, image_spacing = mask_and_spacing(segmentation_mask)
+    G.validate_isotropy(image_spacing if spacing is None else spacing, 'alpha angle hip mask')
+
+    mask = np.asarray(mask).copy()
+    if side == 'right':  # the construction below is written for a left image half
         mask = mask[::-1]
 
     r, femoral_head_center = get_femoral_head_center(mask, side='left', segmentation_label=segmentation_label, isotropic=isotropic, x_ratio=x_ratio)
@@ -376,36 +587,12 @@ def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', seg
 
     rotation_angle = calculate_angle_between_vectors(neck_axis, sagittal_axis)  # to reconstruct the neck axis plane, the mask must be rotated around the coronal axis such that the neck axis aligns with the sagittal axis
 
-    # print(side, rotation_angle)
+    femur = np.where(mask == 1, 1, 0)
+    # the oblique section through the neck axis, sampled on a grid anchored to the head centre
+    section, femoral_head_center_rotated, femoral_neck_center_rotated = _reslice_femoral_neck_section(
+        femur, femoral_head_center, femoral_neck_center, rotation_angle)
 
-    rotated_image = rotate(mask, axes=(0, 2), angle=rotation_angle, reshape=True, order=0)
-
-    tmp = np.zeros_like(mask)
-    femoral_head_center_rounded = np.round(femoral_head_center).astype(np.int16)
-
-    for i in [femoral_head_center_rounded[0] - 1, femoral_head_center_rounded[0], femoral_head_center_rounded[0] + 1]:
-        for j in [femoral_head_center_rounded[1] - 1, femoral_head_center_rounded[1], femoral_head_center_rounded[1] + 1]:
-            for k in [femoral_head_center_rounded[2] - 1, femoral_head_center_rounded[2], femoral_head_center_rounded[2] + 1]:
-                    tmp[i, j, k] = 1
-
-    tmp = rotate(tmp, axes=(0, 2), angle=rotation_angle, reshape=True, order=0)
-    coords = np.argwhere(tmp == 1)
-    femoral_head_center_rotated = np.array([np.round(np.mean(coords[:, 0])), np.round(np.mean(coords[:, 1])), np.round(np.mean(coords[:, 2]))], dtype=np.int16)
-
-    tmp = np.zeros_like(mask)
-    femoral_neck_center_rounded = np.round(femoral_neck_center).astype(np.int16)
-
-    for i in [femoral_neck_center_rounded[0] - 1, femoral_neck_center_rounded[0], femoral_neck_center_rounded[0] + 1]:
-        for j in [femoral_neck_center_rounded[1] - 1, femoral_neck_center_rounded[1], femoral_neck_center_rounded[1] + 1]:
-            for k in [femoral_neck_center_rounded[2] - 1, femoral_neck_center_rounded[2], femoral_neck_center_rounded[2] + 1]:
-                tmp[i, j, k] = 1
-
-    tmp = rotate(tmp, axes=(0, 2), angle=rotation_angle, reshape=True, order=0)
-    coords = np.argwhere(tmp == 1)
-    femoral_neck_center_rotated = np.array([np.round(np.mean(coords[:, 0])), np.round(np.mean(coords[:, 1])), np.round(np.mean(coords[:, 2]))], dtype=np.int16)
-
-    femur = np.where(rotated_image == 1, 1, 0)
-    contour_points = get_contour_points(femur[:, :, femoral_head_center_rotated[2]])
+    contour_points = get_contour_points(section)
 
     anterior_contour = contour_points[contour_points[:, 1] < femoral_head_center_rotated[1]]
     posterior_contour = contour_points[contour_points[:, 1] > femoral_head_center_rotated[1]]
@@ -417,12 +604,19 @@ def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', seg
     posterior_points_sorted = sort_points_by_x(posterior_points_sorted, descending=True)
 
     tol = 2
-    tmp = contour_points[contour_points[:, 0] > (femoral_head_center_rotated[0] - .6 * r)]
+    band_points = contour_points[contour_points[:, 0] > (femoral_head_center_rotated[0] - .6 * r)]
 
-    center, radius = fit_circle_to_points(tmp)
+    center, radius = fit_circle_to_points(band_points)
 
-    anterior_point = np.array([0, 0])
-    posterior_point = np.array([0, 0])
+    # `None` rather than the former ``np.array([0, 0])`` sentinel: that sentinel is a *cell of the
+    # window*, so a failed search silently reported the angle to the window's corner instead of to
+    # a contour point -- and the corner moved with this change (the reshaped rotation's array
+    # corner before, the anatomy-anchored window's corner now), which would have made a silent
+    # wrong answer silently different. A ValueError is caught by the per-measurement handlers of
+    # the batch scripts and compute_torsion.py and becomes a NaN row. The search predicate itself
+    # is untouched: this changes what happens when it finds nothing, never what it finds.
+    anterior_point = None
+    posterior_point = None
 
     for p in anterior_points_sorted:
         d = np.linalg.norm(p - center)
@@ -438,7 +632,16 @@ def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', seg
             posterior_point = p
             break
 
-    neck_axis_rotated = femoral_neck_center_rotated[:2] - center
+    for name, point in (('anterior', anterior_point), ('posterior', posterior_point)):
+        if point is None:
+            raise ValueError(
+                f'alpha angle: no {name} contour point leaves the fitted femoral head circle '
+                f'(centre {np.round(center, 2).tolist()}, radius {radius:.2f}) by more than '
+                f'{tol} voxels while staying inside {1.2:g} radii of it and lateral of the '
+                f'centre. The head-neck junction is not resolved in this section, so there is no '
+                f'{name} alpha angle to report.')
+
+    neck_axis_rotated = femoral_neck_center_rotated - center
     anterior_axis = anterior_point - center
     posterior_axis = posterior_point - center
 
@@ -447,18 +650,18 @@ def calculate_alpha_angle(segmentation_mask: np.ndarray, side: str = 'left', seg
 
     if plot:
         if side == 'right':
-            rotated_image = rotated_image[::-1]  # flip back for visualisation
-            femoral_head_center_rotated = np.array([rotated_image.shape[0], 0, 0]) - femoral_head_center_rotated * np.array([1, -1, -1])  # adjust for flipping
-            femoral_neck_center_rotated = np.array([rotated_image.shape[0], 0, 0]) - femoral_neck_center_rotated * np.array([1, -1, -1])  # adjust for flipping
-            anterior_point = np.array([rotated_image.shape[0], 0]) - anterior_point * np.array([1, -1])  # adjust for flipping
-            posterior_point = np.array([rotated_image.shape[0], 0]) - posterior_point * np.array([1, -1])  # adjust for flipping
-            center = np.array([rotated_image.shape[0], 0]) - center * np.array([1, -1])  # adjust for flipping
+            section = section[::-1]  # flip back for visualisation
+            femoral_head_center_rotated = np.array([section.shape[0], 0]) - femoral_head_center_rotated * np.array([1, -1])  # adjust for flipping
+            femoral_neck_center_rotated = np.array([section.shape[0], 0]) - femoral_neck_center_rotated * np.array([1, -1])  # adjust for flipping
+            anterior_point = np.array([section.shape[0], 0]) - anterior_point * np.array([1, -1])  # adjust for flipping
+            posterior_point = np.array([section.shape[0], 0]) - posterior_point * np.array([1, -1])  # adjust for flipping
+            center = np.array([section.shape[0], 0]) - center * np.array([1, -1])  # adjust for flipping
+            # the circle-fit band was the one overlay the shipped branch forgot to flip, so it was
+            # drawn mirrored against the image on every right half. Plot-only: no value reads it.
+            band_points = np.array([section.shape[0], 0]) - band_points * np.array([1, -1])
 
-        plot.imshow(rotated_image[:, :, femoral_head_center_rotated[2]].T, cmap='gray')
-        plot.scatter(tmp[:, 0], tmp[:, 1], s=1, c='y')
-        # plot.plot([femoral_head_center_rotated[0], femoral_neck_center_rotated[0]], [femoral_head_center_rotated[1], femoral_neck_center_rotated[1]], 'r-')
-        # plot.plot([anterior_point[0], femoral_head_center_rotated[0]], [anterior_point[1], femoral_head_center_rotated[1]], 'g-')
-        # plot.plot([posterior_point[0], femoral_head_center_rotated[0]], [posterior_point[1], femoral_head_center_rotated[1]], 'b-')
+        plot.imshow(section.T, cmap='gray')
+        plot.scatter(band_points[:, 0], band_points[:, 1], s=1, c='y')
         plot.plot([center[0], femoral_neck_center_rotated[0]], [center[1], femoral_neck_center_rotated[1]], 'r-')
         plot.plot([center[0], anterior_point[0]], [center[1], anterior_point[1]], 'g-')
         plot.plot([center[0], posterior_point[0]], [center[1], posterior_point[1]], 'b-')

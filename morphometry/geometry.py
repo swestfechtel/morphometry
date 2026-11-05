@@ -93,6 +93,67 @@ def validate_in_plane_isotropy(spacing: Optional[Sequence[float]], source: str) 
             f'slice. Resample the mask to equal in-plane spacing before measuring.')
 
 
+def validate_isotropy(spacing: Optional[Sequence[float]], source: str) -> None:
+    """Refuse an image whose three voxel edges are not all equal, for index-space 3-D geometry.
+
+    The stronger sibling of :func:`validate_in_plane_isotropy`. Some constructions are not
+    confined to one index plane: :func:`morphometry.measurements.hip.calculate_alpha_angle`
+    rotates the femoral neck axis into a fixed-z section in the *(x, z)* index plane and then
+    reads its contour, its circle fit and its two angles in the *(rotated x, y)* plane. A
+    rotation in index space is a rotation of the anatomy only if the two axes it mixes have the
+    same voxel edge length, and the contour read in the plane orthogonal to it needs the third
+    edge to match as well -- so all three must be equal, not just the in-plane pair. On
+    anisotropic voxels an index-space rotation shears the anatomy, the "neck axis" it aligns is
+    not the anatomical neck axis, and the resulting angle is not the alpha angle. (The reslice
+    is index-frame *invariant* as of this check's companion change -- it no longer depends on
+    where the hip sits in the array -- but invariance is not validity: an invariantly sheared
+    angle is still sheared.)
+
+    Like its in-plane sibling this is checked only where the caller's spacing is known, it
+    raises nothing but ``ValueError`` (which the batch scripts' and ``compute_torsion.py``'s
+    per-measurement handlers catch and record as ``NaN``), and it stays **silent** when the
+    spacing is unknown: a warning there would fire on every existing bare-array call over a
+    known-conforming isotropic cohort and be tuned out. The precondition then rests on the
+    caller, whose fix is to pass its spacing explicitly.
+
+    :param spacing: The voxel spacing of the image the construction runs in, as
+        ``(sx, sy, sz)`` (longer sequences are allowed; only the first three entries are read).
+        ``None`` means the caller holds no geometry -- the check is then skipped.
+    :param source: Human-readable name of the image being checked, used in the error message
+        (e.g. ``'alpha angle hip mask'``).
+    :raises ValueError: If ``spacing`` does not hold three readable entries; if any of their
+        **magnitudes** is not finite and positive (a negative entry is a legitimate header flip
+        and is accepted, exactly as :func:`validate_in_plane_isotropy` accepts it -- what is
+        refused is a malformed header, whose index-to-physical map is degenerate, so whether the
+        rotation shears cannot be decided); or if the largest and smallest magnitudes differ by
+        more than ``IN_PLANE_SPACING_RTOL`` of the largest. Every rejection is a ``ValueError``
+        and nothing else. Note what is **not** checked: only the zooms are read, not the affine's
+        orthogonality, so a sheared affine passes and still shears the angle -- the same residual
+        :func:`validate_in_plane_isotropy` accepts (backlog task #10).
+    :return: ``None``.
+    """
+    if spacing is None:
+        return
+    try:
+        edges = [float(abs(spacing[i])) for i in range(3)]
+    except (IndexError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f'{source}: voxel spacing {spacing!r} does not provide three readable '
+                         f'entries (expected at least (sx, sy, sz)).') from exc
+    if not all(np.isfinite(e) and e > 0.0 for e in edges):
+        raise ValueError(f'{source}: voxel spacing is not usable (x {edges[0]:.6g} mm, '
+                         f'y {edges[1]:.6g} mm, z {edges[2]:.6g} mm); all three entries must be '
+                         f'finite and positive. The header is malformed, so whether an '
+                         f'index-space rotation shears the anatomy cannot be decided.')
+    if max(edges) - min(edges) > C.IN_PLANE_SPACING_RTOL * max(edges):
+        raise ValueError(
+            f'{source}: voxel spacing is anisotropic (x {edges[0]:.6g} mm, y {edges[1]:.6g} mm, '
+            f'z {edges[2]:.6g} mm, ratio {max(edges) / min(edges):.6g}). This measurement '
+            f'rotates and reslices the mask in index space, which is a rotation of the anatomy '
+            f'only on isotropic voxels; on this dataset the section would be sheared and the '
+            f'angle would not be the anatomical one. Resample the mask to isotropic voxels '
+            f'before measuring.')
+
+
 def fold_to_acute(angle: float) -> float:
     """Fold an angle in [0, 180] degrees into the acute range [0, 90].
 

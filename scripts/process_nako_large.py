@@ -104,14 +104,14 @@ def f(patient):
         fat_right = np.nan
 
     try:
-        aa_left = calculate_alpha_angle(mask_left.array, 'left', 1, isotropic=True, plot=False)
+        aa_left = calculate_alpha_angle(mask_left, 'left', 1, isotropic=True, plot=False)
     except Exception as e:
         print(f"Error calculating AA for left side of patient {patient.name}: {e}")
         aa_left = (np.nan, np.nan)
     # calculate_alpha_angle(mask_left.array, 'left', 1, isotropic=True)
 
     try:
-        aa_right = calculate_alpha_angle(mask_right.array, 'right', 1, isotropic=True, plot=False)
+        aa_right = calculate_alpha_angle(mask_right, 'right', 1, isotropic=True, plot=False)
     except Exception as e:
         print(f"Error calculating AA for right side of patient {patient.name}: {e}")
         aa_right = (np.nan, np.nan)

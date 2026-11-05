@@ -8,11 +8,14 @@ The former head fit trimmed the slab at ``0.9`` times an absolute voxel index, s
 Scope: the head centre and radius (both image sides, x / y / z), and, with the knee left in place,
 Murphy femoral torsion, femoral anteversion and CCD (x / y). The knee condylar line **follows the
 shift as of task #5** (``knee.get_knee_reference_line`` now finds its endpoints in coordinates
-instead of reading them off a resampled rotated section), so the probe below that used to be a
-strict xfail is an ordinary test. Lee torsion and the alpha angle still depend on the position,
-through slice rotations about the image centre on the *hip* side
-(``utils.rotate_mask_dorsal_points`` / ``rotate_mask_by_angle`` in ``femur.py`` and ``hip.py``);
-they stay pinned as expected failures until that is redesigned (task #9).
+instead of reading them off a resampled rotated section) and the **alpha angle is invariant as of
+the oblique-reslice fix** (``measurements.hip._reslice_femoral_neck_section`` samples the neck
+section on a grid anchored to the head centre instead of slicing a
+``scipy.ndimage.rotate(..., reshape=True)`` of the whole volume), so the two probes below that used
+to be strict xfails are ordinary tests. Lee torsion still depends on the position, through the
+slice rotations about the image centre in ``contour_femoral_neck``
+(``utils.rotate_mask_dorsal_points`` / ``rotate_mask_by_angle``); it stays pinned as an expected
+failure until that is redesigned (task #9).
 """
 import nibabel as nib
 import numpy as np
@@ -127,9 +130,23 @@ def test_knee_condylar_line_follows_the_shift(halves, side):
             np.testing.assert_allclose(np.asarray(after[key][:2], dtype=float) - before[key][:2], shift[:2])
 
 
-@pytest.mark.xfail(reason=TASK_9, strict=True)
 @pytest.mark.parametrize('side', ['left', 'right'])
 def test_alpha_angle_is_unchanged(halves, side):
+    """Padding the hip leaves both alpha angles unchanged.
+
+    A strict xfail until the oblique reslice was fixed: the section was a slice of a
+    ``scipy.ndimage.rotate(..., reshape=True)`` of the whole volume, which rotates about the
+    array's centre, and the head and neck landmarks were transported through it by painting and
+    re-centroiding a 3x3x3 cube. It is now sampled on a grid anchored to the head centre.
+
+    This is the **non-isotropic** path, which has no production caller and on
+    1.09375 x 1.09375 x 10 mm voxels is not a rotation of the anatomy at all -- so what it pins is
+    invariance, not validity (``calculate_alpha_angle`` now refuses such data when it is given the
+    spacing; this call passes a bare array, so the guard stays silent). Measured over the 100
+    reader-study halves the pre-change code was exact on 0 of 100 under the worst of these shifts,
+    off by a median 37.1 and up to 129.7 degrees; it is now exact on 100 of 100.
+    ``test_alpha_angle_invariance.py`` carries the isotropic NaKo probes and the guard.
+    """
     hip = halves['hip'][side]
     before = calculate_alpha_angle(hip.array, side, 1, isotropic=False, x_ratio=halves['x_ratio'])
     for shift in IN_PLANE_SHIFTS:

@@ -76,14 +76,14 @@ def f(patient: Path):
     fig, ax = plt.subplots(ncols=2, figsize=(20, 10))
 
     try:
-        aa_left = calculate_alpha_angle(mask_left.array, 'left', 1, isotropic=True, plot=ax[0])
+        aa_left = calculate_alpha_angle(mask_left, 'left', 1, isotropic=True, plot=ax[0])
     except Exception as e:
         print(f"Error calculating AA for left side of patient {patient.name}: {e}")
         aa_left = (np.nan, np.nan)
     # calculate_alpha_angle(mask_left.array, 'left', 1, isotropic=True)
 
     try:
-        aa_right = calculate_alpha_angle(mask_right.array, 'right', 1, isotropic=True, plot=ax[1])
+        aa_right = calculate_alpha_angle(mask_right, 'right', 1, isotropic=True, plot=ax[1])
     except Exception as e:
         print(f"Error calculating AA for right side of patient {patient.name}: {e}")
         aa_right = (np.nan, np.nan)

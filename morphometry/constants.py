@@ -61,6 +61,14 @@ CT_WHOLE_LEG = WholeLegCTLabels()
 #: admitting the float noise real headers carry: every cohort in reach stores its two in-plane
 #: zooms bit-identically (Augsburg 1.09375, NaKo 1.0), so nothing legitimate sits near the
 #: threshold -- the only measured violation is ``dfg_knees``, at ``k = 2.4``.
+#:
+#: The same tolerance serves :func:`morphometry.geometry.validate_isotropy`, the stricter 3-D
+#: sibling that the alpha angle's oblique reslice needs (it rotates in the ``(x, z)`` index plane
+#: and reads its contour in the ``(rotated x, y)`` plane, so all three edges must be equal, not
+#: just the in-plane pair). The reasoning for the value is the same -- numerically irrelevant
+#: shear on one side, float noise in real headers on the other -- and every cohort is either
+#: exactly isotropic (NaKo 1 mm) or far outside it (Augsburg hip 1.09375 x 1.09375 x 10 mm,
+#: NMDID CT 3 mm slices), so nothing legitimate sits near the threshold here either.
 IN_PLANE_SPACING_RTOL = 1e-3
 
 # --- Femoral head / neck -----------------------------------------------------
