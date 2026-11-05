@@ -207,7 +207,7 @@ def _two_lobe_section(shape, centre, half_gap, angle_deg, radii=(11, 6)):
 #: search takes the posterior-most point on either side of the divider, not the lobe centres.
 #: Pinned so that a degenerate search (which would return 0.0, or the same number for both bones)
 #: cannot pass the bit-identity test below.
-PHANTOM_KNEE_ROTATION = -12.200468727380784
+PHANTOM_KNEE_ROTATION = -12.339087278326195       # was -12.200468727380784 before task #5
 #: The same phantom measured as a RIGHT half. **Not** the negation of the value above, and that
 #: is not a defect: since backlog task #17 a right half is measured as the reflection of a left
 #: one, so the condylar search runs on the reversed array and finds its own lines there. The old
@@ -216,7 +216,7 @@ PHANTOM_KNEE_ROTATION = -12.200468727380784
 #: held for any pair of lines, which is precisely why it said nothing about the search. The
 #: property that does hold now is the mirror one (a knee and its mirror image read the same), and
 #: it is pinned on real data in ``tests/characterization/test_knee_rotation_equivariance.py``.
-PHANTOM_KNEE_ROTATION_RIGHT = 12.68038349181982
+PHANTOM_KNEE_ROTATION_RIGHT = 12.528807709151511  # was 12.68038349181982 before task #5
 
 
 @pytest.fixture

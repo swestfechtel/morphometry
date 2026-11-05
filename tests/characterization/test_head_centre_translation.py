@@ -6,10 +6,13 @@ centre by exactly the padding, keep its radius, and leave the measurements built
 The former head fit trimmed the slab at ``0.9`` times an absolute voxel index, so none of that held.
 
 Scope: the head centre and radius (both image sides, x / y / z), and, with the knee left in place,
-Murphy femoral torsion, femoral anteversion and CCD (x / y). Lee torsion, the knee condylar line and
-the alpha angle still depend on the position through slice rotations about the image centre
-(``rotate_mask_dorsal_points`` and friends); they are pinned as expected failures until that is
-redesigned (task #9).
+Murphy femoral torsion, femoral anteversion and CCD (x / y). The knee condylar line **follows the
+shift as of task #5** (``knee.get_knee_reference_line`` now finds its endpoints in coordinates
+instead of reading them off a resampled rotated section), so the probe below that used to be a
+strict xfail is an ordinary test. Lee torsion and the alpha angle still depend on the position,
+through slice rotations about the image centre on the *hip* side
+(``utils.rotate_mask_dorsal_points`` / ``rotate_mask_by_angle`` in ``femur.py`` and ``hip.py``);
+they stay pinned as expected failures until that is redesigned (task #9).
 """
 import nibabel as nib
 import numpy as np
@@ -101,9 +104,20 @@ def test_lee_torsion_is_unchanged(halves, side):
         assert after == pytest.approx(before, abs=1e-6)
 
 
-@pytest.mark.xfail(reason=TASK_9, strict=True)
 @pytest.mark.parametrize('side', ['left', 'right'])
 def test_knee_condylar_line_follows_the_shift(halves, side):
+    """Padding the knee shifts the reported condylar endpoints by exactly the padding.
+
+    A strict xfail until task #5: the endpoints were read off a resampled rotated section and
+    mapped back through offsets derived from the rotated array's shape, so they followed the index
+    grid rather than the anatomy. They are now mask points found in coordinates.
+
+    Note what the right side exercises: ``_mri_torsion`` measures a right half as the reflection of
+    a left one and maps the landmarks back with ``x -> n - 1 - x``, so the padding has to come out
+    of the *reflection* as well, where it lands past the anatomy instead of in front of it.
+    ``test_condylar_line_invariance.py`` probes the line itself (and a crop) on four reader-study
+    halves chosen for having carried the defect; this one keeps it inside the measurement.
+    """
     hip, knee = halves['hip'][side], halves['knee'][side]
     before = get_femoral_torsion_landmarks(hip, knee.array, side, 'murphy', x_ratio=halves['x_ratio'])
     for shift in IN_PLANE_SHIFTS:

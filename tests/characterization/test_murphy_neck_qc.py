@@ -94,7 +94,7 @@ def test_the_short_axis_hip_is_flagged_but_still_measured():
     left_hip, left_knee = split_image_left_right(hip)[0], split_image_left_right(knee)[0]
     angle = calculate_femoral_torsion(left_hip, left_knee.array, side='left', method='murphy',
                                       x_ratio=x_ratio)
-    assert np.isfinite(angle) and angle == pytest.approx(-67.08, abs=0.05)
+    assert np.isfinite(angle) and angle == pytest.approx(-68.03, abs=0.05)  # was -67.08 before task #5
 
 
 @pytest.mark.needs_augsburg_large

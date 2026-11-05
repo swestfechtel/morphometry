@@ -113,8 +113,11 @@ def test_fallback_condylar_points_lie_on_the_posterior_cortex(reader_study_knee_
     """The reported condylar endpoints sit on the posterior cortex, not the anterior one.
 
     Scored against an independent cue (the posterior-most mask voxel per column), not against the
-    rotation that produced the points. The 2-voxel allowance covers the back-rotation and the final
-    ``uint16`` cast of the swept endpoint.
+    rotation that produced the points. Asserted at exactly 0 voxels on these three legs, which holds
+    because their frame angles are small -- it is a regression check on them and not a general
+    property (see ``test_condylar_line_invariance.py::test_endpoints_are_mask_points``). Since task #5 the endpoints are
+    mask points of the section, found in coordinates, so there is no back-rotation and no ``uint16``
+    cast to allow for (the allowance used to be 2 voxels).
     """
     images = reader_study_knee_ankle(patient)
     knee, ankle = images['knee'][side], images['ankle'][side]
@@ -125,7 +128,7 @@ def test_fallback_condylar_points_lie_on_the_posterior_cortex(reader_study_knee_
     mask = np.where(knee.array == TIBIA_LABEL_KNEE, 1, 0)
     section = mask[:, :, int(start[2])]
     for posterior, anterior in _cortex_distances(section, start, end):
-        assert posterior <= 2, f'condylar endpoint {posterior:.1f} voxels off the posterior cortex'
+        assert posterior == 0, f'condylar endpoint {posterior:.1f} voxels off the posterior cortex'
         assert anterior > 10, 'condylar endpoint sits on the anterior cortex'
 
 

@@ -13,6 +13,17 @@ axis increases posteriorly, so "posterior" is given and no 180 degree ambiguity 
 The phantoms here are deliberately asymmetric in the anterior-posterior direction, so that the
 anterior tangent and the posterior tangent of the same section have *different* tilts: that is what
 makes the tests able to tell the posterior cortex from the anterior one, which is the defect.
+
+As of task #5 the endpoints are found in coordinates rather than read off a resampled rotation of
+the section, so each one is a mask voxel of the section -- which is the property; the tolerances
+below are 0 voxels where they used to allow a voxel or three of back-rotation and ``uint16`` slack.
+Note what is *not* guaranteed: "posterior-most" is posterior-most in the rotated condylar frame, so
+a reported point lies on the posterior cortex of its own unrotated column only while the frame angle
+is small. It does on these phantoms and on all 200 Augsburg sections, but at the -76 degree frames
+of the flexed ``dfg_knees`` femurs it can sit 1-2 voxels anterior of its column's cortex, so the 0
+voxel tolerances below are regression checks on these cases and not statements of a property. The same change makes the construction a function of the anatomy, which is
+checked on a phantom here (``test_reference_line_follows_an_index_translation``) and on real
+sections in ``tests/characterization/test_condylar_line_invariance.py``.
 """
 import logging
 import math
@@ -113,9 +124,14 @@ def _cortex_distances(section: np.ndarray, *points):
 
     This is the independent cue the reference line is scored against: per column of the section,
     the posterior cortex is the mask voxel with the largest coronal index and the anterior cortex
-    the one with the smallest. A posterior condylar point must be on the posterior cortex (distance
-    ~0 -- the back-rotation and the final ``uint16`` cast can put it a voxel outside the mask) and
-    far from the anterior one, which is where the old chord-alignment fallback put it.
+    the one with the smallest. A posterior condylar point should be *on* the posterior cortex and
+    far from the anterior one, which is where the old chord-alignment fallback put it. Task #5
+    stopped rounding the points through a rotated raster, so they are now always mask voxels and the
+    posterior distance is 0 on every Augsburg section and on these phantoms -- but that is **not**
+    guaranteed: "posterior-most" is defined in the rotated condylar frame, and at a large frame
+    angle it need not be the posterior-most voxel of its own unrotated column (two ``dfg_knees``
+    femurs near -76 degrees are 1-2 voxels off). The anterior distance is the discriminating half of
+    this cue; treat a small non-zero posterior distance as acceptable, not as a regression.
     :param section: The 2D section the points were found on.
     :param points: The points to score (index coordinates; only x and y are used).
     :return: List of ``(distance to posterior cortex, distance to anterior cortex)`` pairs in voxels.
@@ -149,7 +165,7 @@ def test_notched_section_uses_the_notch_and_logs_nothing(caplog):
     assert layer == 1
     # the two condyles sit at the same coronal level, so the condylar line is horizontal
     assert abs(_tilt(start, end)) < 2
-    assert all(dp <= 1 < da for dp, da in _cortex_distances(section, start, end))
+    assert all(dp == 0 < da for dp, da in _cortex_distances(section, start, end))
 
 
 def test_section_without_a_notch_falls_back_to_the_centroid(caplog):
@@ -176,7 +192,7 @@ def test_fallback_line_lies_on_the_posterior_cortex(bone):
     assert find_notch(section, percentage=percentage, thresh=thresh) is None
     _, start, end = get_knee_reference_line(_volume(section), bone)
     assert _tilt(start, end) == pytest.approx(QUAD_POSTERIOR_TILT, abs=1)
-    assert all(dp <= 2 < da for dp, da in _cortex_distances(section, start, end))
+    assert all(dp == 0 < da for dp, da in _cortex_distances(section, start, end))
 
 
 @pytest.mark.parametrize('degrees', [-20, -10, 0, 10, 20])
@@ -185,9 +201,10 @@ def test_fallback_is_covariant_with_an_in_plane_rotation(degrees):
 
     The frame is taken from the image (posterior = +y), not from the section's own chords, so the
     reported line follows the anatomy instead of jumping by 180 degrees when a chord's orientation
-    flips. Measured error over this range: 0.02-0.57 degrees, with the sweep running 0 or 1 steps,
-    so the residual is the rasterisation of the +-8 degree edges, not the 1 degree sweep step; the
-    1 degree tolerance is therefore tight enough to catch a small regression.
+    flips. Measured error over this range: 0.02-0.57 degrees before task #5 and 0.02-0.40 after it,
+    so the residual is the rasterisation of the +-8 degree edges of the phantom, not a sweep step
+    (the sweep is gone; the tangent is an exact extremum now); the 1 degree tolerance is therefore
+    tight enough to catch a small regression.
 
     The covariance holds only while the anatomy's anterior-posterior axis is the image's: rotated
     past about +45 degrees (or to +-90) this phantom's reported line is 80-82 degrees off, because
@@ -214,20 +231,86 @@ def test_featureless_section_resolves_instead_of_raising():
     assert find_notch(section, percentage=0.5, thresh=2) is None
     _, start, end = get_knee_reference_line(_volume(section), 'tibia')
     assert abs(_tilt(start, end)) < 3  # the posterior tangent of an axis-aligned ellipse
-    assert all(dp <= 2 < da for dp, da in _cortex_distances(section, start, end))
+    assert all(dp == 0 < da for dp, da in _cortex_distances(section, start, end))
 
 
 def test_centrally_peaked_section_keeps_its_points_on_the_posterior_cortex():
     """Degenerate case: the posterior-most point sits at the divider itself.
 
     No knee section looks like this (a posterior cortex peaking in the intercondylar area), but the
-    construction must not fall over or wander onto the anterior cortex when it happens: the line
-    then runs from the posterior apex to where it grazes the far side of the divider, and both
-    endpoints still lie on the posterior boundary.
+    construction must not fall over or wander onto the anterior cortex when it happens. Both dorsal
+    points are then near the apex, so the frame is turned by some 45 degrees and the posterior-most
+    point *of that frame* is a corner of the outline rather than the apex itself -- the line is not
+    anatomically meaningful here, and the only claim made is that both of its endpoints still lie on
+    the posterior boundary rather than on the anterior one.
     """
     section = _fill(((20, 30), (60, 75), (100, 30), (100, 10), (20, 10)))
     assert find_notch(section, percentage=0.5, thresh=2) is None
     _, start, end = get_knee_reference_line(_volume(section), 'tibia')
-    # 3 voxels, not the 2 of the plateau phantoms: here the line ends on a sharp corner of the
-    # outline, where the back-rotation of the swept endpoint lands up to two voxels outside it.
-    assert all(dp <= 3 < da for dp, da in _cortex_distances(section, start, end))
+    assert all(dp == 0 < da for dp, da in _cortex_distances(section, start, end))
+
+
+@pytest.mark.parametrize('shift', [(7, 5, 0), (1, 0, 2), (13, 11, 1)])
+def test_reference_line_follows_an_index_translation(shift):
+    """Padding the volume moves the reported line by exactly the padding, and nothing else.
+
+    The index frame carries no anatomy, so a translation of it must not reach the result (task #5).
+    Asserted exactly: the rotation is taken about the (integer) divider, so the rotated coordinates
+    of a translated mask are bitwise the same, and every selection downstream is
+    translation-invariant. Before task #5 the landmarks were read off a resampled rotated section
+    and mapped back through that array's shape, which failed this on 154 of the 200 Augsburg
+    reader-study sections.
+    """
+    volume = _volume(_fill(QUAD))
+    _, start, end = get_knee_reference_line(volume, 'tibia')
+    padded = np.pad(volume, [(k, 0) for k in shift])
+    _, shifted_start, shifted_end = get_knee_reference_line(padded, 'tibia')
+    expected = np.asarray(shift, dtype=float)
+    assert (np.asarray(shifted_start, dtype=float) - np.asarray(start, dtype=float) == expected).all()
+    assert (np.asarray(shifted_end, dtype=float) - np.asarray(end, dtype=float) == expected).all()
+
+
+@pytest.mark.parametrize('pad', [(6, 4, 3), (0, 9, 0), (11, 0, 1)])
+def test_reference_line_ignores_a_pad_past_the_anatomy(pad):
+    """Growing the array at the HIGH end leaves every index alone, so nothing may move.
+
+    The sharper half of the previous test: a low-end pad shifts the anatomy's indices, a high-end
+    pad does not, so this isolates dependence on the array's *shape* -- which is what the replaced
+    read-out had, mapping its landmarks back through offsets computed from the rotated array's
+    shape. With a pad of (6, 4, 3) it was correct on only 39 of the 200 Augsburg reader-study
+    sections, off by a median 1.0 and up to 57.0 voxels.
+    """
+    volume = _volume(_fill(QUAD))
+    _, start, end = get_knee_reference_line(volume, 'tibia')
+    _, padded_start, padded_end = get_knee_reference_line(np.pad(volume, [(0, k) for k in pad]), 'tibia')
+    assert (np.asarray(padded_start, dtype=float) == np.asarray(start, dtype=float)).all()
+    assert (np.asarray(padded_end, dtype=float) == np.asarray(end, dtype=float)).all()
+
+
+def test_endpoints_are_voxels_of_the_mask():
+    """The two endpoints are mask voxels, not rounded images of a resampled rotation.
+
+    The ``uint16`` cast of the old back-transform could land a voxel outside the mask -- on the
+    Augsburg reader study that happened to 202 of 399 endpoints, and one of them (PA000717
+    image-right's tibial start) fell in a column holding no bone at all.
+    """
+    section = _notched_plateau()
+    layer, start, end = get_knee_reference_line(_volume(section), 'tibia')
+    assert layer == 1
+    for point in (start, end):
+        x, y = float(point[0]), float(point[1])
+        assert x == int(x) and y == int(y)
+        assert section[int(x), int(y)]
+
+
+@pytest.mark.parametrize('kwargs', [{'thresh': 3}, {'step_size': 0.5}, {'thresh': 0, 'step_size': 2}])
+def test_obsolete_sweep_arguments_are_rejected(kwargs):
+    """``thresh`` and ``step_size`` no longer mean anything and refuse a non-default value.
+
+    The sweep they tuned is gone: the tangent is an exact angular extremum, so there is no
+    rasterised hit count to threshold and no step to take. They are rejected rather than ignored so
+    that a call site carrying a tuned value fails loudly -- the precedent is the ``method=``
+    argument of the cartilage entry points.
+    """
+    with pytest.raises(ValueError, match='obsolete'):
+        get_knee_reference_line(_volume(_notched_plateau()), 'tibia', **kwargs)

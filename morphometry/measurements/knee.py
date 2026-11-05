@@ -105,10 +105,14 @@ def calculate_knee_rotation_angle(segmentation_mask: Image | np.ndarray, femur_l
     composed there with the left-side conventions -- so a knee and its mirror image give the same
     value. The composition was already symmetric (negating the x components, which is what
     ``side='right'`` does, is algebraically the same as mirroring both lines), so the asymmetry was
-    entirely in ``knee.get_knee_reference_line``: it rotates the section about the image centre and
-    rounds, and is not invariant under ``x -> n - 1 - x``. Measured on the 100 Augsburg
-    reader-study halves, a half and its mirror disagreed by a median 1.16 degrees, p90 3.06 and max
-    6.21, exact on only 5.
+    entirely in ``knee.get_knee_reference_line``, which is not invariant under ``x -> n - 1 - x``.
+    Measured on the 100 Augsburg reader-study halves, a half and its mirror disagreed by a median
+    1.16 degrees, p90 3.06 and max 6.21, exact on only 5. Part of that was the resampled rotation
+    the search used to read its endpoints from; task #5 replaced it with an exact coordinate
+    construction, which takes the condylar line's own mirror gap down to a median 0.33 and max 2.06
+    degrees but does not close it -- the layer choice, the notch search and the dorsal pair that
+    sets the frame are still not mirror-symmetric, so this reflection is still what makes the
+    measurement equivariant.
 
     This also removes an inconsistency *within* one cohort row rather than only between the two
     sides. ``measurements/femur.py::_mri_torsion`` and

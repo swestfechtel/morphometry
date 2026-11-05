@@ -441,35 +441,6 @@ def num_connected_components(x: np.ndarray, min_size: int = 0) -> int:
     return count
 
 
-def num_mask_points_on_line(mask: np.ndarray, start: np.ndarray, end: np.ndarray, thresh_pt: np.ndarray = None) -> int:
-    """
-    Calculate the number of mask points on the line between start and end.
-    For a given thresh_pt it calculates only the mask points on the line
-    with an x coordinate between the x coordinates of thresh_pt and end.
-    :param mask: A 2D mask.
-    :param start: The start point of the line.
-    :param end: The end point of the line.
-    :param thresh_pt: The threshold point.
-    :return: The number of mask points on the line.
-    """
-    pts_on_line = bresenhamline([start], end, -1).astype(np.uint16)
-
-    # just look at points on the other side of the threshold
-    if thresh_pt is not None:
-        if start[0] < thresh_pt[0]:
-            pts_on_line = np.array(
-                [pt for pt in pts_on_line if pt[0] >= thresh_pt[0]])
-        else:
-            pts_on_line = np.array(
-                [pt for pt in pts_on_line if pt[0] <= thresh_pt[0]])
-
-    sum_val = 0
-    for pt in pts_on_line:
-        sum_val += mask[pt[0], pt[1]]
-
-    return sum_val
-
-
 def points_on_circle(mask: np.ndarray, r: float, center: np.ndarray) -> np.ndarray:
     """
     Find all points that lie on the circumference of a circle and have a value of 1 in the segmentation mask.
@@ -491,13 +462,21 @@ def points_on_circle(mask: np.ndarray, r: float, center: np.ndarray) -> np.ndarr
     return np.array(points) > 0
 
 
-def rotate_mask_dorsal_points(mask: np.ndarray, thresh_point: np.ndarray) -> Tuple[np.ndarray, Optional[float]]:
+def dorsal_points_rotation_angle(mask: np.ndarray, thresh_point: np.ndarray) -> float:
     """
-    Rotate the mask so that a line between the most dorsal (posterior) point right and left (on the sagittal axis)
-    of the notch would be parallel to the sagittal axis.
+    Return the rotation angle that makes the two dorsal condylar points parallel to the sagittal axis.
+
+    This is the *angle* half of :func:`rotate_mask_dorsal_points`, split out so that a caller which
+    only needs the frame (and not a resampled image of it) can rotate coordinates instead of
+    resampling the mask. The two points are the most dorsal (posterior) mask point on either side
+    of ``thresh_point`` on the sagittal axis; the angle is the signed rotation, in the sense of
+    :func:`rotate_point`, that turns the line between them onto ``+x``.
+
     :param mask: The 2D mask.
-    :param thresh_point: A threshold point, given as (x, y), where x is the sagittal axis and y is the coronal axis.
-    :return: The rotated mask and optionally the rotation angle.
+    :param thresh_point: A threshold point, given as (x, y), where x is the sagittal axis and y is
+        the coronal axis. It must lie more than 3 voxels inside the mask's sagittal extent, because
+        the two halves are taken 3 voxels either side of it.
+    :return: The rotation angle in degrees.
     """
     start = get_dorsal_mask_point(mask)
     if start[0] < thresh_point[0]:  # start is 2D with (sagittal, coronal), thresh_point is 3D
@@ -507,18 +486,33 @@ def rotate_mask_dorsal_points(mask: np.ndarray, thresh_point: np.ndarray) -> Tup
         end = start
         start = get_dorsal_mask_point(mask[:thresh_point[0] - 3])
 
-    return rotate_mask_vec_parallel(mask, np.array(end) - np.array(start), np.array([1, 0]))
+    return vec_parallel_rotation_angle(np.array(end) - np.array(start), np.array([1, 0]))
 
 
-def rotate_mask_vec_parallel(mask: np.ndarray, vec1: np.ndarray, vec2: np.ndarray, return_angle: bool = True) -> Tuple[np.ndarray, Optional[float]]:
+def rotate_mask_dorsal_points(mask: np.ndarray, thresh_point: np.ndarray) -> Tuple[np.ndarray, Optional[float]]:
     """
-    Rotate a 2D mask by the angle between two vectors so that the given vectors are parallel and return the rotated mask
-    and optionally the rotation angle.
-    :param mask: The 2D mask to rotate.
-    :param vec1: The first vector.
-    :param vec2: The second vector.
-    :param return_angle: Whether to return the rotation angle.
+    Rotate the mask so that a line between the most dorsal (posterior) point right and left (on the sagittal axis)
+    of the notch would be parallel to the sagittal axis.
+    :param mask: The 2D mask.
+    :param thresh_point: A threshold point, given as (x, y), where x is the sagittal axis and y is the coronal axis.
     :return: The rotated mask and optionally the rotation angle.
+    """
+    angle = dorsal_points_rotation_angle(mask, thresh_point)
+    return rotate_mask_by_angle(mask, angle), angle
+
+
+def vec_parallel_rotation_angle(vec1: np.ndarray, vec2: np.ndarray) -> float:
+    """
+    Return the signed rotation angle that makes ``vec1`` parallel to (and codirectional with) ``vec2``.
+
+    The sign convention is :func:`rotate_point`'s: rotating ``vec1`` by the returned angle with
+    :func:`rotate_point` lands it on ``vec2``'s direction. Split out of the former
+    ``rotate_mask_vec_parallel`` so that the frame can be used on coordinates without resampling an
+    image into it; the arithmetic is unchanged.
+
+    :param vec1: The first 2D vector, as (sagittal, coronal).
+    :param vec2: The second 2D vector, as (sagittal, coronal).
+    :return: The rotation angle in degrees.
     """
     angle = calculate_angle_between_vectors(vec1, vec2)
 
@@ -526,13 +520,26 @@ def rotate_mask_vec_parallel(mask: np.ndarray, vec1: np.ndarray, vec2: np.ndarra
     if calculate_angle_between_vectors(rotate_point(np.array([0, 0]), vec1, angle), vec2) != 0:  # TODO was != 0 before, but that failed with new code, why?
         angle = -angle
 
-    rotated_mask = rotate(mask, -angle, resize=True, preserve_range=True) > 0  # TODO need to invert the sign now, why?
-    rotated_mask = rotated_mask.astype(np.uint8)
+    return angle
 
-    if return_angle:
-        return rotated_mask, angle
-    else:
-        return rotated_mask
+
+def rotate_mask_by_angle(mask: np.ndarray, angle: float) -> np.ndarray:
+    """
+    Resample a 2D mask into the frame rotated by ``angle``, growing the array to hold all of it.
+
+    In index coordinates this is the same rotation :func:`rotate_point` applies, i.e. a mask point
+    ``p`` lands at ``R(angle) @ (p - c)`` with ``c`` the array centre and
+    ``R(a) = [[cos a, sin a], [-sin a, cos a]]`` — hence the negated angle handed to
+    :func:`skimage.transform.rotate`, whose own rotation runs the other way in ``(row, col)``.
+    Resampling is lossy (it binarises an interpolated image and the array origin moves with the
+    output shape), so prefer rotating coordinates where the rotated *image* is not itself needed.
+
+    :param mask: The 2D mask to rotate.
+    :param angle: The rotation angle in degrees, in :func:`rotate_point`'s sense.
+    :return: The rotated mask as ``uint8``, with its own (larger) shape.
+    """
+    rotated_mask = rotate(mask, -angle, resize=True, preserve_range=True) > 0
+    return rotated_mask.astype(np.uint8)
 
 
 def rotate_point(origin: np.ndarray, point: np.ndarray, angle: float, deg: bool = True) -> np.ndarray:
@@ -553,34 +560,6 @@ def rotate_point(origin: np.ndarray, point: np.ndarray, angle: float, deg: bool 
     qs = os + math.cos(angle) * (ps - os) - math.sin(angle) * (-pc + oc)
     qc = oc - math.sin(angle) * (ps - os) - math.cos(angle) * (-pc + oc)
     return np.array([qs, qc])
-
-
-def shrink_points_to_mask(mask: np.ndarray, start_pt: np.ndarray, end_pt: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Shrink a line so that it does not go beyond the mask.
-    :param mask: A 2D mask.
-    :param start_pt: The start point of the line.
-    :param end_pt: The end point of the line.
-    :return: The start and end point of the line after shrinking.
-    """
-
-    points_on_line = bresenhamline([start_pt], end_pt, -1)
-
-    shrinked_start, shrinked_end = None, None
-
-    # start at one end of the line and go along until the first point of the line that is on the mask is found
-    for pt in points_on_line:
-        if mask[int(pt[0]), int(pt[1])]:
-            shrinked_start = pt
-            break
-
-    # do the same but in opposite direction
-    for pt in points_on_line[::-1]:
-        if mask[int(pt[0]), int(pt[1])]:
-            shrinked_end = pt
-            break
-
-    return shrinked_start, shrinked_end
 
 
 def sort_points_by_x(points: np.ndarray, descending: bool = False) -> np.ndarray:

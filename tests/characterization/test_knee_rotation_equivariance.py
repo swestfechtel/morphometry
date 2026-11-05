@@ -9,8 +9,13 @@ half as the reflection of a left one, so a knee and its mirror image give the sa
 **Where the asymmetry was, and why these probes have content.** The *composition* was
 already symmetric: ``side='right'`` negates the x components, which is algebraically the
 same as mirroring both condylar lines, so it contributed exactly nothing to the
-disagreement. The whole of it was in the landmark *search*, which rotates the section
-about the image centre and rounds, and so is not invariant under ``x -> n - 1 - x``.
+disagreement. The whole of it was in the landmark *search*, which is not invariant
+under ``x -> n - 1 - x``. (Up to task #4 the search also rotated the section about the
+image centre and rounded the result; task #5 made the read-out exact, which shrank the
+condylar line's own mirror gap to a median 0.33 and max 2.06 degrees -- from 0.71 and 4.28
+-- without closing it, because the layer choice, the notch search and the dorsal pair that
+sets the frame are still not mirror-symmetric. The reflection below is what makes the
+measurement equivariant, and it is still needed.)
 Measured over the 100 Augsburg reader-study halves before the change, a half and its
 mirror disagreed by a median 1.16 degrees, p90 3.06, max 6.21, and agreed exactly on only
 5. After it, all 100 agree to 0.000e+00.

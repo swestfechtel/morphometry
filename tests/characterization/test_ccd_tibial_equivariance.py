@@ -11,8 +11,9 @@ code on the mirror image. As in ``test_femoral_torsion_equivariance.py``, two pr
 Both measurements reach the right side by reflecting the half and running the left-side code, so the
 probes hold by construction; they guard against reintroducing a separate right-side branch. Before
 that, the two sides disagreed through landmark code that is not mirror-symmetric -- the femoral-neck
-shell sampling for the CCD, the knee condylar search (which rotates the slice about the image centre
-and rounds) for the tibial torsion -- by a median 0.16-0.23 degrees on the Augsburg MRI CCD, 0.85-1.02
+shell sampling for the CCD, the knee condylar search (whose layer choice, notch search and dorsal
+pair are not mirror-symmetric; up to task #4 it also read its endpoints off a slice rotated about the
+image centre) for the tibial torsion -- by a median 0.16-0.23 degrees on the Augsburg MRI CCD, 0.85-1.02
 on the CT CCD, 0.8-1.1 on the Augsburg tibial torsion and 1.7 on the CT tibial torsion, the last with
 a tail into the tens of degrees on the legs whose notch search fails (that tail belonged to the old
 no-notch condylar fallback, since replaced -- see ``tests/characterization/test_condylar_fallback.py``).
