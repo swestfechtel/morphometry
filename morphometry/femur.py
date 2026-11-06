@@ -52,6 +52,29 @@ _NECK_LAYER_BORDER = 1
 #: voxels. Historically an inline ``-80``. It is a synthetic far point rather than a landmark on
 #: bone, so it often falls outside the array; see the rounding note at the end of
 #: :func:`get_femoral_neck_center_lee`.
+#: Whether the Lee reference line's reported far endpoint is floored to an integer voxel index.
+#:
+#: **Shipped `True`, which is the current behaviour, and the repo's own "floats stay floats" rule
+#: argues against it**: that point is a *synthetic* far point 80 voxels back along the fitted neck
+#: axis, nothing indexes an array with it, and only its direction from the head centre is ever
+#: used -- so by the convention recorded in CLAUDE.md it should not be rounded at all.
+#:
+#: **The cost of changing it is bounded analytically at under three quarters of a degree.** The
+#: endpoint is `floor(-80 + cx), floor(-80 * m + cy)`, so its x component is *exactly*
+#: :data:`_NECK_AXIS_REACH` from the head centre and only the y component is perturbed, by an
+#: amount in `[0, 1)` voxels. With `dx = -80` fixed that tilts the reported bearing -- the only
+#: thing used -- by at most `atan(1/80)` = **0.716 deg**, with an expected **0.358**. Against this
+#: method's cohort SD of 14.24 deg, and against the 1.430 deg median that task #9's own change
+#: moved it by, that is small. It is a bound from the construction and not a cohort measurement,
+#: which is the reliable form here: an empirical probe that monkeypatched `np.floor` is *not*
+#: trustworthy (it perturbs every floor in the call stack; the tell was that only 24 of 100 halves
+#: still resolved) and its numbers are deliberately unrecorded.
+#:
+#: So this is a decision and not a maintenance task: flipping it to `False` moves every Lee value
+#: ever produced, by under 0.72 deg each, and carries a do-not-pool burden for that column.
+#: Flipping it is one edit; the `.astype(np.int64)` below goes with it.
+_NECK_ENDPOINT_ROUNDED = True
+
 _NECK_AXIS_REACH = 80
 
 
@@ -626,6 +649,11 @@ def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarra
     # both arguments are non-negative on all 100 uncropped halves, where the two agree exactly.
     # (The sagittal argument is `-80 + center[0]` with `center` already int16, i.e. an exact
     # integer, so its sign never mattered; it is floored too so the pair reads consistently.)
+    # `np.floor` and not `int()`: int truncates toward zero, so it does not commute with adding an
+    # integer across zero, and a crop that drives `center[1]` below the axis reach made the
+    # endpoint off by one (see the docstring). Floored at all only because
+    # `_NECK_ENDPOINT_ROUNDED` is True -- that constant carries why, and the <0.72 deg bound on
+    # changing it.
     end = np.array([np.floor(-_NECK_AXIS_REACH + center[0]),
                     np.floor((-_NECK_AXIS_REACH) * m_new + center[1]),
                     layer_selected]).astype(np.int64)
