@@ -346,7 +346,8 @@ def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmenta
     return angle
 
 def _reslice_femoral_neck_section(femur: np.ndarray, head_center: np.ndarray, neck_center: np.ndarray,
-                                  rotation_angle: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                                  rotation_angle: float,
+                                  plane_rotation: float = 0.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Sample the oblique section through the femoral neck axis on a grid anchored to the head centre.
 
@@ -431,6 +432,26 @@ def _reslice_femoral_neck_section(femur: np.ndarray, head_center: np.ndarray, ne
     theta = np.deg2rad(float(rotation_angle))
     u = np.array([np.cos(theta), 0.0, -np.sin(theta)])
     v = np.array([0.0, 1.0, 0.0])
+    # `plane_rotation` turns the section plane about the neck axis -- i.e. about `u`, which the
+    # `rotation_angle` above has aligned with the neck -- so it selects the RADIAL POSITION of the
+    # plane. At the default 0.0, `v` is exactly `(0, 1, 0)` and every coordinate below is bitwise
+    # what the single-position construction produced; this is why the default is a float literal
+    # and not an `if`, and why no test of the shipped path needed changing.
+    #
+    # The published alpha angle is read from a RADIAL SERIES and reported as the maximum over it
+    # (the angle is highest antero-superiorly), where this function has always sampled one
+    # position. Measured over 20 NaKo cases at 15 deg steps from -60 to +60, the anterior mean runs
+    # 30.26 to 45.03 deg and the posterior the other way, and the per-half maximum lifts the
+    # anterior mean by ~18 deg -- most of the gap to the published asymptomatic 54.1 +- 5.1. See
+    # CLAUDE.md for that measurement and its four caveats.
+    #
+    # The MECHANISM is here and tested; the REDUCTION is deliberately not. Whether to report the
+    # maximum (clinical convention), and over what angular range, is a definitional choice that
+    # changes what the returned pair means -- the anterior and posterior angles peak at opposite
+    # ends of the sweep, so a per-angle maximum returns two numbers measured in different planes.
+    # That is the caller's decision, so this exposes the position and no policy.
+    if plane_rotation:
+        v = np.cos(plane_rotation) * v + np.sin(plane_rotation) * np.cross(u, v)
 
     head = np.asarray(head_center, dtype=float)
     neck = np.asarray(neck_center, dtype=float)
@@ -445,7 +466,13 @@ def _reslice_femoral_neck_section(femur: np.ndarray, head_center: np.ndarray, ne
     # could in principle be decided by as clean as the sample coordinates themselves
     offsets = voxels.astype(float) - head[None, :]
     du = offsets @ u
-    dv = offsets[:, 1]
+    # `offsets @ v`, not `offsets[:, 1]`: the shortcut was valid only while `v` was exactly
+    # `(0, 1, 0)`, and with a non-zero `plane_rotation` it sizes the window along the WRONG
+    # direction, so the section reaches the border and the function's own margin assertion fires.
+    # At `plane_rotation = 0` the two are identical -- `v` is `(0, 1, 0)` and the dot product
+    # selects column 1 -- so the default path is unchanged bitwise. (Found by that assertion, which
+    # is why it is an assert and not a comment.)
+    dv = offsets @ v
 
     # one voxel of zero margin on every side; >= 1 cell between the head centre and the border so
     # the head cell is always inside the window even if the centre were to fall outside the bone
@@ -477,12 +504,16 @@ def _reslice_femoral_neck_section(femur: np.ndarray, head_center: np.ndarray, ne
         'invented by the erosion; the window margin is wrong.')
 
     head_cell = np.array([r_u, r_v])
-    # u is a unit vector, so the dot product IS the coordinate along it; v is axis 1 exactly
-    neck_cell = np.array([r_u + float((neck - head) @ u), r_v + float(neck[1] - head[1])])
+    # Both are unit vectors, so each dot product IS the coordinate along that basis vector. The
+    # second component was `neck[1] - head[1]` with the comment "v is axis 1 exactly", which held
+    # only while `plane_rotation` did not exist; it is identical to `(neck - head) @ v` at the
+    # default and wrong for any other radial position, which left the neck cell un-rotated while
+    # the section was rotated. The second of two such shortcuts; see `dv` above.
+    neck_cell = np.array([r_u + float((neck - head) @ u), r_v + float((neck - head) @ v)])
     return section, head_cell, neck_cell
 
 
-def calculate_alpha_angle(segmentation_mask: Image | np.ndarray, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1, plot: plt.Axes | bool = False, spacing: Optional[Sequence[float]] = None) -> Tuple[float, float]:
+def calculate_alpha_angle(segmentation_mask: Image | np.ndarray, side: str = 'left', segmentation_label: int = 1, isotropic: bool = False, x_ratio: float = 1, plot: plt.Axes | bool = False, spacing: Optional[Sequence[float]] = None, plane_rotation: float = 0.0) -> Tuple[float, float]:
     """
     Calculate the alpha angle from the femoral head center and the femoral neck transition.
 
@@ -593,7 +624,7 @@ def calculate_alpha_angle(segmentation_mask: Image | np.ndarray, side: str = 'le
     femur = np.where(mask == segmentation_label, 1, 0)
     # the oblique section through the neck axis, sampled on a grid anchored to the head centre
     section, femoral_head_center_rotated, femoral_neck_center_rotated = _reslice_femoral_neck_section(
-        femur, femoral_head_center, femoral_neck_center, rotation_angle)
+        femur, femoral_head_center, femoral_neck_center, rotation_angle, plane_rotation)
 
     contour_points = get_contour_points(section)
 
