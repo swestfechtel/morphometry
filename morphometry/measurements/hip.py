@@ -672,6 +672,30 @@ def calculate_alpha_angle(segmentation_mask: Image | np.ndarray, side: str = 'le
         plot.add_patch(plt.Circle(center, radius, color='r', fill=False))
         plot.set_aspect('equal')
 
+    # A plausibility check, not a tuned gate: the alpha angle is the angle at the fitted head
+    # centre between the neck axis and the point where the contour leaves the fitted circle, so on
+    # valid (isotropic) input it cannot be <= 0 or >= 90 degrees. Returning such a value is worse
+    # than raising, because nothing downstream can tell it from a measurement: over a stratified
+    # 3000-case NaKo sample **7 of 5980** resolving halves came back outside (0, 90) -- all seven
+    # at or above 90 degrees, up to 99.44 -- and those rows entered the cohort table
+    # indistinguishable from sound ones. Be precise about the scope: a further **8** halves are
+    # *implausible* without being *impossible* (e.g. 84.52 and 79.37 degrees, or an anterior of
+    # 0.003 that prints as 0.00), and this check deliberately does NOT catch them, because
+    # separating them from real anatomy needs a threshold fitted to a cohort. So the 15 implausible
+    # halves recorded in CLAUDE.md split 7 impossible / 8 merely extreme, and only the first group
+    # is refused here. `ValueError` specifically, so the batch scripts' and
+    # `compute_torsion.py`'s per-measurement handlers record a NaN row rather than aborting the run.
+    # NO THRESHOLD IS FITTED HERE: 0 and 90 are properties of the construction, not of a cohort,
+    # which is why this is separable from the open question of the measurement's absolute level
+    # (~31/35 degrees against a published asymptomatic 54.1 +- 5.1) -- see CLAUDE.md. A
+    # head-RADIUS plausibility check would catch a different subset and does need a threshold, so
+    # it is deliberately not bundled in.
+    for name, angle in (('anterior', anterior_angle), ('posterior', posterior_angle)):
+        if not 0.0 < angle < 90.0:
+            raise ValueError(f'alpha angle: the {name} angle came out at {angle:.4f} degrees, '
+                             f'which the construction cannot produce (it must lie strictly '
+                             f'between 0 and 90); the landmarks or the head fit are degenerate.')
+
     return anterior_angle, posterior_angle
 
 def calculate_acetabular_anteversion(hip_image: Segmentation, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, ct: bool = False, plot: bool | plt.Axes = False, acetabulum_radius_factor: float = 0.) -> Tuple[float, float]:

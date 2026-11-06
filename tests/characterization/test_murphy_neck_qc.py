@@ -86,8 +86,12 @@ def test_a_sound_augsburg_hip_is_not_flagged(augsburg_pa000001):
 def test_the_short_axis_hip_is_flagged_but_still_measured():
     """PA001127, both halves: 6.97 and 12.77 mm axial-plane neck axes, flagged and still reported."""
     case = data_paths.AUGSBURG_LARGE_DIR / 'PA001127'
-    assert _augsburg_flags(case) == {'left': 'murphy_axis_short:6.97',
-                                     'right': 'murphy_axis_short:12.77'}
+    # In-plane VOXELS, not millimetres: the gate compares voxels, so the flag prints voxels (see
+    # the comment at the flag site). These two are the 6.4 and 11.7 that CLAUDE.md's prevalence
+    # survey records as the cohort's two shortest axes, which is the cross-check that the printed
+    # value is now the quantity the threshold tested.
+    assert _augsburg_flags(case) == {'left': 'murphy_axis_short:6.37',
+                                     'right': 'murphy_axis_short:11.67'}
 
     hip, knee = _load(case / 'hip_seg.nii.gz'), _load(case / 'knee_seg.nii.gz')
     x_ratio = abs(hip.spacing[2]) / 2 * abs(hip.spacing[0])
@@ -110,13 +114,13 @@ def test_a_one_voxel_speck_on_the_base_slice_is_not_flagged():
 
 @pytest.mark.needs_augsburg_large
 def test_the_axis_gate_s_false_alarm_is_named():
-    """PA000445 image-right: a 14.95 mm axis with an unremarkable angle, flagged all the same.
+    """PA000445 image-right: a 13.67-voxel axis with an unremarkable angle, flagged all the same.
 
     Pinned deliberately. The gate is on conditioning, so it must flag a short axis whether or not
     the angle that came out looks wrong; this is the one case in the three cohorts where it does.
     """
     flags = _augsburg_flags(data_paths.AUGSBURG_LARGE_DIR / 'PA000445')
-    assert flags['right'] == 'murphy_axis_short:14.95'
+    assert flags['right'] == 'murphy_axis_short:13.67'
     assert flags['left'] == 'murphy_landmark_failed:trochanter_implausible'
 
 

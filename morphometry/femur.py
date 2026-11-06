@@ -996,7 +996,17 @@ def murphy_neck_base_qc(hip_image: Image, femoral_head_centre: np.ndarray, neck_
 
     flags = []
     if axis_voxels < 1.0 / math.tan(math.radians(C.MURPHY_AXIS_ANGLE_TOLERANCE_DEG)):
-        flags.append(f"murphy_axis_short:{metrics['axis_length_mm']:.2f}")
+        # VOXELS, not millimetres. The comparison above is in in-plane voxels ("one voxel of
+        # landmark error must not outweigh the tolerance"), and printing a different quantity means
+        # the flag's value is not the one the threshold tested -- which on a cohort with several
+        # in-plane spacings makes the printed value non-monotone in the verdict. Measured on
+        # Augsburg-large: its 951 hip files carry three in-plane spacings (949 at 1.09375, one at
+        # 1.145833, one at 1.25 mm), so [15.64, 17.88] mm is an ambiguous band in which an unflagged
+        # half prints shorter than a flagged one. The same construction was measured end to end on
+        # the condylar line, where it IS realised -- 51 unflagged lines shorter in mm than the
+        # longest flagged one -- so this was changed rather than documented. `axis_length_mm` stays
+        # in the returned dict, where nothing compares it against the threshold.
+        flags.append(f"murphy_axis_short:{metrics['axis_length_voxels']:.2f}")
     if metrics['head_clearance_mm'] is not None and metrics['head_clearance_mm'] < 0:
         flags.append(f"murphy_base_in_head:{-metrics['head_clearance_mm']:.2f}")
     if not metrics['base_in_bone']:

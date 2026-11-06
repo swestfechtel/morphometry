@@ -154,8 +154,30 @@ def test_alpha_angle_is_unchanged(halves, side):
     off by a median 37.1 and up to 129.7 degrees; it is now exact on 100 of 100.
     ``test_alpha_angle_invariance.py`` carries the isotropic NaKo probes and the guard.
     """
+    def read(image):
+        """The angle pair, or the refusal, whichever the measurement produces.
+
+        On this path the result is frequently **outside (0, 90)** -- the image-left pair of this
+        very fixture reads [94.04, 78.16] -- which ``calculate_alpha_angle`` now refuses as
+        geometrically impossible. That refusal is correct and is not what this test is about, so
+        the outcome compared below is "value or refusal", which is the faithful generalisation of
+        invariance: if the construction refuses the input, it must refuse it identically after a
+        translation that moves no voxel's physical position. Narrowing the test to the sides that
+        happen to return a number would quietly drop the coverage this fixture exists for.
+        """
+        try:
+            return ('value', np.asarray(calculate_alpha_angle(
+                image.array, side, 1, isotropic=False, x_ratio=halves['x_ratio']), dtype=float))
+        except ValueError as exc:
+            return ('refused', str(exc))
+
     hip = halves['hip'][side]
-    before = calculate_alpha_angle(hip.array, side, 1, isotropic=False, x_ratio=halves['x_ratio'])
+    kind_before, before = read(hip)
     for shift in IN_PLANE_SHIFTS:
-        after = calculate_alpha_angle(_shifted(hip, shift).array, side, 1, isotropic=False, x_ratio=halves['x_ratio'])
-        np.testing.assert_allclose(after, before, atol=1e-6)
+        kind_after, after = read(_shifted(hip, shift))
+        assert kind_after == kind_before, (
+            f'shift {shift} changed the outcome from {kind_before!r} to {kind_after!r}')
+        if kind_before == 'value':
+            np.testing.assert_allclose(after, before, atol=1e-6)
+        else:
+            assert after == before, f'shift {shift} changed the refusal message'
