@@ -729,6 +729,7 @@ def calculate_alpha_angle(segmentation_mask: Image | np.ndarray, side: str = 'le
 
     return anterior_angle, posterior_angle
 
+
 def calculate_acetabular_anteversion(hip_image: Segmentation, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, ct: bool = False, plot: bool | plt.Axes = False, acetabulum_radius_factor: float = 0.) -> Tuple[float, float]:
     """
     Calculate the acetabular anteversion for both sides from a segmentation mask.
