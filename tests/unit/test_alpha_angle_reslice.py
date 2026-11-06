@@ -412,3 +412,49 @@ def test_isotropy_validator_refuses_malformed_spacing_as_a_value_error(spacing, 
     """
     with pytest.raises(ValueError):
         G.validate_isotropy(spacing, 'probe')
+
+
+def _labelled_hip_phantom(label: int, n: int = 90) -> np.ndarray:
+    """A head sphere on a neck cylinder, labelled ``label``, on which the alpha angle resolves.
+
+    The counterpart of :func:`test_a_failed_contour_search_is_a_value_error_naming_the_side`'s
+    phantom: the neck is wide enough (radius 10 against the head's 15) that the head-neck
+    prominence leaves the fitted circle, so both the anterior and the posterior search find a
+    contour point and the measurement returns a pair instead of raising. It is a negative control
+    for the *label*, not a plausible femur -- the geometry is symmetric about the section plane's
+    ``y``, so the two angles come out equal, which this test does not depend on.
+
+    :param label: the segmentation label to paint the bone with.
+    :param n: the cubic volume's extent along each axis.
+    :return: a ``(n, n, n)`` ``int16`` mask holding the bone at ``label`` and 0 elsewhere.
+    """
+    volume = np.zeros((n, n, n), dtype=np.int16)
+    zz, yy, xx = np.meshgrid(np.arange(n), np.arange(n), np.arange(n), indexing='ij')
+    volume[(xx - 60.) ** 2 + (yy - 45.) ** 2 + (zz - 25.) ** 2 <= 15. ** 2] = label
+    for t in np.linspace(0, 1, 400):
+        volume[(xx - (60 - 32 * t)) ** 2 + (yy - 45.) ** 2 + (zz - (25 + 26 * t)) ** 2 <= 10. ** 2] = label
+    return volume
+
+
+@pytest.mark.parametrize('label', [2, 5, 7])
+def test_the_contour_honours_the_callers_segmentation_label(label):
+    """The femoral contour must be read at ``segmentation_label``, not at a hardcoded 1.
+
+    ``calculate_alpha_angle`` built its contour from ``np.where(mask == 1, 1, 0)`` while the head
+    centre above it honours ``segmentation_label``, so a caller passing any other label got a
+    contour of label 1 measured against a sphere fitted to its own label -- and on a mask holding
+    nothing at label 1 that contour is *empty*, so the measurement raised instead of measuring.
+    Every caller in the repo passes 1, which is why nothing caught it and why the repair is
+    zero-movement; this phantom is the only thing that exercises the other branch.
+
+    Relabelling the bone cannot change the geometry, so the result must be bit-identical to the
+    label-1 reading of the same shape.
+
+    :param label: a segmentation label other than 1 to paint the identical phantom with.
+    """
+    reference = calculate_alpha_angle(_labelled_hip_phantom(1), 'left', 1, isotropic=True)
+    assert np.all(np.isfinite(reference)), 'the phantom must resolve, or the test cannot discriminate'
+
+    relabelled = calculate_alpha_angle(_labelled_hip_phantom(label), 'left', label, isotropic=True)
+    assert relabelled == reference, (
+        f'label {label} read {relabelled}, label 1 read {reference} on the same geometry')
