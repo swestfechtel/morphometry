@@ -188,3 +188,13 @@ Wirth_Eckstein_2008.pdf
 # of per-ray tables, which must never reach a commit.
 results/
 logs/
+
+# macOS metadata. Finder drops .DS_Store into any directory it browses, and a
+# macOS client writing to a non-HFS share (or an unpacked archive) leaves an
+# AppleDouble ._<name> sidecar beside every file -- ._.DS_Store being the one
+# for .DS_Store itself. Both appeared in the working tree without anyone
+# editing the repo, so they are ignored rather than deleted case by case.
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
