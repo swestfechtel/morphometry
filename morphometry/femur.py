@@ -48,6 +48,12 @@ _NECK_SECTION_MARGIN = 1
 #: the border is zero everywhere.
 _NECK_LAYER_BORDER = 1
 
+#: How far back along the fitted neck axis the reported reference-line endpoint is placed, in
+#: voxels. Historically an inline ``-80``. It is a synthetic far point rather than a landmark on
+#: bone, so it often falls outside the array; see the rounding note at the end of
+#: :func:`get_femoral_neck_center_lee`.
+_NECK_AXIS_REACH = 80
+
 
 def _most_dorsal_coordinate(points: np.ndarray) -> np.ndarray:
     """
@@ -569,8 +575,23 @@ def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarra
                              contour_pts_l[1][ind_gap:] - center[1])
         m_new = np.mean([popt1[0], popt2[0]])
 
-    # find endpoint for the reference line
-    end = np.array([int(-80 + center[0]), int((-80) * m_new + center[1]), layer_selected])
+    # Find the endpoint of the reference line: a point `_NECK_AXIS_REACH` voxels back along the
+    # fitted neck axis from the head centre. It is a synthetic far point, not a bone voxel, so it
+    # routinely lands outside the array -- which is why the rounding has to be `np.floor` and not
+    # `int()`. `int()` truncates TOWARD ZERO, so it rounds a positive argument down and a negative
+    # one up, and therefore does not commute with adding an integer across zero: under a crop that
+    # shifts `center[1]` below the axis reach, the same anatomy was reported one voxel away.
+    # Measured over the 100 Augsburg reader-study halves, cropping the femur to its own bounding
+    # box at margin 0: the coronal argument fell in (-1, 0] on exactly two halves (PA000012
+    # image-right and PA000667 image-left) and `int()` rounded both UP to 0 where `np.floor` gives
+    # -1, reproducing the uncropped answer. `np.floor` rounds down for either sign, so
+    # floor(x + n) == floor(x) + n for integer n. It is ZERO-MOVEMENT in the production framing:
+    # both arguments are non-negative on all 100 uncropped halves, where the two agree exactly.
+    # (The sagittal argument is `-80 + center[0]` with `center` already int16, i.e. an exact
+    # integer, so its sign never mattered; it is floored too so the pair reads consistently.)
+    end = np.array([np.floor(-_NECK_AXIS_REACH + center[0]),
+                    np.floor((-_NECK_AXIS_REACH) * m_new + center[1]),
+                    layer_selected]).astype(np.int64)
     return end
 
 def get_trochanter_major(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1) -> np.ndarray:
