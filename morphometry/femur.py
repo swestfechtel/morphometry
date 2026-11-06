@@ -37,6 +37,17 @@ _NECK_FRAME_HALF_GAP = 3
 #: axis of the rotated frame, which is less than one cell.
 _NECK_SECTION_MARGIN = 1
 
+#: Voxels of zero border the neck-layer tests of :func:`get_femoral_neck_center_lee` are evaluated
+#: on. One is enough and is load-bearing for the same kind of reason as
+#: :data:`_NECK_SECTION_MARGIN`: ``skimage.measure.find_contours`` does not close a region that
+#: reaches the array edge -- it returns one *open* polyline per disjoint interval of border contact,
+#: so a femur sitting on two sides of the layer reads as two contours and fails the single-outline
+#: test (one side still reads as one polyline and passes, which is why the defect needs a bone on
+#: two or more sides). One zero voxel all round puts the whole region strictly inside the evaluated
+#: array, which is all the closure needs; a wider border cannot change any contour count, because
+#: the border is zero everywhere.
+_NECK_LAYER_BORDER = 1
+
 
 def _most_dorsal_coordinate(points: np.ndarray) -> np.ndarray:
     """
@@ -421,28 +432,44 @@ def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarra
     voxels along it, and the torsion composition aligns the axial coordinate, so the 80 and the
     returned ``layer_selected`` do not enter the result.
 
-    **Index-frame invariant as of task #9, except for the layer choice.** Padding the hip half
-    (which shifts every index and moves no anatomy) left the reported axis unchanged on only 5 of the
-    100 Augsburg reader-study halves while the notch was read off a rotated resampling of the layer;
-    with :func:`contour_femoral_neck`'s read-out fixed it is unchanged on 100 of 100, at both ends of
+    **Index-frame invariant as of task #9.** Padding the hip half (which shifts every index and
+    moves no anatomy) left the reported axis unchanged on only 5 of the 100 Augsburg reader-study
+    halves while the notch was read off a rotated resampling of the layer; with
+    :func:`contour_femoral_neck`'s read-out fixed it is unchanged on 100 of 100, at both ends of
     every axis. An in-plane crop to the femur's own bounding box is the harder probe, and the clamped
-    ring bounds (see :func:`contour_femoral_neck`) take it from **3 of 96** measurable halves to
-    **86 of 96**. The remaining 10 are attributed and are not the notch -- given the same selected
-    layer and crop-corrected landmarks the notch frame, the notch cell and ``a`` are exact on 100 of
-    100:
+    ring bounds (see :func:`contour_femoral_neck`) took it from **3 of 96** measurable halves to
+    **86 of 96**; the layer border below closes the remainder.
 
-    * on **8 of the 10** the crop selects a **different layer**, because the loop below is itself
-      array-bounds dependent: ``points_on_circle`` silently drops the samples of its ``2 * r`` circle
-      that fall outside the array, and ``find_contours`` sees a different outline once the bone
-      touches the border. Four further halves stop resolving a notch on the cropped array for the
-      same reason. **So the crop residual is the layer selection**, a separate and pre-existing array
-      dependence of this function that the notch fix never touched: re-choosing layers would move
-      values, so it is left as its own backlog item.
-    * the other **2** (``PA000012`` image-right, ``PA000667`` image-left, 0.68 and 0.67 degrees, one
-      quantisation step of the reported endpoint) are the bone touching the array border, where
-      ``utils.get_contour``'s ``binary_erosion`` (``border_value=0``) reports the border row as
-      contour and adds points to the fit below. Both are exact with a one-voxel margin round the
-      bounding box, which is what identifies the cause.
+    **The layer selection was the whole crop residual, and it was ``find_contours``, not the
+    circle.** Measured over the same 100 halves with the femur cropped to its own bounding box at
+    margin 0 -- bone sitting *on* the array border, the only framing in which this fires -- the
+    selected layer survived on 88, the ``find_contours`` count flipped on 12 (1 -> 2 on nine halves,
+    1 -> 3 on three) and the ``2 * r`` circle test flipped on **0**, with the head centre and radius
+    bit-identical on all 100. ``skimage.measure.find_contours`` does not close a region that reaches
+    the array edge: it returns one *open* polyline per disjoint interval of border contact, so bone
+    on two or three sides of the layer reads as two or three contours, the single-outline test
+    fails, and the walk runs on to a later layer (7 -> 8, 8 -> 10, 18 -> 21 twice,
+    18 -> 19, 8 -> 9, 6 -> 7 twice, 6 -> 8, 7 -> 9 twice, 16 -> 17). Evaluating it on a
+    :data:`_NECK_LAYER_BORDER`-voxel zero border makes the layer invariant on **100 of 100** at
+    margin 0, and it is **zero-movement in the production framing**: the same layer is selected on
+    all 100 uncropped halves, so the Lee neck centre, the proximal axis and the torsion are
+    bit-identical and no golden moved.
+
+    ``points_on_circle`` is deliberately left on the raw section, because it cannot be responsible:
+    it keeps a sample only if that sample is in bounds **and** on bone, so an out-of-bounds sample is
+    already equivalent to a not-bone sample, and a crop that preserves every bone voxel cannot change
+    its verdict -- which is why its 0 of 100 above is a property of the construction and not of this
+    cohort. (Noted while in that loop and deliberately not changed: ``utils.points_on_circle`` ends
+    ``return np.array(points) > 0``, so it returns a boolean array rather than the points it
+    collected. Only ``len(...) > 0`` is ever read, and this is its only caller, so it is dead but
+    harmless; fixing it is a separate item.)
+
+    Two halves of the earlier crop residual were never the layer and are unaffected by the border:
+    ``PA000012`` image-right and ``PA000667`` image-left (0.68 and 0.67 degrees, one quantisation
+    step of the reported endpoint) are the bone touching the array border, where
+    ``utils.get_contour``'s ``binary_erosion`` (``border_value=0``) reports the border row as contour
+    and adds points to the fit below. Both are exact with a one-voxel margin round the bounding box,
+    which is what identifies the cause.
 
     None of this is realised in production: the guards that the clamp replaced fired on 0 of the 100
     halves in the production framing, and no production caller crops in plane.
@@ -473,9 +500,13 @@ def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarra
     """
     layer_selected = None
     for i in range(segmentation_mask.shape[2]):
-        contour_length = len(find_contours(segmentation_mask[:, :, i],
-                                           0.8))  # need to use find_contours here because it can detect disconnected contours
-        on_circle = points_on_circle(segmentation_mask[:, :, i], r * 2, center[:2])
+        section = segmentation_mask[:, :, i]
+        # need to use find_contours here because it can detect disconnected contours -- and it is
+        # evaluated on a one-voxel zero border, because it does not close a region that touches the
+        # array edge (see the array-border note above). ``points_on_circle`` needs no border: it is
+        # unaffected by construction, so it is left on the raw section.
+        contour_length = len(find_contours(np.pad(section, _NECK_LAYER_BORDER), 0.8))
+        on_circle = points_on_circle(section, r * 2, center[:2])
 
         if contour_length == 1 and len(on_circle) > 0:
             layer_selected = i
