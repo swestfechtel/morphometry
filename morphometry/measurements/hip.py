@@ -586,7 +586,11 @@ def calculate_alpha_angle(segmentation_mask: Image | np.ndarray, side: str = 'le
 
     rotation_angle = calculate_angle_between_vectors(neck_axis, sagittal_axis)  # to reconstruct the neck axis plane, the mask must be rotated around the coronal axis such that the neck axis aligns with the sagittal axis
 
-    femur = np.where(mask == 1, 1, 0)
+    # This hardcoded the label `1` while the head centre above honours `segmentation_label`,
+    # so a caller passing any other label got a contour of label 1 against a centre fitted to
+    # its own label. Every caller in the repo passes 1, so this is zero-movement; it was left
+    # alone in 8d138af only to keep that commit's attribution clean.
+    femur = np.where(mask == segmentation_label, 1, 0)
     # the oblique section through the neck axis, sampled on a grid anchored to the head centre
     section, femoral_head_center_rotated, femoral_neck_center_rotated = _reslice_femoral_neck_section(
         femur, femoral_head_center, femoral_neck_center, rotation_angle)

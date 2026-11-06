@@ -603,12 +603,19 @@ def get_trochanter_major(hip_image: Image, femoral_head_centre: np.ndarray, segm
     :param segmentation_label: The label of the segmentation mask.
     :return: The coordinates of the trochanter major.
     """
-    lateral_extents = np.zeros(hip_image.get_shape()[2])
+    # `Image.shape` is the (x, y, z) property -- `nibabel`'s `.shape` or SimpleITK's `GetSize()`.
+    # This read `hip_image.get_shape()`, which no `Image` has ever defined, so `method='tomczak'`
+    # raised `AttributeError` for its whole advertised life: it is named in
+    # `calculate_femoral_torsion`'s docstring and accepted by its assertion, and no caller in the
+    # repo exercises it, so nothing caught it. `AttributeError` is also outside the
+    # `(RuntimeError, AssertionError, ValueError)` tuple the batch scripts catch, so a cohort run
+    # that asked for tomczak would have aborted rather than written a NaN row.
+    lateral_extents = np.zeros(hip_image.shape[2])
     array = hip_image.array.copy()
     array = np.where(array == segmentation_label, 1, 0)  # convert to binary mask
 
     # iterate from superior to inferior and get the maximum lateral extent of each layer
-    for i in range(hip_image.get_shape()[2]):
+    for i in range(hip_image.shape[2]):
         if np.count_nonzero(array[:, :, i]):
             lateral_extents[i] = np.argwhere(array[:, :, i])[:, 0].min()
         else:

@@ -458,7 +458,12 @@ def points_on_circle(mask: np.ndarray, r: float, center: np.ndarray) -> np.ndarr
         if 0 <= c < mask.shape[1] and 0 <= s < mask.shape[0] and mask[s, c] == 1:
             points.append((s, c))
 
-    return np.array(points) > 0
+    # Returns the collected points. This read `np.array(points) > 0`, i.e. a BOOLEAN array of
+    # "coordinate is positive" rather than the coordinates themselves, which contradicted both
+    # the name and the docstring. Harmless in practice: the single caller
+    # (`femur.py::get_femoral_neck_center_lee`) reads only `len(...) > 0`, and the length is the
+    # same either way, so this is zero-movement.
+    return np.array(points)
 
 
 def dorsal_points_rotation_angle(mask: np.ndarray, thresh_point: np.ndarray) -> float:
