@@ -5,6 +5,7 @@ import nibabel as nib
 import numpy as np
 
 from morphometry.femur import get_lee_neck_qc, get_murphy_neck_qc
+from morphometry.knee import get_condylar_line_qc
 from morphometry.image_io import Segmentation, split_image_left_right
 from morphometry.measurements.femur import calculate_femoral_torsion, get_femoral_torsion_landmarks
 from morphometry.measurements.tibia import calculate_tibial_torsion, get_tibial_torsion_landmarks
@@ -222,6 +223,38 @@ if __name__ == '__main__':
         landmarks_final['tibia']['left']['knee_end'] = [0, 0, 0]
         landmarks_final['tibia']['left']['ankle_start'] = [0, 0, 0]
         landmarks_final['tibia']['left']['ankle_end'] = [0, 0, 0]
+
+    # QC of the two posterior condylar reference lines, one per bone and image half. Only the
+    # in-plane DIRECTION of each line enters the angles, so a short line is badly conditioned in
+    # the one quantity that is used: one voxel of landmark error turns a 9.5-voxel line by 6
+    # degrees. The femoral line is read by both femoral_torsion_* methods, the tibial one by
+    # tibial_torsion_*, and a flagged line keeps every one of those values -- the flag only marks
+    # the row as needing a look at the mask.
+    #
+    # The values are in in-plane VOXELS, where the Murphy and Lee flags above are in millimetres
+    # and in head radii respectively; see morphometry.knee.knee_condylar_line_qc for why (a
+    # millimetre value is not monotone in the verdict across in-plane spacings).
+    #
+    # The knee halves here are bare arrays, so the parent's spacing is passed explicitly, exactly
+    # as it is to the torsion measurements above -- otherwise the in-plane isotropy precondition
+    # the line length rests on could not be checked (backlog task #10).
+    #
+    # Keys are the PATIENT side, like every other key here, so the image-left half carries the
+    # '_right' name. get_condylar_line_qc never raises (a failed search is reported as a flag,
+    # including the bare IndexError get_knee_reference_line throws on an empty bone label, which
+    # is NOT in this module's (RuntimeError, AssertionError, ValueError) handler tuple), which is
+    # why these calls can sit outside the try blocks without risking the whole container.
+    #
+    # As with the Murphy and Lee flags: NOTHING IN THE API READS THESE KEYS (ResultsModel has
+    # extra="ignore" and api/tasks/torsion.py persists only model_dump()), so on the API path they
+    # are computed and discarded. They are visible only when this container is run by hand with a
+    # mounted output dir.
+    for patient_side, knee_half, image_side in (('right', left_knee, 'left'),
+                                                ('left', right_knee, 'right')):
+        for bone, label in (('femur', 1), ('tibia', 2)):
+            results[f'{bone}_condylar_line_{patient_side}_qc_flags'] = get_condylar_line_qc(
+                knee_half, bone, segmentation_label=label, side=image_side,
+                spacing=knee_spacing)
 
     errors = {'errors': errors}
 

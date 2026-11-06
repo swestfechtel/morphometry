@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from morphometry.femur import get_lee_neck_qc, get_murphy_neck_qc
+from morphometry.knee import get_condylar_line_qc
 from morphometry.image_io import split_image_left_right
 from morphometry.measurements.femur import calculate_femoral_torsion, get_femoral_torsion_landmarks
 from morphometry.measurements.tibia import calculate_tibial_torsion, get_tibial_torsion_landmarks
@@ -46,6 +47,12 @@ def test_compute_torsion_pipeline(augsburg_pa000001):
                                                                           x_ratio=x_ratio)
     results['femoral_torsion_right_lee_qc_flags'] = get_lee_neck_qc(left_hip, side='left',
                                                                     x_ratio=x_ratio)
+    # and the two condylar reference-line QC strings, one per bone of the same half. The knee half
+    # is a bare array here, exactly as in the container, so the parent's spacing is passed
+    # explicitly for the in-plane isotropy precondition the line length rests on.
+    for bone, label in (('femur', 1), ('tibia', 2)):
+        results[f'{bone}_condylar_line_right_qc_flags'] = get_condylar_line_qc(
+            left_knee, bone, segmentation_label=label, side='left', spacing=knee_spacing)
 
     # femoral, image-right half (stored as patient-left), with the sagittal shift
     results['femoral_torsion_left'] = calculate_femoral_torsion(right_hip, right_knee, side='right', method='lee', x_ratio=x_ratio,
@@ -66,10 +73,13 @@ def test_compute_torsion_pipeline(augsburg_pa000001):
     assert set(results) == {'femoral_torsion_right', 'femoral_torsion_right_murphy',
                             'femoral_torsion_left', 'tibial_torsion_right',
                             'femoral_torsion_right_murphy_qc_flags',
-                            'femoral_torsion_right_lee_qc_flags'}
+                            'femoral_torsion_right_lee_qc_flags',
+                            'femur_condylar_line_right_qc_flags',
+                            'tibia_condylar_line_right_qc_flags'}
     for key, value in results.items():
         if key.endswith('_qc_flags'):
-            # PA000001's neck is sound, so the flag string is empty -- but it is always present
+            # PA000001's neck and both its condylar lines are sound, so the flag string is empty
+            # -- but it is always present
             assert value == '', f'{key} is not empty'
             continue
         assert np.isfinite(value), f'{key} is not finite'

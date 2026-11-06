@@ -269,6 +269,97 @@ MURPHY_AXIS_ANGLE_TOLERANCE_DEG = 4.0
 #: Lee-minus-Murphy gap is ~11 degrees too narrow for landmarks this far apart).
 LEE_MIN_NOTCH_DISTANCE_FACTOR = 1.0
 
+#: Largest landmark-error-to-tilt tolerance, in degrees, at which the posterior condylar reference
+#: line (``morphometry.knee.get_knee_reference_line``) is still considered well conditioned
+#: (``condylar_line_short``, see :func:`morphometry.knee.knee_condylar_line_qc`). As for
+#: :data:`MURPHY_AXIS_ANGLE_TOLERANCE_DEG`, the tolerance is turned into a minimum length by
+#: ``1 / tan(tolerance)`` **in in-plane voxels**: at 4 degrees a line shorter than 14.30 in-plane
+#: voxels is one on which a single voxel of landmark error would tilt the line by more than the
+#: tolerance. Only the line's in-plane *direction* enters the femoral torsion, the tibial torsion
+#: and the knee rotation angle, so that tilt is the whole error -- one voxel turns a 9.5-voxel line
+#: by 6.0 degrees and a 44-voxel line by 1.3.
+#:
+#: **This is deliberately a separate constant holding the same number as
+#: :data:`MURPHY_AXIS_ANGLE_TOLERANCE_DEG`, not an alias of it.** What is inherited is the
+#: *construction* -- "one voxel of landmark error must not outweigh the tolerance" -- which is why
+#: no new value was fitted here and why the threshold is non-arbitrary by construction rather than
+#: by a cohort. What is not inherited is the evidence: the Murphy constant's 4 degrees was placed
+#: inside a measured gap in the Murphy axis-length distribution and its specificity was scored
+#: against that angle's own outliers, and none of that transfers to a different landmark on a
+#: different bone. Writing ``= MURPHY_AXIS_ANGLE_TOLERANCE_DEG`` would mean re-tuning the Murphy
+#: gate against hip data silently moved this gate too, which is exactly the coupling to avoid; the
+#: two are independent and may diverge.
+#:
+#: **What the resulting threshold does and does not rest on.** Surveyed over the Augsburg large
+#: cohort -- 954 case directories, 952 of which hold a ``knee_seg.nii.gz``, i.e. **1904 image
+#: halves** (``PA000255`` and ``PA000964`` have no knee segmentation) -- through the real
+#: ``get_knee_reference_line``, loaded as the scripts load it (LPI, ``remove_outliers``, split at
+#: ``shape[0] // 2``), and **measuring the line the measurements actually use**: a right half is
+#: reflected first, as all three consumers reflect it
+#: (``measurements/femur.py``, ``measurements/knee.py``, ``measurements/tibia.py``). Every figure
+#: below is that reflected reading, which is the quantity this threshold is compared against.
+#:
+#: * **Femur**: 1904 of 1904 halves resolve. Min **5.39** voxels, then 22.80, 23.19, 29.27 -- the
+#:   largest gap anywhere in the low end is that first one, **17.42 voxels wide** -- p1 33.06,
+#:   median 45.10, max 67.00.
+#: * **Tibia**: 1902 of 1904 resolve; the two that do not are both halves of ``PA000120``, whose
+#:   *tibia* label is empty (its femoral line resolves normally, so this is not a whole-knee
+#:   failure). Low tail **11.05**, 13.00, 13.04, 15.00, 15.03, 15.26, 15.62, 16.00 -- a
+#:   **continuum** whose largest low-end gap is 1.96 -- p1 17.03, median 29.65, max 53.67.
+#:
+#: So 14.30 lands inside a wide empty interval on the femur as a *consequence* of the construction
+#: -- it was not placed there -- and on the tibia it lands in the middle of a continuum, where no
+#: threshold is distinguished and 14.30 is simply the length at which the tolerance is reached. The
+#: femoral median is 45.10 voxels against the tibial 29.65, which is why 12-16 voxels is ordinary on
+#: a tibia and degenerate on a femur. At 14.30 the gate flags **1 of 1904 femoral lines (0.05%)**
+#: and **3 of 1902 tibial ones (0.16%)**, all four on image-right halves:
+#:
+#: * ``PA000877`` right femur, **5.39** voxels, reference layer 0, no-notch fallback.
+#: * ``PA000155`` right tibia, **11.05** voxels, layer 17, fallback.
+#: * ``PA000571`` right tibia, **13.00** voxels, layer 17, fallback.
+#: * ``PA000435`` right tibia, **13.04** voxels, layer 22, **no fallback** -- so the gate is not a
+#:   proxy for the no-notch fallback, which fires on 0.32% of femoral and 15.77% of tibial
+#:   sections and is measured to be nearly harmless in its own right.
+#:
+#: **The reading matters, and a survey of the unreflected right half gets a different answer.**
+#: Searching a right half directly reproduces the shape of the distribution (femoral min 9.49 then
+#: 22.80, median 44.34; tibial min 12.04 then 13.04, 14.14, median 30.81) and arrives at the same
+#: two *counts*, but **two of the three tibial legs it names are different ones** (it flags
+#: ``PA000591`` and ``PA000671`` right, which reflect to 18.11 and 18.25 voxels and are not
+#: flagged, and misses ``PA000435`` and ``PA000571``). Over the 1903 measurable right halves the two
+#: readings differ by a median 2.27 voxels, up to 18.03, and agree exactly on only 276, so the
+#: agreement in counts is a coincidence of this cohort. Left halves are identical under both
+#: readings. Task #5's mirror figure bounds the line's **bearing** (median 0.33, max 2.06 degrees)
+#: and must not be read as bounding its length.
+#:
+#: What motivates the gate is ``PA000877`` image-right, whose femoral search lands on reference
+#: layer 0 (the edge of the field of view), takes the no-notch centroid fallback and returns a line
+#: of **5.39 in-plane voxels** -- the cohort minimum, and the only half the gate flags. Its
+#: image-**left** femur is on layer 0 too (those two are the only layer-0 selections in the cohort,
+#: so the leg is identifiable two independent ways) and takes the fallback as well, yet measures
+#: 41.44 voxels and is **not** flagged: neither the layer nor the fallback separates the two halves,
+#: and the length does. **Three different lengths exist for this one leg and must not be
+#: conflated**: 5.39 is the reflected length the gate compares and prints; **9.49** is the
+#: unreflected length of the same half; and the 7.3 direct / 6.3 reflected that CLAUDE.md's task #17
+#: paragraph quotes predate task #5's condylar read-out change and belong to neither. That same task
+#: #17 paragraph records this leg's knee rotation angle moving 69.16 -> 14.97 degrees against a
+#: cohort mean of about 4 degrees with neither answer trustworthy, which is the evidence that it
+#: needs a gate -- but **that move was measured on the old read-out**, so it is not the same
+#: measurement as the 5.39 above. It was the one leg the task #17 change could not account for, and
+#: it had no gate; the second-largest mover there was 7.01 degrees.
+#:
+#: **The threshold is a count of in-plane voxels, which is only a length where the two in-plane
+#: voxel edges agree**, so the gate refuses in-plane anisotropic data outright rather than
+#: comparing against it (:func:`morphometry.geometry.validate_in_plane_isotropy`, backlog task
+#: #10 -- the same precondition the three angles themselves carry). No rate from the ``dfg_knees``
+#: knee MRI is quoted above or anywhere else for this gate: that cohort is 0.75 x 0.3125 mm in
+#: plane, where a voxel count is not a length at all, so the comparison is void on units rather
+#: than merely inconvenient. For the same reason the flag reports **voxels** and not the
+#: millimetres ``murphy_axis_short`` reports -- Augsburg alone carries four in-plane spacings, so a
+#: millimetre value would not be monotone in the verdict (see
+#: :func:`morphometry.knee.knee_condylar_line_qc`).
+CONDYLAR_LINE_ANGLE_TOLERANCE_DEG = 4.0
+
 # --- Subchondral / cartilage -------------------------------------------------
 #: Outer radius factor of the sphere shell used to find femoral-head surface points
 #: facing the acetabulum (minimum-distance measurement).

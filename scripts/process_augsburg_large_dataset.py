@@ -14,6 +14,7 @@ from morphometry.measurements.whole_leg import calculate_bone_length
 from morphometry.measurements.ankle import calculate_pma_angle
 from morphometry.measurements.hip import calculate_ccd
 from morphometry.femur import get_lee_neck_qc, get_murphy_neck_qc
+from morphometry.knee import get_condylar_line_qc
 from morphometry.image_io import Segmentation, split_image_left_right
 from matplotlib import pyplot as plt
 from tqdm import tqdm
@@ -101,6 +102,21 @@ def process_patient(patient):
     # flagged leg keeps its AT (Lee) value.
     lee_qc_left = get_lee_neck_qc(left_hip, 'left', x_ratio=x_ratio)
     lee_qc_right = get_lee_neck_qc(right_hip, 'right', x_ratio=x_ratio)
+
+    # QC of the two posterior condylar reference lines, one per bone. Only their in-plane direction
+    # enters AT, TT and the KRA, so a short line is badly conditioned in the one quantity that is
+    # used: one voxel of landmark error turns a 9.5-voxel line by 6 degrees. As above, a flagged leg
+    # keeps every one of those three angles; the flags only mark it as needing a look at the mask.
+    # The femoral line feeds AT and the KRA, the tibial line TT and the KRA, so the flags are named
+    # per bone and both land in the same cell. Their values are in in-plane VOXELS, unlike the
+    # Murphy flag's millimetres in the same cell: this cohort carries four in-plane spacings, so a
+    # millimetre value would not be monotone in the verdict (see knee_condylar_line_qc).
+    condylar_qc_left = _join_flags(
+        get_condylar_line_qc(left_knee, 'femur', segmentation_label=1, side='left'),
+        get_condylar_line_qc(left_knee, 'tibia', segmentation_label=2, side='left'))
+    condylar_qc_right = _join_flags(
+        get_condylar_line_qc(right_knee, 'femur', segmentation_label=1, side='right'),
+        get_condylar_line_qc(right_knee, 'tibia', segmentation_label=2, side='right'))
 
     try:
         fig, ax = plt.subplots(1, 2)
@@ -218,7 +234,8 @@ def process_patient(patient):
     return {'patient': patient, 'at_lee_left': at_lee_left, 'at_lee_right': at_lee_right, 'at_murphy_left': at_murphy_left, 'at_murphy_right': at_murphy_right, 'tt_left': tt_left, 'tt_right': tt_right, 'ccd_left': ccd_left, 'ccd_right': ccd_right,
             'kra_left': kra_left, 'kra_right': kra_right, 'll_left': ll_left, 'll_right': ll_right, 'fl_left': fl_left, 'fl_right': fl_right, 'tl_left': tl_left, 'tl_right': tl_right, 'mld_left': mld_left, 'mld_right': mld_right,
             'murphy_qc_left': murphy_qc_left, 'murphy_qc_right': murphy_qc_right,
-            'lee_qc_left': lee_qc_left, 'lee_qc_right': lee_qc_right}
+            'lee_qc_left': lee_qc_left, 'lee_qc_right': lee_qc_right,
+            'condylar_qc_left': condylar_qc_left, 'condylar_qc_right': condylar_qc_right}
 
 
 def _join_flags(*parts: str) -> str:
@@ -235,18 +252,21 @@ def _join_flags(*parts: str) -> str:
 
 
 def add_qc_flags(df, results: list) -> None:
-    """Append the femoral-neck QC flags of both torsion methods to the result table, in place.
+    """Append the femoral-neck and condylar-line QC flags to the result table, in place.
 
     The flags (``;``-separated ``name:value`` items, empty when the landmark looks sound) go into a
     ``qc_flags`` column added after the measurement columns, so the historical layout is
-    unchanged up to there. They are added after the rounding, which only takes numbers. Two
-    families share the column, Murphy first and then Lee, so a table produced before the Lee gate
-    existed reads as a prefix of this one:
+    unchanged up to there. They are added after the rounding, which only takes numbers. Three
+    families share the column, in the order they were added -- Murphy, then Lee, then the condylar
+    lines -- so a table produced before a later gate existed reads as a prefix of this one:
 
     * :func:`morphometry.femur.murphy_neck_base_qc` -- marks AT (Murphy), and the CCD, which
       shares the femoral head centre, as needing a look at the mask.
     * :func:`morphometry.femur.lee_neck_axis_qc` -- marks AT (Lee), whose neck ring was placed
       inside the fitted femoral head.
+    * :func:`morphometry.knee.knee_condylar_line_qc` -- marks AT (both methods), TT and the KRA,
+      whose shared posterior condylar reference line is too short to carry a direction robustly.
+      Named per bone (``femoral_`` / ``tibial_``), since one leg has two such lines in one cell.
 
     No value is changed or dropped: a flagged leg keeps both its angles.
 
@@ -262,9 +282,11 @@ def add_qc_flags(df, results: list) -> None:
         if 'murphy_qc_left' not in r:
             continue
         df.loc[(r['patient'], 'right'), 'qc_flags'] = _join_flags(r['murphy_qc_left'],
-                                                                  r.get('lee_qc_left', ''))
+                                                                  r.get('lee_qc_left', ''),
+                                                                  r.get('condylar_qc_left', ''))
         df.loc[(r['patient'], 'left'), 'qc_flags'] = _join_flags(r['murphy_qc_right'],
-                                                                 r.get('lee_qc_right', ''))
+                                                                 r.get('lee_qc_right', ''),
+                                                                 r.get('condylar_qc_right', ''))
 
 
 if __name__ == '__main__':
