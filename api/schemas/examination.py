@@ -25,13 +25,31 @@ class ExaminationList(BaseModel):
 
 
 class TorsionValues(BaseModel):
-    """The six torsion angles, NaN-sanitized for display."""
+    """The six torsion angles, NaN-sanitized for display, plus the landmark QC flags.
+
+    The flag fields default to ``''`` rather than ``None`` so a client can render them without a
+    null check, and so an examination measured before the flags existed is indistinguishable from
+    one whose landmarks were sound -- which is the honest default, because an empty flag string
+    has always meant "nothing to report" and never "the QC did not run". A client that needs to
+    tell those apart cannot, and that is a known limitation rather than an oversight: the
+    container records no provenance for its own QC. Adding these is purely additive to the
+    response, so an existing client that ignores unknown fields is unaffected.
+    """
     femoral_torsion_left: float = 0
     femoral_torsion_right: float = 0
     femoral_torsion_left_murphy: float = 0
     femoral_torsion_right_murphy: float = 0
     tibial_torsion_left: float = 0
     tibial_torsion_right: float = 0
+
+    femoral_torsion_left_murphy_qc_flags: str = ""
+    femoral_torsion_right_murphy_qc_flags: str = ""
+    femoral_torsion_left_lee_qc_flags: str = ""
+    femoral_torsion_right_lee_qc_flags: str = ""
+    femur_condylar_line_left_qc_flags: str = ""
+    femur_condylar_line_right_qc_flags: str = ""
+    tibia_condylar_line_left_qc_flags: str = ""
+    tibia_condylar_line_right_qc_flags: str = ""
 
 
 class TorsionDetail(ExaminationSummary):

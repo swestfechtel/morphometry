@@ -93,6 +93,35 @@ FEMORAL_HEAD_RADIUS_JUMP = 0.5
 #: without it the cap trimmed a single slice off three of 92 otherwise untouched NMDID
 #: hips (radius moved 0.26-0.42 mm). Two slices leaves the cap inert on every hip measured
 #: while still cutting the runaway case from 63 slices to 18.
+#: How many head *radii* below the apex :func:`morphometry.hip._femoral_head_slab_bound` may let
+#: the femoral-head slab reach, in units of the equivalent radius it measured.
+#:
+#: **Shipped at 2.0, which is one head DIAMETER and is a measured defect -- see CLAUDE.md.** The
+#: apex-to-equator distance is one radius, so 2.0 puts the slab's lower bound a full radius *past*
+#: the equator, inside the neck, and those neck points drag the fitted sphere centre medially. Over
+#: the 120 NaKo sample halves the centre sits a mean -0.968 mm along index axis 0 with the same sign
+#: on **118 of 120**, a median 1.189 mm from an independent pure-head-section cue; truncating at the
+#: equator (1.0) cuts that to 0.402 mm and is closer on **110 of 120**, monotonically in depth
+#: (1.3 r -> 0.428, 1.6 r -> 0.481). The cap is working exactly as written -- it is the written
+#: intent that is wrong -- which is why this is a design decision and not a bug fix.
+#:
+#: **It is left at 2.0 deliberately, and changing it is the user's call, not a maintenance task.**
+#: Setting it to 1.0 moves the fitted centre by a median **1.811 mm** and therefore moves *every*
+#: isotropic NaKo consumer -- CCD, CEA, alpha angle, acetabular version and depth, projected femoral
+#: offset, anteversion, subchondral -- over `process_nako_large.py`'s 30,407 cases, with the full
+#: do-not-pool burden. Measured on one of them: the NaKo alpha angle moves on **120 of 120** halves
+#: by a median 1.51 deg (max 8.52), while its cohort *means* barely shift, so the effect is scatter
+#: rather than level. The CT path shares the mechanism by construction
+#: (:func:`morphometry.hip.get_femoral_head_center_ct` calls the same bound) but its magnitude is
+#: unmeasured.
+#:
+#: Two cautions for whoever does decide. The cue is one estimate and not ground truth, so what
+#: carries the mechanism is the monotone dose-response and the 118/120 sign consistency, not the
+#: agreement alone. And while 1.0 is *principled* -- the hemisphere that is unambiguously head --
+#: **choosing between 1.0, 1.3 and 1.6 by which scores best against that cue would be the
+#: `CEA_UPPER_MARGIN_FACTOR` mistake**: calibrating on the data the result is then quoted against.
+FEMORAL_HEAD_SLAB_RADII = 2.0
+
 FEMORAL_HEAD_SLAB_MARGIN_SLICES = 2
 #: Inlier band, in mm, of the seeded consensus sphere fit of the MRI femoral head
 #: (:func:`morphometry.hip.get_femoral_head_center`, non-isotropic path): a slab contour point

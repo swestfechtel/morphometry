@@ -134,7 +134,11 @@ def _femoral_head_slab_bound(mask: np.ndarray, column: Tuple[int, int], layer_hi
     if max_drop <= C.FEMORAL_HEAD_RADIUS_JUMP:
         return mask.shape[2] - 1  # equator never seen: max_radius is not a head radius
 
-    slab_layers = int(round(2.0 * max_radius / sz)) + C.FEMORAL_HEAD_SLAB_MARGIN_SLICES
+    # The literal 2.0 this replaced is one head DIAMETER, which reaches a full radius past
+    # the equator and into the neck; see C.FEMORAL_HEAD_SLAB_RADII for the measurement and
+    # for why it is left at 2.0 rather than corrected. Named so the decision is one edit.
+    slab_layers = (int(round(C.FEMORAL_HEAD_SLAB_RADII * max_radius / sz))
+                   + C.FEMORAL_HEAD_SLAB_MARGIN_SLICES)
     return min(layer_high + slab_layers, mask.shape[2] - 1)
 
 
