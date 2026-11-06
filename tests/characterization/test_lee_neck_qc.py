@@ -62,6 +62,14 @@ def _lee_flags(case_dir, suffix: str = '') -> dict:
 
     :param case_dir: The patient directory holding ``hip_seg<suffix>.nii.gz``.
     :param suffix: ``'_test'`` for the reader-study segmentations, ``''`` for the cohort ones.
+        **It must be ``'_test'`` for anything under ``reader_study_augsburg/``**: that directory
+        holds two segmentations per region and the identically-named ``hip_seg.nii.gz`` beside the
+        ``_test`` file is the **stale** 2024 one, which is the opposite of what the names suggest.
+        Only the ``_test`` files are production (``process_augsburg_reader_study.py`` and
+        ``tests/conftest.py`` read them) and only they match ``preprocessed/<patient>/``. Reading
+        the wrong one does not error, it answers differently -- which is how the ``a`` values pinned
+        here were cross-checked: the reader-study ``_test`` file and the large-cohort file give
+        PA000346 image-left the same 0.7683943613480796.
     :return: ``{'left': flags, 'right': flags}``.
     """
     hip = _load(case_dir / f'hip_seg{suffix}.nii.gz')
