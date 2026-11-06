@@ -312,15 +312,32 @@ def contour_femoral_neck(mask: np.ndarray, contour: np.ndarray, layer_selected: 
     there is no support in the leg for calling the movement a correction.) And ``PA000346``
     image-left is a **degradation**: its Lee
     torsion goes 35.755 -> 3.168 degrees, the only mover above 10 degrees and the whole tail of the
-    distribution, because its ``a`` becomes 0.768 -- so ``r_1 = 0.67 r`` and the whole "neck" ring
-    sits *inside* the fitted femoral head, which is anatomically impossible, and the contour it keeps
-    is head cortex rather than neck. Its own neighbouring layer says 1.753 under both
+    distribution, because its ``a`` becomes 0.768 -- so ``r_1 = 0.67 r``, and the ring is then drawn
+    closer to the head axis than the head's own radius rather than peripheral to it, far too small
+    to follow the neck contour the line is fitted to: on that half the notch sits 6.2-16.1 mm from
+    the head centre, against 32.2 and 33.1 mm on PA000001's two sound halves.
+
+    (This sentence used to read "the whole 'neck' ring sits *inside* the fitted femoral head ... and
+    the contour it keeps is head cortex rather than neck". **That stronger claim is false and was
+    corrected in 2026-11 once it was measured.** ``a`` is an in-plane distance in the *selected*
+    axial layer while the head is a sphere, so the head's cross-section there has radius
+    ``sqrt(r**2 - dz**2)``; the Lee layer is the most proximal qualifying one and sits well off the
+    equator. On the four Augsburg-large halves the shipped gate flags, that cross-section is
+    0.516 / 0.496 / 0.000 / 0.332 of ``r``, so the notch is *outside* it on three of the four and on
+    PA000810 the layer lies below the fitted sphere entirely -- a true containment test would flag
+    1 of the 4. The defect is "the ring is too small to lie on the neck", which is why the shipped
+    flag is :func:`lee_neck_axis_qc`'s ``lee_ring_within_head_radius`` and not ``lee_ring_in_head``.
+    Nothing about the threshold or this leg's numbers changes; only the mechanism is weaker than it
+    first looked.) Its own neighbouring layer says 1.753 under both
     implementations, so the new value is the one that disagrees with the leg. (That layer was poor
     before this change too: its old ``a`` of 1.190 was the cohort minimum and left only 7 contour
-    points in the fit against a cohort median of 53.) An ``a < 1`` condition would catch it, by the
-    same argument as ``murphy_base_in_head``, and is deliberately **not** implemented here: 1 of 100
-    is not the prevalence evidence that gate earned its thresholds from, and turning returned values
-    into NaN rows is a separate behavioural decision.
+    points in the fit against a cohort median of 53.) An ``a < 1`` condition catches it, by the
+    same argument as ``murphy_base_in_head``. It was deliberately **not** implemented in this commit
+    -- 1 of 100 is not the prevalence evidence that gate earned its thresholds from -- and **is now
+    implemented**, in :func:`lee_neck_axis_qc` / :func:`get_lee_neck_qc`, once that evidence existed
+    on three cohorts. It flags and does not repair, so no returned value becomes a NaN row; see
+    :data:`morphometry.constants.LEE_MIN_NOTCH_DISTANCE_FACTOR` for the distribution, the tie-break
+    among the three geometrically available thresholds, and the disclosure.
 
     **Residual: the grid's phase.** The window is anchored on ``np.rint`` of the head centre, so the
     sampling grid's phase relative to the anatomy is set by which integer cell the centre rounds
