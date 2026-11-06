@@ -414,7 +414,8 @@ def contour_femoral_neck(mask: np.ndarray, contour: np.ndarray, layer_selected: 
 
     return mask_new, contour, r_1, r_2
 
-def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarray, r: float) -> np.ndarray:
+def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarray, r: float,
+                                return_notch_distance: bool = False) -> np.ndarray | Tuple[np.ndarray, float]:
     """
     Get the proximal femoral neck axis, the method this project labels "Lee".
 
@@ -465,10 +466,11 @@ def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarra
     it keeps a sample only if that sample is in bounds **and** on bone, so an out-of-bounds sample is
     already equivalent to a not-bone sample, and a crop that preserves every bone voxel cannot change
     its verdict -- which is why its 0 of 100 above is a property of the construction and not of this
-    cohort. (Noted while in that loop and deliberately not changed: ``utils.points_on_circle`` ends
-    ``return np.array(points) > 0``, so it returns a boolean array rather than the points it
-    collected. Only ``len(...) > 0`` is ever read, and this is its only caller, so it is dead but
-    harmless; fixing it is a separate item.)
+    cohort. (Noted while in that loop and repaired separately in ``d980792``:
+    ``utils.points_on_circle`` used to end ``return np.array(points) > 0``, returning a boolean
+    array rather than the points it had collected. Only ``len(...) > 0`` is ever read and this is
+    its only caller, so the length -- and therefore the layer chosen here -- was the same either
+    way, which is why that repair moved nothing.)
 
     Two halves of the earlier crop residual were never the layer and are unaffected by the border:
     ``PA000012`` image-right and ``PA000667`` image-left (0.68 and 0.67 degrees, one quantisation
@@ -500,8 +502,15 @@ def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarra
     :param center: The centre of the femoral head, as a voxel index (cast to ``int16`` by the
         caller, because the slice search below indexes the mask with it).
     :param r: The radius of the femoral head, in in-plane voxels.
+    :param return_notch_distance: Also return ``a``, the head-centre-to-notch distance in units of
+        ``r`` that :func:`contour_femoral_neck` built the ring from, for
+        :func:`lee_neck_axis_qc`. The flag widens the return tuple and changes nothing else (the
+        precedent is ``return_layers`` on
+        :func:`morphometry.hip.get_femoral_head_center`); the default path is untouched, so no
+        measured value depends on it.
     :return: A point on the fitted neck axis, 80 voxels from the head centre, as a voxel index.
-        Only its direction from the head centre is meaningful.
+        Only its direction from the head centre is meaningful. With ``return_notch_distance``, the
+        pair ``(point, a)``.
     :raises ValueError: If no slice satisfies the single-outline and ``2 * r`` circle conditions.
     """
     layer_selected = None
@@ -526,6 +535,17 @@ def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarra
     femoral_neck, contour, r_1, r_2 = contour_femoral_neck(segmentation_mask, contour,
                                                            layer_selected, center,
                                                            r)
+
+    # The ring `contour_femoral_neck` kept the neck contour in is centred on `a * r`, where `a` is
+    # its head-centre-to-notch distance in head radii: `r_1 = (a - 0.1) * r` and
+    # `r_2 = (a + 0.1) * r` straddle it symmetrically, so their midpoint over `r` recovers `a`
+    # without widening that function's documented 4-tuple. It is a reconstruction rather than the
+    # value itself, so it carries one rounding of the two radii. Measured against both exact forms
+    # (`r_1 / r + 0.1` and `r_2 / r - 0.1`) over 10 real Augsburg halves, the worst spread is
+    # 1.110e-16 and 8 of the 10 agree to the bit -- sixteen orders below the
+    # `C.LEE_MIN_NOTCH_DISTANCE_FACTOR` threshold it is compared against. It is also only ever read
+    # when the caller asks for it, so the default path cannot see it at all.
+    notch_distance = (r_1 + r_2) / (2.0 * r)
 
     # center of femoral neck
     center_fn = np.array(center_of_mass(femoral_neck)).astype(np.int16)
@@ -592,7 +612,7 @@ def get_femoral_neck_center_lee(segmentation_mask: np.ndarray, center: np.ndarra
     end = np.array([np.floor(-_NECK_AXIS_REACH + center[0]),
                     np.floor((-_NECK_AXIS_REACH) * m_new + center[1]),
                     layer_selected]).astype(np.int64)
-    return end
+    return (end, float(notch_distance)) if return_notch_distance else end
 
 def get_trochanter_major(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1) -> np.ndarray:
     """
@@ -970,13 +990,29 @@ def murphy_neck_base_qc(hip_image: Image, femoral_head_centre: np.ndarray, neck_
     return metrics
 
 
-#: Reason codes for ``murphy_landmark_failed``, matched against the exception message in order.
+#: Reason codes for ``<method>_landmark_failed``, matched against the exception message in order.
 #: All of the Murphy landmark's own failures are ``RuntimeError``, so the type alone says nothing,
 #: and this is the flag family with the highest rate by far: 241 of the 2128 Augsburg / NaKo image
 #: halves have no Murphy landmark at all, as ``trochanter_implausible`` (109),
 #: ``trochanter_no_components`` (69), ``base_at_head_level`` (36, the
 #: ``MURPHY_NECK_BASE_MIN_HEAD_DISTANCE_MM`` gate), ``shaft_not_found`` (21) and 6 missing files.
 #: The codes carry no ``,`` or ``;``, so they are safe in the CSV columns.
+#:
+#: The last five are the Lee path's own failures (:func:`get_femoral_neck_center_lee` and
+#: :func:`contour_femoral_neck`), added for :func:`get_lee_neck_qc`. The table is shared because
+#: the two paths share the femoral-head fit and therefore its failure modes; no Lee marker occurs
+#: in any Murphy message or the reverse, so the Murphy codes are unchanged -- the markers are
+#: *appended*, and the table is scanned in order, which is what makes that provable rather than
+#: merely observed. The Lee axis is a much more reliable landmark than the Murphy one: it resolves
+#: on 1896 of the 1908 Augsburg large-cohort image halves (954 cases x 2), against the Murphy
+#: landmark's 1678 of 1908 on the same cases. The 12 Lee failures are 6 halves of 3 missing files,
+#: 3 ``ValueError`` and 3 ``RuntimeError``.
+#:
+#: One asymmetry a reader may trip over: a failure raised by the femoral-head fit the two methods
+#: *share* comes back unnamed, as ``<method>_landmark_failed:<ExceptionType>``, for Lee exactly as
+#: it already did for Murphy. That is parity rather than a gap -- the named codes describe the
+#: method-specific searches, and nothing in the shared fit distinguishes the two callers.
+
 _LANDMARK_FAILURE_REASONS = (
     ('no two components found', 'trochanter_no_components'),
     ('components too small', 'trochanter_components_too_small'),
@@ -989,22 +1025,30 @@ _LANDMARK_FAILURE_REASONS = (
     ('No femur on the neck-base slice', 'no_femur_on_level'),
     ('holds no femur', 'no_femur_on_level'),
     ('in-plane voxel spacing', 'anisotropic_in_plane'),
+    ('suitable layer for the femoral neck', 'neck_layer_not_found'),
+    ('No notch found', 'notch_not_found'),
+    ('femoral neck layer holds no mask points', 'neck_layer_empty'),
+    ('femoral neck section holds no mask points', 'neck_section_empty'),
+    ('dorsal femoral-neck landmark', 'dorsal_point_not_found'),
 )
 
 
-def _landmark_failure_flag(exc: BaseException) -> str:
-    """Turn a failed Murphy landmark search into one ``murphy_landmark_failed`` flag.
+def _landmark_failure_flag(exc: BaseException, method: str = 'murphy') -> str:
+    """Turn a failed proximal-landmark search into one ``<method>_landmark_failed`` flag.
 
     :param exc: The exception the landmark search raised.
-    :return: ``murphy_landmark_failed:<reason>``, where ``<reason>`` is the matching code from
+    :param method: The femoral-torsion method the flag belongs to, ``'murphy'`` or ``'lee'``; it
+        only names the flag, and the reason table is shared (see
+        :data:`_LANDMARK_FAILURE_REASONS`).
+    :return: ``<method>_landmark_failed:<reason>``, where ``<reason>`` is the matching code from
         :data:`_LANDMARK_FAILURE_REASONS` or, for anything unrecognised, the exception's type name
         (so a new failure mode is still visible, just unnamed).
     """
     message = str(exc)
     for marker, reason in _LANDMARK_FAILURE_REASONS:
         if marker in message:
-            return f'murphy_landmark_failed:{reason}'
-    return f'murphy_landmark_failed:{type(exc).__name__}'
+            return f'{method}_landmark_failed:{reason}'
+    return f'{method}_landmark_failed:{type(exc).__name__}'
 
 
 def get_murphy_neck_qc(hip_image: Image, side: str = 'left', segmentation_label: int = 1,
@@ -1068,6 +1112,195 @@ def get_murphy_neck_qc_ct(femur_image: Segmentation, side: str = 'left', segment
         return _landmark_failure_flag(exc)
 
 
+def lee_neck_axis_qc(notch_distance_factor: float, head_radius: float | None = None) -> dict:
+    """
+    Describe how trustworthy one Lee proximal neck axis is, without changing it.
+
+    The Lee neck axis (:func:`get_femoral_neck_center_lee`) is a straight line fitted to the femoral
+    contour inside a ring about the femoral head centre. The ring is placed entirely by one scalar
+    that :func:`contour_femoral_neck` derives from the trochlear notch of the selected layer,
+
+        ``a = |notch - head centre| / r``,
+
+    the ring then spanning ``(a - 0.1) * r`` to ``(a + 0.1) * r``, where ``r`` is the radius of the
+    *same* femoral-head fit. ``a`` is therefore the ring's centre radius expressed in head radii,
+    and the ring is supposed to sit peripheral to the head, on the neck contour. When ``a`` drops
+    below 1 it is drawn **closer to the head axis than the head's own radius**, far too small to
+    follow that peripheral contour: on the four flagged Augsburg halves the notch sits 6.2 to
+    16.1 mm from the head centre, where the two sound halves of PA000001 put it at 32.2 and
+    33.1 mm. That is anatomically implausible rather than merely unusual, so the threshold is the
+    head radius *itself* rather than a value fitted to a cohort -- like ``murphy_base_in_head``,
+    and for the same reason, that the radius it is compared against comes from the same fit.
+    **It is not cohort-independent, though**: the ring crosses the head radius at three places
+    (outer edge at ``a = 0.9``, centre at 1.0, inner edge at 1.1) and it was the measured
+    distribution that chose the centre among them. Read
+    :data:`morphometry.constants.LEE_MIN_NOTCH_DISTANCE_FACTOR` before touching the value; the
+    short version is "geometric family, data-broken tie".
+
+    **What the flag does NOT say, measured rather than assumed.** It is tempting to describe this as
+    "the ring lies inside the femoral head, so the line is fitted to head cortex". On these data that
+    is false on three of the four flagged halves, and the distinction is why the flag is named for
+    the head *radius* and not for the head. ``a`` is an **in-plane** distance in the selected axial
+    layer, while the head is a sphere whose cross-section at that layer has radius
+    ``sqrt(r^2 - dz^2)``, smaller than ``r`` wherever the layer is off the equator -- and the Lee
+    layer is the most proximal one that qualifies, so it is routinely far off it. Recomputed with the
+    *unrounded* head centre (the ``int16`` cast on the Lee branch inflates ``dz`` by up to a whole
+    10 mm slice, which is a trap worth naming): the layer's own cross-section is 0.516, 0.496, 0.000
+    and 0.332 of ``r`` on PA000346 left, PA000622 right, PA000810 right and PA000932 left, so the
+    notch lies **outside** it on three of them, and on PA000810 the layer is below the fitted sphere
+    altogether. A containment test would flag **1 of the 4**. ``a < 1`` is therefore deliberately the
+    more inclusive reading and not a harmless simplification of a containment test; what bone the
+    undersized ring actually keeps depends on the layer. (``contour_femoral_neck``'s own docstring
+    carries the stronger "the contour it keeps is head cortex rather than neck" wording from task
+    #9, written before this was measured.) Nothing about the gate or about the value 1.0 depends on
+    which reading is right -- only the claimed mechanism does.
+
+    Nothing here is repaired: a flagged axis is still measured and the torsion it produced is still
+    reported, so a cohort run marks the row instead of silently trusting it. The one flag, in the
+    ``name:value`` / ``;``-joined format of ``scripts/process_nmdid.py``'s ``qc_flags`` column:
+
+    * ``lee_ring_within_head_radius:<a>`` -- ``a`` is below :data:`morphometry.constants.LEE_MIN_NOTCH_DISTANCE_FACTOR`
+      (see that constant for the derivation, the prevalence survey and the disclosure that its
+      threshold was placed using one cohort's own distribution). ``<a>`` is the tested quantity
+      itself, as ``murphy_axis_short`` reports the axis length it tested rather than a derived
+      excess. **The printed value is rounded to three decimals and the comparison is not**, so an
+      ``a`` just under the threshold prints as ``1.000`` and two values either side of 0.9 both
+      print as ``0.900``; read the string as a label, not as the number the gate saw. (The same is
+      true of ``murphy_axis_short``'s two decimals. It is unreachable on real data here -- the
+      closest of the 1896 surveyed halves comes within 0.0192 of 1.0 -- and no finite precision
+      removes it, which is why this is documented rather than widened.)
+
+    **The name states the test and nothing more.** ``lee_ring_within_head_radius`` is what ``a < 1``
+    establishes: the ring's centre radius is under the fitted head radius. Two shorter names were
+    rejected. ``lee_ring_in_head`` (and the parallel ``lee_notch_in_head``) would borrow
+    ``murphy_base_in_head``'s phrasing for a weaker test -- that flag really does mean inside the
+    sphere, because it compares the full 3-D distance in mm -- and the paragraph above is why that
+    difference matters here. ``lee_ring_too_small`` describes the defect but names no reference, and
+    the reference is the whole content of the test.
+
+    At the threshold the ring's *centre* crosses the head radius; its outer edge is inside that
+    radius only below ``a = 0.9`` (``ring_wholly_within_head_radius``). Both readings flag the same
+    four Augsburg halves, and all four are below 0.844, so on the cohort measured the distinction is
+    academic -- it is recorded in the returned dict rather than in a second flag.
+
+    :param notch_distance_factor: ``a``, as returned by :func:`get_femoral_neck_center_lee` with
+        ``return_notch_distance=True``. It is dimensionless, which is **not** the same as
+        shear-free: it is a ratio of two index-space quantities (a voxel-index norm over a
+        single-valued voxel radius) and never reads a spacing, so it is the geometric ratio this
+        flag names only where the in-plane voxels are square. On in-plane anisotropic data the same
+        anatomy can land either side of the threshold -- sampled onto a 1.4 : 1 grid, a phantom's
+        ``a`` goes 0.771 -> 1.167 and the verdict flips, where an *isotropic* refinement to 0.5 mm
+        moves it only 0.771 -> 0.714 and does not. That is task #10's shear on the very quantity
+        the gate tests, so the precondition is enforced one level up, on the image, by
+        :func:`get_lee_neck_qc` -- which is also where the measurement enforces it. This function
+        takes the scalar on trust.
+    :param head_radius: The fitted femoral head radius in in-plane voxels (the ``r_fh`` of
+        :func:`get_proximal_reference_line`), or ``None`` to leave the voxel-valued entries
+        ``None``. It is reported only; the flag does not depend on it, because ``a`` is already in
+        units of it.
+    :return: ``{'notch_distance_factor', 'ring_inner_factor', 'ring_outer_factor',
+        'ring_wholly_within_head_radius', 'head_radius_voxels', 'notch_distance_voxels',
+        'head_clearance_voxels', 'flags'}``, where the three ``factor`` entries are in head radii,
+        ``head_clearance_voxels`` is how far outside the head radius the ring centre sits (negative
+        = inside, ``None`` without a ``head_radius``, the sign convention of
+        :func:`murphy_neck_base_qc`'s ``head_clearance_mm``) and ``flags`` is the ``;``-joined flag
+        string, ``''`` when the axis looks sound.
+    :raises ValueError: If ``notch_distance_factor`` is not a finite, positive number -- a
+        non-finite ``a`` would make the ring itself meaningless and compare false against any
+        threshold, so it must not pass silently as "sound".
+    """
+    a = float(notch_distance_factor)
+    if not math.isfinite(a) or a <= 0.0:
+        raise ValueError(f'The Lee notch distance factor must be finite and positive, got {a!r}.')
+
+    # The two geometric entries below are measured against the head radius itself -- a literal 1,
+    # since `a` is already in units of `r` -- and NOT against
+    # `C.LEE_MIN_NOTCH_DISTANCE_FACTOR`. They are descriptions of where the ring sits, so they must
+    # stay true if that threshold is ever moved off the head surface; only the flag reads the
+    # constant. The 0.1 is `contour_femoral_neck`'s published ring half-width.
+    metrics = {
+        'notch_distance_factor': a,
+        'ring_inner_factor': a - 0.1,
+        'ring_outer_factor': a + 0.1,
+        # the stricter reading of the same geometry: the ring's outer edge is inside the head too
+        'ring_wholly_within_head_radius': bool(a + 0.1 < 1.0),
+        'head_radius_voxels': None if head_radius is None else float(head_radius),
+        'notch_distance_voxels': None,
+        'head_clearance_voxels': None,
+    }
+    if head_radius is not None:
+        metrics['notch_distance_voxels'] = a * float(head_radius)
+        metrics['head_clearance_voxels'] = (a - 1.0) * float(head_radius)
+
+    flags = []
+    if a < C.LEE_MIN_NOTCH_DISTANCE_FACTOR:
+        flags.append(f'lee_ring_within_head_radius:{a:.3f}')
+    metrics['flags'] = ';'.join(flags)
+    return metrics
+
+
+def get_lee_neck_qc(hip_image: Image, side: str = 'left', segmentation_label: int = 1,
+                    x_ratio: float = 1., isotropic: bool = False) -> str:
+    """
+    QC flags for the Lee proximal neck axis of one hip MRI image half.
+
+    The entry point the batch scripts use, parallel to :func:`get_murphy_neck_qc`: it resolves the
+    Lee reference line exactly as
+    :func:`morphometry.measurements.femur.calculate_femoral_torsion` does -- the same
+    :func:`get_proximal_reference_line` call with the same arguments, only asking it for the ring
+    factor as well -- and hands that factor to :func:`lee_neck_axis_qc`. So the flags describe the
+    neck axis the measurement actually used, and the layer walk and notch search are not
+    reimplemented here, which is what would let the gate and the measurement drift apart. The
+    reference line is resolved a second time rather than threaded out of the measurement functions,
+    which keeps their signatures and return types untouched; the cost is one extra femoral-head fit,
+    layer walk and notch search per image half.
+
+    **The flag is mirror-invariant, and for a stronger reason than the Murphy flags are.** Those
+    are mirror-invariant because every scalar :func:`murphy_neck_base_qc` reports happens to be
+    preserved by a reflection (bar one half-integer tie-break). Here it is forced by the control
+    flow: :func:`get_proximal_reference_line` measures a right image half by *reflecting* it and
+    recursing into the left-side path, so a reflected half passed in as the other side **double**
+    reflects to a bitwise identical array and ``a`` cannot differ at all -- it is the same
+    computation on the same bits, not two computations that agree. (That ``a`` is anyway a ratio of
+    two distances a reflection preserves is true and beside the point.) Checked on real data as
+    well: on PA000346, whose image-left half is flagged and whose image-right half is not, a half
+    and its mirror measured as the other side give bit-identical ``a``
+    (``tests/characterization/test_lee_neck_qc.py``).
+
+    **There is deliberately no CT counterpart**, where :func:`get_murphy_neck_qc_ct` has one:
+    :func:`get_proximal_reference_line_ct` implements only the Murphy line, so whole-leg CT has no
+    Lee neck ring to describe. The asymmetry is in the measurements, not in the QC.
+
+    :param hip_image: An Image object of the proximal-femur segmentation mask (one image half).
+    :param side: Side of the image (not patient!), either 'left' or 'right'.
+    :param segmentation_label: The label of the femur in the segmentation mask.
+    :param x_ratio: Slice-axis scale factor, as passed to the measurement (inert on this path --
+        see ``measurements.femur.calculate_femoral_torsion`` and backlog task #6).
+    :param isotropic: Whether the image has isotropic voxels.
+    :return: The ``;``-joined flag string, ``''`` when the axis looks sound, or
+        ``lee_landmark_failed:<reason>`` when the landmark search itself failed (the measurement is
+        then NaN too; see :func:`_landmark_failure_flag` for the reason codes). Never raises, for
+        the same reason :func:`get_murphy_neck_qc` does not: two call sites (the Augsburg scripts
+        and ``morphometry/docker/compute_torsion.py``) run it outside any try block.
+    """
+    try:
+        # Refuse in-plane anisotropic voxels, exactly as the measurement does
+        # (`measurements/femur.py::calculate_femoral_torsion` validates this same hip image's
+        # spacing), so the two cannot disagree about whether the data is measurable at all.
+        # Without it this returned '' -- a positive claim that the axis looks sound -- beside a NaN
+        # angle, while the Murphy family in the *same* `qc_flags` cell reported
+        # `murphy_landmark_failed:anisotropic_in_plane`. It belongs here and not in
+        # `lee_neck_axis_qc`, because the scalar genuinely has no spacing; the precondition is the
+        # image's.
+        validate_in_plane_isotropy(hip_image.spacing, 'hip image (Lee neck-axis QC)')
+        _, _, r_fh, notch_distance = get_proximal_reference_line(
+            hip_image, side=side, method='lee', segmentation_label=segmentation_label,
+            x_ratio=x_ratio, isotropic=isotropic, return_notch_distance=True)
+        return lee_neck_axis_qc(notch_distance, head_radius=r_fh)['flags']
+    except Exception as exc:
+        return _landmark_failure_flag(exc, method='lee')
+
+
 def get_trochanter_major_center(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1) -> Tuple[np.ndarray, float]:
     """
     Get the centre of the trochanter major at neck base level as described by Tomczak et al.
@@ -1095,7 +1328,8 @@ def get_trochanter_major_center(hip_image: Image, femoral_head_centre: np.ndarra
 
 def get_proximal_reference_line(hip_image: Image, side: str = 'left',
                                 method: str = 'lee', segmentation_label: int = 1,
-                                x_ratio: float = 1., isotropic: bool = False) -> Tuple[
+                                x_ratio: float = 1., isotropic: bool = False,
+                                return_notch_distance: bool = False) -> Tuple[
                                                                                      np.ndarray, np.ndarray, float, float] | \
                                                                                  Tuple[np.ndarray, np.ndarray, float]:
     """
@@ -1116,18 +1350,30 @@ def get_proximal_reference_line(hip_image: Image, side: str = 'left',
     :param x_ratio: Slice-axis scale factor for the femoral-head landmark (inert on this path;
         see ``measurements.femur.calculate_femoral_torsion`` and backlog task #6).
     :param isotropic: Whether the image has isotropic voxels.
+    :param return_notch_distance: ``method='lee'`` only: append ``a``, the ring factor
+        :func:`contour_femoral_neck` placed the neck ring with, to the returned tuple, for
+        :func:`get_lee_neck_qc`. It is a scalar and rides through the right-side mirror below
+        untouched, as ``r_fh`` does. The default path is byte-identical to not having the flag, so
+        no measured value depends on it; the precedent is ``return_layers`` on
+        :func:`morphometry.hip.get_femoral_head_center`.
     :return: The start and end points of the reference line (voxel indices of ``hip_image``), the radius of the
-    femoral head centre and the radius of the trochanter major if method is tomczak.
+    femoral head centre and the radius of the trochanter major if method is tomczak. With
+    ``return_notch_distance``, ``(start, end, r_fh, a)``.
+    :raises AssertionError: If ``side`` or ``method`` is not one of the supported values, or if
+        ``return_notch_distance`` is asked for a method that has no neck ring.
     """
     assert side in ['left', 'right'], 'Side must be either "left" or "right"'
     assert method in ['lee', 'murphy',
                       'tomczak'], 'Currently, only "lee", "murphy" and "tomczak" are supported as methods.'
+    assert not (return_notch_distance and method != 'lee'), \
+        'return_notch_distance is a property of the Lee neck ring and is only defined for method="lee".'
 
     if side == 'right':
         width = hip_image.array.shape[0]
         start, end, *radii = get_proximal_reference_line(reflect_image_left_right(hip_image), side='left',
                                                          method=method, segmentation_label=segmentation_label,
-                                                         x_ratio=x_ratio, isotropic=isotropic)
+                                                         x_ratio=x_ratio, isotropic=isotropic,
+                                                         return_notch_distance=return_notch_distance)
         return (mirror_index_x(start, width), mirror_index_x(end, width), *radii)
 
     r_fh, center, layer_high, layer_low = get_femoral_head_center(hip_image.array, side=side,
@@ -1139,7 +1385,11 @@ def get_proximal_reference_line(hip_image: Image, side: str = 'left',
         center = center.astype(np.int16)  # the Lee neck search indexes the mask with the centre
         array = hip_image.array.copy()
         array = np.where(array == segmentation_label, 1, 0)
-        end = get_femoral_neck_center_lee(array, center, r_fh)
+        if return_notch_distance:
+            end, notch_distance = get_femoral_neck_center_lee(array, center, r_fh,
+                                                              return_notch_distance=True)
+        else:
+            end = get_femoral_neck_center_lee(array, center, r_fh)
     elif method == 'murphy':
         # continuous head centre and neck-base centroid: the axis is short (~25 mm in-plane on the
         # Augsburg hips), so truncating either end to an index would rotate it by up to ~2 degrees
@@ -1149,7 +1399,11 @@ def get_proximal_reference_line(hip_image: Image, side: str = 'left',
         end, r_tm = get_trochanter_major_center(hip_image, center, segmentation_label)
 
     start: np.ndarray = np.array([center[0], center[1], center[2]])
-    return (start, end, r_fh, r_tm) if method == 'tomczak' else (start, end, r_fh)
+    if method == 'tomczak':
+        return start, end, r_fh, r_tm
+    if return_notch_distance:
+        return start, end, r_fh, notch_distance
+    return start, end, r_fh
 
 def _ct_proximal_landmarks(femur_image: Segmentation, segmentation_label: int = 1) -> Tuple[Segmentation, np.ndarray, float, np.ndarray]:
     """

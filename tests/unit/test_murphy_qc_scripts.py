@@ -6,6 +6,10 @@ it already had: ``scripts/process_nmdid.py`` (which already had such a column fo
 integrity, so the Murphy flags are joined onto it), ``scripts/process_nako_large.py``,
 ``scripts/process_augsburg_reader_study.py`` and ``scripts/process_augsburg_large_dataset.py``.
 A flagged case is measured and written exactly as before; only the column changes.
+
+The two Augsburg scripts carry a second family in the same column, the Lee neck-axis flags of
+:func:`morphometry.femur.lee_neck_axis_qc`, ``;``-joined after the Murphy ones so that a table
+produced before that gate existed reads as a prefix of a new one.
 """
 import importlib.util
 import pathlib
@@ -130,3 +134,45 @@ def test_augsburg_scripts_append_the_qc_column(script):
     assert df.loc[('p1', 'left'), 'qc_flags'] == ''
     assert (df.loc[('p2',), 'qc_flags'] == '').all()
     assert (df['AT (Murphy)'] == 1.0).all()  # no measurement touched
+
+
+@pytest.mark.parametrize('script', ['process_augsburg_reader_study.py',
+                                    'process_augsburg_large_dataset.py'])
+def test_augsburg_scripts_join_both_neck_qc_families(script):
+    """One ``qc_flags`` cell holds the Murphy and the Lee flags, ``;``-joined, Murphy first.
+
+    Murphy first is what makes a table produced before the Lee gate existed a prefix of this one.
+    Empty families are dropped rather than joined, so a half with only one family's flags reads
+    exactly as it did before the other was added and a sound half stays ``''``.
+    """
+    module = _load(script)
+    index = pd.MultiIndex.from_product([['p1', 'p2', 'p3'], ['right', 'left']],
+                                       names=['Patient', 'Side'])
+    df = pd.DataFrame({'AT (Murphy)': 1.0, 'AT (Lee)': 2.0}, index=index)
+    module.add_qc_flags(df, [
+        {'patient': 'p1', 'murphy_qc_left': 'murphy_axis_short:6.97', 'murphy_qc_right': '',
+         'lee_qc_left': 'lee_ring_within_head_radius:0.768', 'lee_qc_right': 'lee_ring_within_head_radius:0.309'},
+        {'patient': 'p2', 'murphy_qc_left': '', 'murphy_qc_right': '',
+         'lee_qc_left': '', 'lee_qc_right': ''},
+        # a result predating the Lee gate contributes nothing for it rather than failing
+        {'patient': 'p3', 'murphy_qc_left': 'murphy_base_in_head:3.84', 'murphy_qc_right': ''},
+    ])
+
+    assert df.loc[('p1', 'right'), 'qc_flags'] == 'murphy_axis_short:6.97;lee_ring_within_head_radius:0.768'
+    assert df.loc[('p1', 'left'), 'qc_flags'] == 'lee_ring_within_head_radius:0.309'   # Murphy empty, dropped
+    assert (df.loc[('p2',), 'qc_flags'] == '').all()
+    assert df.loc[('p3', 'right'), 'qc_flags'] == 'murphy_base_in_head:3.84'
+    assert df.loc[('p3', 'left'), 'qc_flags'] == ''
+    # neither angle touched
+    assert (df['AT (Murphy)'] == 1.0).all() and (df['AT (Lee)'] == 2.0).all()
+
+
+@pytest.mark.parametrize('script', ['process_augsburg_reader_study.py',
+                                    'process_augsburg_large_dataset.py'])
+def test_augsburg_scripts_drop_empty_flag_families(script):
+    """``_join_flags`` keeps a sound half exactly empty and never emits a leading ``;``."""
+    module = _load(script)
+    assert module._join_flags('', '') == ''
+    assert module._join_flags('', 'lee_ring_within_head_radius:0.768') == 'lee_ring_within_head_radius:0.768'
+    assert module._join_flags('murphy_axis_short:6.97', '') == 'murphy_axis_short:6.97'
+    assert module._join_flags('a:1', 'b:2', 'c:3') == 'a:1;b:2;c:3'

@@ -13,7 +13,7 @@ from morphometry.measurements.knee import calculate_knee_rotation_angle
 from morphometry.measurements.whole_leg import calculate_bone_length
 from morphometry.measurements.ankle import calculate_pma_angle
 from morphometry.measurements.hip import calculate_ccd
-from morphometry.femur import get_murphy_neck_qc
+from morphometry.femur import get_lee_neck_qc, get_murphy_neck_qc
 from morphometry.image_io import Segmentation, split_image_left_right
 from matplotlib import pyplot as plt
 from tqdm import tqdm
@@ -94,6 +94,13 @@ def process_patient(patient):
     # flagged leg keeps its measurement; the flags only mark it as needing a look at the mask.
     murphy_qc_left = get_murphy_neck_qc(left_hip, 'left', x_ratio=x_ratio)
     murphy_qc_right = get_murphy_neck_qc(right_hip, 'right', x_ratio=x_ratio)
+
+    # QC of the Lee neck axis: its ring is placed from the trochlear notch, and when that lands
+    # closer to the head axis than the fitted head's own radius the ring is far too small to follow
+    # the peripheral neck contour the line is fitted to (lee_ring_within_head_radius). As above, a
+    # flagged leg keeps its AT (Lee) value.
+    lee_qc_left = get_lee_neck_qc(left_hip, 'left', x_ratio=x_ratio)
+    lee_qc_right = get_lee_neck_qc(right_hip, 'right', x_ratio=x_ratio)
 
     try:
         fig, ax = plt.subplots(1, 2)
@@ -210,31 +217,54 @@ def process_patient(patient):
 
     return {'patient': patient, 'at_lee_left': at_lee_left, 'at_lee_right': at_lee_right, 'at_murphy_left': at_murphy_left, 'at_murphy_right': at_murphy_right, 'tt_left': tt_left, 'tt_right': tt_right, 'ccd_left': ccd_left, 'ccd_right': ccd_right,
             'kra_left': kra_left, 'kra_right': kra_right, 'll_left': ll_left, 'll_right': ll_right, 'fl_left': fl_left, 'fl_right': fl_right, 'tl_left': tl_left, 'tl_right': tl_right, 'mld_left': mld_left, 'mld_right': mld_right,
-            'murphy_qc_left': murphy_qc_left, 'murphy_qc_right': murphy_qc_right}
+            'murphy_qc_left': murphy_qc_left, 'murphy_qc_right': murphy_qc_right,
+            'lee_qc_left': lee_qc_left, 'lee_qc_right': lee_qc_right}
+
+
+def _join_flags(*parts: str) -> str:
+    """Join several QC flag strings into one, dropping the empty ones.
+
+    The flag families of one image half share a single ``qc_flags`` cell, in the ``;``-joined
+    ``name:value`` format of ``scripts/process_nmdid.py``. Empty strings are dropped rather than
+    joined, so a sound half stays exactly ``''`` and a half with one family's flags keeps the
+    string it had before another family was added.
+    :param parts: The per-family flag strings, in the order they should appear.
+    :return: The ``;``-joined non-empty parts, ``''`` when all of them are empty.
+    """
+    return ';'.join(p for p in parts if p)
 
 
 def add_qc_flags(df, results: list) -> None:
-    """Append the Murphy femoral-neck QC flags to the result table, in place.
+    """Append the femoral-neck QC flags of both torsion methods to the result table, in place.
 
-    The flags (``;``-separated ``name:value`` items from
-    :func:`morphometry.femur.murphy_neck_base_qc`, empty when the neck looks sound) go into a
+    The flags (``;``-separated ``name:value`` items, empty when the landmark looks sound) go into a
     ``qc_flags`` column added after the measurement columns, so the historical layout is
-    unchanged up to there. They are added after the rounding, which only takes numbers. A flag
-    marks AT (Murphy) -- and the CCD, which shares the femoral head centre -- as needing a look at
-    the mask; no value is changed or dropped.
+    unchanged up to there. They are added after the rounding, which only takes numbers. Two
+    families share the column, Murphy first and then Lee, so a table produced before the Lee gate
+    existed reads as a prefix of this one:
+
+    * :func:`morphometry.femur.murphy_neck_base_qc` -- marks AT (Murphy), and the CCD, which
+      shares the femoral head centre, as needing a look at the mask.
+    * :func:`morphometry.femur.lee_neck_axis_qc` -- marks AT (Lee), whose neck ring was placed
+      inside the fitted femoral head.
+
+    No value is changed or dropped: a flagged leg keeps both its angles.
 
     Side is the PATIENT side, so the image-left half (``murphy_qc_left``) lands on 'right'.
     :param df: The result table, indexed by (Patient, Side) with Side in {'right', 'left'}.
     :param results: The per-patient dicts returned by :func:`process_patient`; one without
-        ``murphy_qc_left`` (a patient whose files were missing) is skipped.
+        ``murphy_qc_left`` (a patient whose files were missing) is skipped, and one predating a
+        flag family simply contributes nothing for it.
     :return: None; ``df`` is modified.
     """
     df['qc_flags'] = ''
     for r in results:
         if 'murphy_qc_left' not in r:
             continue
-        df.loc[(r['patient'], 'right'), 'qc_flags'] = r['murphy_qc_left']
-        df.loc[(r['patient'], 'left'), 'qc_flags'] = r['murphy_qc_right']
+        df.loc[(r['patient'], 'right'), 'qc_flags'] = _join_flags(r['murphy_qc_left'],
+                                                                  r.get('lee_qc_left', ''))
+        df.loc[(r['patient'], 'left'), 'qc_flags'] = _join_flags(r['murphy_qc_right'],
+                                                                 r.get('lee_qc_right', ''))
 
 
 if __name__ == '__main__':

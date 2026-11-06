@@ -156,6 +156,119 @@ MURPHY_NECK_BASE_MIN_HEAD_DISTANCE_MM = 10.0
 #: the femoral-head centre).
 MURPHY_AXIS_ANGLE_TOLERANCE_DEG = 4.0
 
+#: Smallest head-centre-to-notch distance, in units of the fitted femoral head radius, at which the
+#: Lee proximal neck axis is still considered to rest on neck cortex (``lee_ring_within_head_radius``, see
+#: :func:`morphometry.femur.lee_neck_axis_qc`). ``morphometry.femur.contour_femoral_neck`` measures
+#: ``a = |notch - head centre| / r`` and keeps the neck contour in the ring
+#: ``(a - 0.1) * r .. (a + 0.1) * r`` about the head centre, so ``a`` is the ring's centre radius in
+#: head radii: at ``a < 1`` the ring is drawn closer to the head axis than the head's own radius
+#: rather than peripheral to it, and at ``a < 0.9`` its outer edge is too. It is then far too small
+#: to follow the peripheral neck contour the fit is meant to use -- on the four flagged halves the
+#: notch sits 6.2 to 16.1 mm from the head centre, against 32.2 and 33.1 mm on the two sound halves
+#: of PA000001 -- which is anatomically implausible rather than merely unusual.
+#:
+#: **This is NOT the claim that the ring lies inside the femoral head, and that stronger claim is
+#: false on three of the four flagged halves.** ``a`` is an in-plane distance in the selected axial
+#: layer; the head's cross-section there has radius ``sqrt(r^2 - dz^2)``, and the Lee layer is the
+#: most proximal qualifying one, so it sits well off the equator. Measured with the *unrounded* head
+#: centre, that cross-section is 0.516 / 0.496 / 0.000 / 0.332 of ``r`` on PA000346 left, PA000622
+#: right, PA000810 right and PA000932 left, so the notch is **outside** it on three, and on PA000810
+#: the layer lies below the fitted sphere entirely. A containment test would flag 1 of the 4, so
+#: ``a < 1`` is deliberately the more inclusive reading. Note
+#: ``morphometry.femur.contour_femoral_neck``'s own docstring still carries the stronger "the
+#: contour it keeps is head cortex rather than neck" wording from task #9, written before this was
+#: measured. None of this moves the gate or the value 1.0; it is the *mechanism* that is weaker than
+#: it first looked. It is also why the flag is named for the head RADIUS and not for the head: the
+#: verdict it is modelled on, ``murphy_base_in_head``, tests the full 3-D distance in mm and really
+#: does mean inside the sphere.
+#:
+#: Like ``murphy_base_in_head``, this is not a free parameter fitted
+#: to a cohort: the candidates are the three points at which the ring crosses the head radius, and
+#: the radius comes from the same fit that produced ``a``. But the geometry offers three of them
+#: (0.9, 1.0, 1.1) and it was the cohort distribution that chose among them, so the claim is
+#: "geometric family, data-broken tie" and **not** "the data had no say" -- see the two paragraphs
+#: below, which give the distribution first and then the tie-break.
+#:
+#: **The threshold was placed using one cohort's own distribution of ``a``, so its flag rate there
+#: is not an unbiased estimate of it.** What the data show, over the 1896 of the 1908 Augsburg
+#: large-cohort image halves (954 cases x 2) that resolve a Lee axis -- the 12 that do not are 6
+#: halves of 3 missing files, 3 ``ValueError`` and 3 ``RuntimeError`` -- with min 0.3089, median
+#: 1.6222, max 2.2406: the 15 lowest values are 0.3089, 0.3265, 0.7684, 0.8434, **1.0192**,
+#: 1.0477, 1.1048, 1.1061, 1.1067, 1.1080, 1.1232, 1.1788, 1.1793, 1.1831 and 1.1887, i.e. there is
+#: a gap from 0.8434 to 1.0192 and *every* threshold in [0.844, 1.019] flags exactly the same four
+#: halves (PA000346 image-left 0.7684, PA000622 image-right 0.8434, PA000810 image-right 0.3265,
+#: PA000932 image-left 0.3089 -- 4 of 1896, 0.211%) and nothing more. Rates at other values, for
+#: scale: 1.05 flags 6 halves, 1.1 also 6, 1.15 flags 11, 1.20 flags 16, 1.30 flags 51. "There is a
+#: gap" has to be earned per quantity and is not a general property of this family of gates. The
+#: contrast, from a separate survey of the condylar line not reproduced here: a 13.32-voxel gap
+#: isolating 1 of 1904 halves on the femur, and on the tibia no gap at all (a continuum, largest
+#: low-end gap 1.10), so a Lee-style gate is placeable there on one bone and not on the other.
+#:
+#: **It replicates on two further cohorts, which is the strongest thing that can be said for it.**
+#: The 50-patient reader study: **100 of 100** halves resolve, ``a`` min 0.7684 (PA000346
+#: image-left, the same half), next 1.1995, median 1.5529, max 1.9197, **1 of 100** below 1.0, every
+#: threshold in (0.769, 1.1995] equivalent. The 60-case NaKo sample, 1 mm **isotropic** and through
+#: the ``isotropic=True`` path: **120 of 120** resolve with no failures, min **1.1388**, median
+#: 1.5231, max 2.0740, and **0 of 120** below 1.0 or even below 1.1 (3 below 1.2, 11 below 1.3).
+#: So on a clean second-and-third cohort the gate fires on nothing and NaKo's minimum sits 14% clear
+#: of the threshold: it is specific, not trigger-happy, which is the property a gate that marks rows
+#: most needs.
+#:
+#: **The two distributions are comparable (median 1.52 NaKo vs 1.62 Augsburg) despite completely
+#: different voxel geometry** -- 1 mm isotropic against 1.09375 x 1.09375 x 10 mm -- and that is not
+#: a given, it is a consequence of ``a`` being a dimensionless *ratio*. The counterexample is in
+#: this repo: the condylar-line analogue would be a length in **voxels**, and there the Augsburg
+#: femoral line has a clean 13.32-voxel gap isolating 1 of 1904 halves while ``dfg_knees``
+#: (0.75 x 0.3125 mm in plane) puts 11 of 95 femoral lines under 10 voxels with no gap at all. Same
+#: style of gate; a voxel count does not transfer between cohorts of different spacing and this
+#: ratio does. (That survey is the lead's and is not reproduced here; the Augsburg, reader-study and
+#: NaKo ``a`` surveys above were each run twice, independently.)
+#:
+#: **Even so, do not read "there is a gap" as the main argument, because the pooled gap is thin**:
+#: the binding lip is the large cohort's 1.0192, which sits only **1.9% above** the threshold, so a
+#: single re-measurement of one half could close it. The order of the three supports is: the
+#: geometry (the ring crossing the head radius) first, the replication second, the gap last. The
+#: prevalence figures are what say the gate is rare enough to be worth having at all -- 4 of 1896,
+#: 1 of 100, 0 of 120.
+#:
+#: **Three distinct points of this geometry could be the threshold -- 0.9, 1.0 and 1.1 -- so do not
+#: "correct" the value to one of the others without reading this.** The ring spans
+#: ``(a - 0.1) * r .. (a + 0.1) * r``, so its OUTER edge crosses the head radius at ``a = 0.9``
+#: (below which the *whole* ring is within that radius), its CENTRE at ``a = 1.0``, and its INNER
+#: edge at ``a = 1.1`` (below which *some* of it is). It is the centre, 1.0, that
+#: is shipped -- note in particular that 1.0 is **not** the inner-edge crossing, which is 1.1. The
+#: choice among the three is settled by the data and not by the geometry, because all three readings
+#: are defensible: 1.1 lands 0.0048 from the next observed value (1.1048) and inside a cluster of
+#: five halves between 1.1048 and 1.1232, so it separates nothing and its flag set is one
+#: re-measurement away from changing; 1.0 and 0.9 both sit in the empty interval and flag the same
+#: four. Of those two, 1.0 is taken as the earlier and more inclusive condition.
+#:
+#: **The tie is broken by the Augsburg large cohort alone, and the other two cohorts cannot break
+#: it** -- say which data, because a reader will otherwise assume all three were consulted. On NaKo
+#: all of 0.9, 1.0 and 1.1 flag **0 of 120** (only 1.15 separates anything, at 1 half), and on the
+#: reader study all three flag the same **1 of 100**. So both are *consistent* with every candidate
+#: and neither discriminates; the whole tie-break rests on the Augsburg cluster at 1.1048-1.1232.
+#: Their contribution is the replication above -- that ``a < 1`` is rare anatomy-wide and not an
+#: Augsburg artefact -- not the choice of value.
+#:
+#: One way the gate is **robust** rather than merely rare, worth knowing before anyone revisits the
+#: head fit: PA000346's fitted head radius is 13.4 mm, below the 18-26 mm adult range that
+#: :data:`MURPHY_NECK_BASE_MIN_HEAD_DISTANCE_MM`'s own comment cites. Since ``a = d / r``, an
+#: under-sized ``r`` makes ``a`` *larger*, so correcting that fit would push this half further below
+#: the threshold rather than out of the flag set.
+#:
+#: What motivates the gate is PA000346 image-left, whose Lee torsion moved 35.755 -> 3.168 degrees
+#: across the task #9 read-out change -- the single largest mover of the 100 reader-study halves --
+#: where its own neighbouring eligible layer reads ``a = 1.753`` and its contour fit kept 7 points
+#: against a cohort median of 53. That is 1 of 100 in the reader study, which is why
+#: ``contour_femoral_neck`` deliberately did not gate on it at the time; the cohort survey above is
+#: the prevalence evidence it was waiting for. Three of the four flagged halves (PA000622, PA000810,
+#: PA000932) are large-cohort cases outside the 50-patient reader study, so the gate is only even
+#: *comparable* with the human readers on PA000346, and no such comparison was made: backlog task #2
+#: closed the premise that the Augsburg readers can adjudicate this method at all (their
+#: Lee-minus-Murphy gap is ~11 degrees too narrow for landmarks this far apart).
+LEE_MIN_NOTCH_DISTANCE_FACTOR = 1.0
+
 # --- Subchondral / cartilage -------------------------------------------------
 #: Outer radius factor of the sphere shell used to find femoral-head surface points
 #: facing the acetabulum (minimum-distance measurement).
