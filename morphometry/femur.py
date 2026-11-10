@@ -944,10 +944,14 @@ def murphy_neck_base_qc(hip_image: Image, femoral_head_centre: np.ndarray, neck_
     The flags, in the ``name:value`` / ``;``-joined format of ``scripts/process_nmdid.py``'s
     ``qc_flags`` column:
 
-    * ``murphy_axis_short:<mm>`` -- the axial-plane head-to-base axis is shorter than
+    * ``murphy_axis_short:<voxels>`` -- the axial-plane head-to-base axis is shorter than
       ``1 / tan(C.MURPHY_AXIS_ANGLE_TOLERANCE_DEG)`` in-plane voxels, i.e. one voxel of landmark
       error would tilt the axis by more than that tolerance (see the constant for the derivation
-      and its disclosure). ``<mm>`` is the axis length.
+      and its disclosure). ``<voxels>`` is the axis length in **in-plane voxels**, which is the
+      quantity the threshold compares, so the printed value is monotone in the verdict on every
+      cohort. It printed millimetres until 8f12791, where a cohort carrying more than one in-plane
+      spacing could print an unflagged half shorter than a flagged one; ``axis_length_mm`` stays in
+      the returned dict, where nothing compares it against the threshold.
     * ``murphy_base_in_head:<mm>`` -- the neck base lies inside the fitted femoral head sphere,
       which no femoral neck base does: the trochanter was found far too proximal. The test is the
       full 3-D distance from the head centre (in mm, all three spacings) against ``head_radius``,
