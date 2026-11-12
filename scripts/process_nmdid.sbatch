@@ -14,7 +14,7 @@
 #
 #   sbatch scripts/process_nmdid.sbatch
 #   # then, once the array has finished:
-#   python scripts/process_nmdid.py -o results/nmdid --merge
+#   python scripts/process_nmdid.py -o results/nmdid_<sha> --merge
 #
 #SBATCH --job-name=nmdid-morph
 #SBATCH --array=0-15
@@ -30,7 +30,16 @@ set -euo pipefail
 
 REPO=/home/sw521914/Work/morphometry
 DATA=/hpcwork/p0021834/workspace_simon/nmdid
-OUT="${REPO}/results/nmdid"
+
+# The table must be traceable to the code that produced it: refuse a dirty checkout and key the
+# output directory by commit, so rows from different commits can never land in -- or be resumed
+# into -- the same shards. (The checkout must not change until the whole array has finished.)
+if [ -n "$(git -C "${REPO}" status --porcelain --untracked-files=no)" ]; then
+    echo "refusing to run on a dirty checkout of ${REPO}; commit or stash first" >&2
+    exit 1
+fi
+SHA=$(git -C "${REPO}" rev-parse --short HEAD)
+OUT="${REPO}/results/nmdid_${SHA}"
 
 mkdir -p "${OUT}" "${REPO}/logs"
 

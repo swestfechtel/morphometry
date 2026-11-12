@@ -45,6 +45,7 @@ from scipy.ndimage import label as connected_components
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from morphometry.femur import get_murphy_neck_qc_ct
+from morphometry.knee import get_condylar_line_qc
 from morphometry.image_io import Segmentation, split_ct_image, split_image_left_right
 from morphometry.measurements.femur import calculate_femoral_torsion_ct
 from morphometry.measurements.hip import (calculate_acetabular_anteversion, calculate_ccd_ct,
@@ -67,9 +68,10 @@ PELVIS_LABEL = 7
 # exact value between 1.2 and 1.6; the rim sits at roughly one radius by construction.
 ACETABULUM_RADIUS_FACTOR = 1.4
 
-# ``qc_flags`` carries both the segmentation-integrity flags of ``qc_flags()`` (a label in several
-# pieces, a missing bone) and the Murphy femoral-neck flags of ``murphy_qc()``; a flagged case is
-# measured and written as usual.
+# ``qc_flags`` carries the segmentation-integrity flags of ``qc_flags()`` (a label in several
+# pieces, a missing bone), the Murphy femoral-neck flags of ``murphy_qc()`` and the femoral / tibial
+# posterior-condylar-line flags of ``condylar_qc()``, in that order; a flagged case is measured and
+# written as usual.
 FIELDNAMES = ['case', 'side', 'femoral_torsion', 'tibial_torsion', 'ccd', 'ccd_projected',
               'femur_length', 'tibia_length', 'femoral_offset', 'mechanical_axis_deviation',
               'hip_knee_ankle_angle', 'center_edge_angle', 'acetabular_version',
@@ -221,6 +223,33 @@ def murphy_qc(leg: Segmentation, side: str) -> str:
         return ''
 
 
+def condylar_qc(knee: Segmentation, side: str) -> str:
+    """QC-flag the femoral and tibial posterior condylar lines of one leg's knee crop, never raising.
+
+    Appended to this row's ``qc_flags`` after the Murphy flags, femur first, in the format of
+    ``compute_torsion.py`` and ``process_augsburg_large_dataset.py``. A ``femoral_*`` flag marks
+    this row's femoral torsion as untrustworthy, a ``tibial_*`` flag its tibial torsion; the values
+    themselves are unchanged. ``get_condylar_line_qc`` resolves the line exactly as the consumers
+    do (binarise the bone label, reflect a right half first), so the flags describe the line that
+    was actually measured. Like ``murphy_qc``, it already reports a failed search as a
+    ``*_landmark_failed`` flag, so the handler here only fires if the QC itself is broken, and logs
+    at WARNING for the same reason.
+    :param knee: The leg's knee crop from ``split_ct_image`` (keeps its geometry, so the
+        in-plane isotropy check runs and a millimetre length is available).
+    :param side: The image side, 'left' or 'right'.
+    :return: The ``;``-separated flag string, empty when both lines look sound.
+    """
+    flags = []
+    for bone, label in (('femur', FEMUR_LABEL), ('tibia', TIBIA_LABEL)):
+        try:
+            flags.append(get_condylar_line_qc(knee, bone, segmentation_label=label, side=side))
+        except Exception as exc:  # QC must never cost a row
+            log.warning('%s condylar-line QC itself failed (%s side): %s: %s -- its flags are missing '
+                        'because the QC did not run, not because the line is sound',
+                        bone, side, type(exc).__name__, exc)
+    return ';'.join(f for f in flags if f)
+
+
 def split_legs(seg: Segmentation) -> tuple:
     """Split a both-legs mask into cleaned left / right image halves and their union.
 
@@ -292,16 +321,22 @@ def measure_case(path: Path) -> list:
         _measure(row, failures, 'femoral_offset',
                  lambda: calculate_femoral_offset_projected(leg, side=side, femur_label=FEMUR_LABEL, ct=True))
 
+        knee_flags = ''
         if masks is None:
+            # no knee crop: both torsions are NaN and listed in ``failed``, so there is no condylar
+            # line to flag; ``failed`` (not an empty ``qc_flags``) is what says so for this row
             for key in ('femoral_torsion', 'tibial_torsion', 'mechanical_axis_deviation', 'hip_knee_ankle_angle'):
                 row[key] = np.nan
                 failures.append(key)
         else:
             knee, ankle = masks[1], masks[2]
+            knee_flags = condylar_qc(knee, side)
             _measure(row, failures, 'femoral_torsion',
                      lambda: calculate_femoral_torsion_ct(leg, knee, side=side, segmentation_label=FEMUR_LABEL))
             _measure(row, failures, 'tibial_torsion',
-                     lambda: calculate_tibial_torsion(knee.array, ankle.array, TIBIA_LABEL, TIBIA_LABEL,
+                     # pass the Segmentations, not bare arrays, so their spacing reaches the
+                     # in-plane isotropy check of the index-space angle composition (task #10)
+                     lambda: calculate_tibial_torsion(knee, ankle, TIBIA_LABEL, TIBIA_LABEL,
                                                       FIBULA_LABEL, side=side))
             _measure(row, failures, 'mechanical_axis_deviation',
                      lambda: calculate_mechanical_axis_deviation(leg, femur_label=FEMUR_LABEL,
@@ -324,7 +359,8 @@ def measure_case(path: Path) -> list:
         # place is a large angular error that looks perfectly plausible in the number. The flags say
         # the femoral torsion of this row should not be trusted without looking at the mask; the
         # value is still measured and written (see morphometry.femur.murphy_neck_base_qc).
-        row['qc_flags'] = ';'.join(f for f in (flags[side], murphy_qc(leg, side)) if f)
+        # The condylar-line flags play the same role for both torsions' distal reference line.
+        row['qc_flags'] = ';'.join(f for f in (flags[side], murphy_qc(leg, side), knee_flags) if f)
         row['failed'] = ';'.join(sorted(set(failures)))
         row['status'] = 'ok' if not failures else 'partial'
         row['seconds'] = round(time.time() - started, 1)

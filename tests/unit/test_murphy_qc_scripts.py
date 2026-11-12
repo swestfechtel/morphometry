@@ -55,6 +55,7 @@ def test_nmdid_joins_the_murphy_flags_onto_the_segmentation_flags(monkeypatch):
     monkeypatch.setattr(nmdid, 'get_murphy_neck_qc_ct',
                         lambda leg, side, segmentation_label: 'murphy_axis_short:7.00'
                         if side == 'left' else '')
+    monkeypatch.setattr(nmdid, 'get_condylar_line_qc', lambda *a, **k: '')
 
     rows = {row['side']: row for row in nmdid.measure_case(pathlib.Path('case-1.nii.gz'))}
     assert rows['left']['qc_flags'] == 'femur:2pieces;murphy_axis_short:7.00'
@@ -69,6 +70,52 @@ def test_nmdid_murphy_qc_never_costs_a_row(monkeypatch):
 
     monkeypatch.setattr(nmdid, 'get_murphy_neck_qc_ct', boom)
     assert nmdid.murphy_qc(SimpleNamespace(), 'left') == ''
+
+
+def test_nmdid_appends_the_condylar_flags_after_the_murphy_ones(monkeypatch):
+    """Femoral then tibial condylar-line flags close the ``qc_flags`` cell, per image side.
+
+    The QC sees the knee crop itself (a Segmentation, so its spacing reaches the isotropy check),
+    each bone at its own label and the row's image side.
+    """
+    leg = SimpleNamespace(name='fake leg')
+    knee = SimpleNamespace(name='fake knee')
+    monkeypatch.setattr(nmdid, 'load_case', lambda path: leg)
+    monkeypatch.setattr(nmdid, 'split_legs',
+                        lambda seg: ({'left': leg, 'right': leg}, leg, {'left': '', 'right': 'tibia:2pieces'}))
+    monkeypatch.setattr(nmdid, 'split_ct_image', lambda *a, **k: (None, [None, knee, None]))
+    monkeypatch.setattr(nmdid, '_measure',
+                        lambda results, failures, key, fn: [results.__setitem__(k, np.nan)
+                                                            for k in ((key,) if isinstance(key, str) else key)])
+    monkeypatch.setattr(nmdid, 'get_murphy_neck_qc_ct',
+                        lambda leg, side, segmentation_label: 'murphy_axis_short:7.00' if side == 'left' else '')
+    calls = []
+
+    def condylar(image, bone, segmentation_label, side):
+        calls.append((image, bone, segmentation_label, side))
+        if side == 'left' and bone == 'tibia':
+            return 'tibial_condylar_line_short:9.00'
+        if side == 'right' and bone == 'femur':
+            return 'femoral_condylar_line_short:5.39'
+        return ''
+
+    monkeypatch.setattr(nmdid, 'get_condylar_line_qc', condylar)
+    rows = {row['side']: row for row in nmdid.measure_case(pathlib.Path('case-1.nii.gz'))}
+    assert rows['left']['qc_flags'] == 'murphy_axis_short:7.00;tibial_condylar_line_short:9.00'
+    assert rows['right']['qc_flags'] == 'tibia:2pieces;femoral_condylar_line_short:5.39'
+    assert calls == [(knee, 'femur', nmdid.FEMUR_LABEL, 'left'), (knee, 'tibia', nmdid.TIBIA_LABEL, 'left'),
+                     (knee, 'femur', nmdid.FEMUR_LABEL, 'right'), (knee, 'tibia', nmdid.TIBIA_LABEL, 'right')]
+
+
+def test_nmdid_condylar_qc_never_costs_a_row(monkeypatch):
+    """A condylar QC that blows up drops only its own flags; the other bone's still arrive."""
+    def flaky(image, bone, segmentation_label, side):
+        if bone == 'femur':
+            raise AttributeError('no array')
+        return 'tibial_condylar_line_short:9.00'
+
+    monkeypatch.setattr(nmdid, 'get_condylar_line_qc', flaky)
+    assert nmdid.condylar_qc(SimpleNamespace(), 'left') == 'tibial_condylar_line_short:9.00'
 
 
 # --- process_nako_large.py -----------------------------------------------------------------
