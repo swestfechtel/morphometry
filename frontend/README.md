@@ -3,6 +3,7 @@
 The Next.js 15 / React 19 web UI for the morphometry API — DICOM upload, model
 job dispatch, and interactive landmark editing of MRI torsion results.
 Part of the `morphometry` monorepo; the backend it talks to lives in `../api/`.
+The end-to-end guide to the whole web app is [`../README_WEBAPP.md`](../README_WEBAPP.md).
 
 ## Getting started
 

@@ -4,6 +4,9 @@ FastAPI service for MRI torsion examinations: ingests DICOM (UI uploads or
 Orthanc), runs the nnUNet segmentation + torsion docker pipeline as background
 jobs, and serves results.
 
+The end-to-end guide to the API **and** the frontend (workflow, endpoint
+reference, configuration, limitations) is [`../README_WEBAPP.md`](../README_WEBAPP.md).
+
 ## Architecture
 
 ```

@@ -75,6 +75,10 @@ Tests skip cleanly when sample data is absent. Data paths can be overridden via
 
 ## Running the stack
 
+For the web application as a whole (intended workflow, REST API reference,
+pipeline internals, configuration, known limitations) see the standalone
+[`README_WEBAPP.md`](README_WEBAPP.md).
+
 The full system is four cooperating processes: **Redis** (broker + durable job
 state), the **RQ worker** (loads volumes, runs the docker model images — needs
 the docker socket + the morphometry venv), the **FastAPI app**, and the
