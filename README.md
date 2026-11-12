@@ -40,7 +40,58 @@ whole-leg CT, plus a FastAPI service and batch-processing scripts.
   `docs/wirth_eckstein_2008_plan.md` (Wirth & Eckstein Table I / II analogues,
   region areas, thickness per subregion, loaded-vs-unloaded and across-flexion
   spread, QC summary) into CSVs plus a markdown report and a `.meta.json`
-  recording the commit it was produced at.
+  recording the commit it was produced at. `analyse_cartilage_deformation.py`
+  maps cartilage thickness change per knee against its unloaded 30° scan
+  (bone-registered Δ maps, per-subregion Δ, largest-thinning hotspots, figures,
+  and a cohort report with uncorrected Wilcoxon p-values) on the current
+  `dfg_knees` label set (`/home/simon/Downloads/dfg_knees_segmentations/dfg_knees/segmentations`):
+
+  ```bash
+  python scripts/analyse_cartilage_deformation.py \
+      -i /home/simon/Downloads/dfg_knees_segmentations/dfg_knees/segmentations \
+      -o /home/simon/Data/dfg_knees/deformation_<short sha> --workers 16
+  ```
+
+  How it works: each configuration's **bone** surface (never the cartilage) is
+  rigidly ICP-registered onto the reference's, cropped to the articular end; on
+  the current run (`/home/simon/Data/dfg_knees/deformation_f53c02a`) the residual
+  RMS is median 0.121 / max 0.208 mm (femur, n = 98) and 0.091 / 0.142 mm (tibia,
+  n = 88), far below the 1.0 mm QC threshold (`REGISTRATION_MAX_RMS_MM`, kept
+  because the residuals show no gap). The tibial map is the reference's plateau
+  plane; the femoral map is *unrolled*: medial-lateral position against signed arc
+  length (mm) along the sagittal bone profile, measured from the trochlear-notch
+  plane (a bone landmark), so trochlea and posterior condyle each appear once.
+  The coordinate covers the whole reference bone up to the field-of-view cut
+  (the registration alone is cropped to the articular end). Sagittal levels at
+  the outer condyle edges whose profile folds onto the side wall, or never
+  reaches the notch plane, are not used, which leaves 0.1-4.9% of a femur's
+  covered area unmapped (median 2.2%); `registration.csv` splits it by cause. The Δ maps and
+  hotspots show the one-sided cAB → AC thickness per position (the cMe
+  direction), the per-subregion tables aMe, so their magnitudes are not directly
+  comparable. The largest-thinning hotspot is searched only more than 2 mm
+  (`--edge-margin-mm`) from each scan's map edge, against the near-zero rim band
+  and the edge mismatch between acquisitions; many hotspots still sit just past
+  that margin, and single-voxel cavities in some cartilage labels (all of K10)
+  read as thin spots that can capture a hotspot — `report.md` lists both caveats.
+
+  Outputs: `subregion_delta.csv`, `hotspots.csv`, `registration.csv`,
+  `failures.csv`, `<knee>_{tibia,femur}_delta.png`, `{bone}_hotspots_cohort.png`,
+  `cohort_summary.csv`, `report.md`, `report.meta.json`. Every figure carries
+  a caption under its panels explaining the setup, the sign of Δ (scan −
+  reference: negative/blue = thinner), the colour scales, the markers, the axes
+  and the subregion abbreviations; the per-knee reference panel names its
+  subregions, and grey marks cells with no value (white is Δ = 0).
+  Registration figures: `<knee>_<bone>_registration_residual.png` (the signed
+  bone-to-bone distance after alignment, on the same map as the Δ figure — a Δ
+  much larger than the residual at that spot is not alignment error),
+  `<knee>_<bone>_registration_sections.png` (sagittal bone outlines through each
+  plate/condyle: reference, scan at the ICP start, scan after ICP) and
+  `registration_cohort.png` (rms residual, ICP rotation change and dropped area
+  per comparison for every knee, with the QC thresholds). Without
+  `--laterality-table` all knees are pooled by patient side (assumed same side).
+  The existing knee goldens and `report_knee_cartilage_cohort.py`'s quoted tables
+  still use the older label set under `/home/simon/Data/dfg_knees/monai_segmentations`
+  (follow-up).
 - **`frontend/`** — the Next.js 15 / React 19 web UI for the API (DICOM upload,
   job dispatch, and interactive landmark editing of results). The torsion viewer
   uses **Cornerstone3D** to render the NIfTI volumes directly (see "Running the
@@ -70,7 +121,8 @@ MORPH_UPDATE_GOLDEN=1 pytest      # (re)capture golden baselines
 Tests skip cleanly when sample data is absent. Data paths can be overridden via
 `MORPH_AUGSBURG_PA000001`, `MORPH_AUGSBURG_READER_STUDY`, `MORPH_NAKO_SAMPLE_DIR`,
 `MORPH_CT_SAMPLE`, `MORPH_DFG_KNEES_DIR` (the knee cartilage goldens; marker
-`needs_dfg_knees`). The data-requiring markers are `needs_augsburg`,
+`needs_dfg_knees`), `MORPH_DFG_KNEES_CURRENT_DIR` (the current label set, for the
+cartilage deformation characterization). The data-requiring markers are `needs_augsburg`,
 `needs_augsburg_reader_study`, `needs_nako`, `needs_ct` and `needs_dfg_knees`.
 
 ## Running the stack

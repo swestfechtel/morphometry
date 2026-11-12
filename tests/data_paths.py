@@ -60,6 +60,18 @@ DFG_KNEES_DIR = Path(
     )
 )
 
+# The *current* dfg_knees label set (113 scans, 15 knees; same labels and naming as above), the
+# one the cartilage deformation analysis (``scripts/analyse_cartilage_deformation.py``) runs
+# on. ``DFG_KNEES_DIR`` above is an older label set that the existing knee goldens are pinned
+# on; the two must not be mixed. Used by ``tests/characterization/test_cartilage_deformation.py``
+# (``needs_dfg_knees``).
+DFG_KNEES_CURRENT_DIR = Path(
+    os.environ.get(
+        "MORPH_DFG_KNEES_CURRENT_DIR",
+        "/home/simon/Downloads/dfg_knees_segmentations/dfg_knees/segmentations",
+    )
+)
+
 # The scans the knee-cartilage goldens are pinned on: a clean extended (0 deg) knee and the
 # 90 deg scan of the same subject and load, which exercises the flexed-knee code paths
 # (femoral frame, posterior-condyle zones, the shared in-plane frame).

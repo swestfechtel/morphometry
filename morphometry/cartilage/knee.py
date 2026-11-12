@@ -1,12 +1,12 @@
 import itertools
 import logging
-import warnings
 
 import pyvista as pv
 import numpy as np
 from typing import Optional, Tuple
-from scipy.ndimage import distance_transform_edt, generic_filter, label, minimum_filter
+from scipy.ndimage import label
 from morphometry.image_io import Image
+from morphometry.cartilage.robust_search import interior_cells, smoothed_argmin
 from morphometry.cartilage.surface import (
     array_indices_to_world, transfer_qc, TRANSFER_FAR_MM, TRANSFER_MAX_FAR_FRACTION,
 )
@@ -853,25 +853,10 @@ def _overlap_spacing(tibia_thickness: dict, femur_thickness: dict, image: Image)
     return float(tibia_frame.grid_mm)
 
 
-def _interior_cells(footprint: np.ndarray, margin_mm: float, spacing: float) -> np.ndarray:
-    """
-    The cells of a footprint at least ``margin_mm`` from its boundary.
-
-    The boundary is measured with a Euclidean distance transform over a padded copy, so that a
-    footprint touching the array border is still treated as ending there.
-
-    :param footprint: ``(H, W)`` bool mask of the cells a bone's map covers.
-    :param margin_mm: Required distance to the nearest cell outside the footprint, in mm.
-        ``<= 0`` returns the footprint unchanged.
-    :param spacing: Cell size in mm.
-    :return: ``(H, W)`` bool mask of the interior cells.
-    """
-    if margin_mm <= 0 or not footprint.any():
-        return footprint
-    pad = int(np.ceil(margin_mm / spacing)) + 1
-    padded = np.pad(footprint, pad, mode='constant', constant_values=False)
-    inside = distance_transform_edt(padded, sampling=spacing) > margin_mm
-    return inside[pad:-pad, pad:-pad]
+#: The footprint-interior rule of ``edge_margin_mm``; lives in :mod:`robust_search` so the
+#: delta-map hotspot search applies exactly the same rule (the padding there is one cell instead
+#: of ``ceil(margin / spacing) + 1``, which gives identical distances).
+_interior_cells = interior_cells
 
 
 def find_thinnest_area(tibia_thickness: dict, femur_thickness: dict, image: Image,
@@ -974,51 +959,25 @@ def find_thinnest_area(tibia_thickness: dict, femur_thickness: dict, image: Imag
     grid = tibia_grid + femur_grid          # combined thickness; NaN outside the overlap
     valid = ~np.isnan(grid)
 
-    k = int(round(neighbourhood_mm / spacing))
-    if k % 2 == 0:
-        k += 1
-    k = max(3, k)
-
-    # Median smooth with reflection padding, ignoring NaN neighbours. A window holding no
-    # measured cell at all yields NaN and warns; that is expected (the overlap footprint is
-    # irregular) and such cells are excluded from the search below.
-    with warnings.catch_warnings():
-        warnings.filterwarnings('ignore', 'All-NaN slice encountered', RuntimeWarning)
-        smoothed = generic_filter(grid, np.nanmedian, size=k, mode='reflect')
-
-    # Restrict the neighbourhood-centre search to cells whose whole k x k neighbourhood is
-    # inside the overlap footprint. We are looking for the thinnest *area*, so the area has to
-    # be fully measured: a cell on the footprint boundary has its median taken over the few
-    # neighbours that exist, and the boundary is exactly where the cartilage runs out and the
-    # measured thickness falls towards zero, so a partially-observed window would win the
-    # argmin on nearly every knee.
-    searchable = minimum_filter(valid, size=k, mode='constant', cval=False) & ~np.isnan(smoothed)
-    # ... and away from *each bone's own* cartilage edge, and thick enough to be cartilage.
-    # See the function docstring: this is what keeps the search off the rim.
+    # Edge margin / minimum thickness: away from *each bone's own* cartilage edge, and thick
+    # enough to be cartilage. See the function docstring: this is what keeps the search off
+    # the rim. The window-inside-overlap rule lives in ``smoothed_argmin``.
+    restrict = np.ones(grid.shape, dtype=bool)
     for bone_grid in (tibia_grid, femur_grid):
-        searchable &= _interior_cells(~np.isnan(bone_grid), edge_margin_mm, spacing)
+        restrict &= _interior_cells(~np.isnan(bone_grid), edge_margin_mm, spacing)
         if min_thickness_mm > 0:
-            searchable &= np.nan_to_num(bone_grid, nan=-np.inf) >= min_thickness_mm
-    if not searchable.any():
+            restrict &= np.nan_to_num(bone_grid, nan=-np.inf) >= min_thickness_mm
+    found = smoothed_argmin(grid, valid, spacing, neighbourhood_mm, radius_mm, restrict)
+    if found['fallback']:
         logger.warning('find_thinnest_area: nothing survives the %.1f mm search neighbourhood, '
                        'the %.1f mm edge margin and the %.2f mm minimum thickness; falling back '
                        'to the whole tibiofemoral overlap.',
                        neighbourhood_mm, edge_margin_mm, min_thickness_mm)
-        searchable = valid & ~np.isnan(smoothed)
-    search = np.where(searchable, smoothed, np.inf)
-    ci, cj = np.unravel_index(np.argmin(search), search.shape)
+    k = found['kernel_size']
+    smoothed = found['smoothed']
+    ci, cj = found['center_index']
+    pi, pj = found['point_index']
     center = (float(ci + x_min), float(cj + y_min))
-
-    # Refine to the actual thinnest cell within a disc around the centre, on the raw map. The
-    # disc radius defaults to half the neighbourhood so it matches the smoothing extent (k is
-    # a diameter) rather than doubling it. The refinement obeys the same restrictions, or it
-    # would hand back a rim cell from just inside the disc.
-    radius = neighbourhood_mm / 2.0 if radius_mm is None else radius_mm
-    r = max(1, int(round(radius / spacing)))
-    ii, jj = np.indices(grid.shape)
-    disc = (ii - ci) ** 2 + (jj - cj) ** 2 <= r ** 2
-    restricted = np.where(disc & searchable, grid, np.inf)
-    pi, pj = np.unravel_index(np.argmin(restricted), restricted.shape)
     point = (float(pi + x_min), float(pj + y_min))
 
     return {
