@@ -484,6 +484,33 @@ def get_femoral_head_center_ct(femur_image: Segmentation, segmentation_label: in
     :func:`_femoral_head_slab_bound` (so on a straight femur the walk cannot run head into
     neck into shaft and return a radius far above anatomical).
 
+    The slab is then trimmed in plane by a **two-sided box about the top-slice centroid, both of
+    whose half-widths come from the head-dominated superior half of the slab** -- on each in-plane
+    axis, one "head radius" from the centroid out to that half's own smallest coordinate (in x that
+    is the head's medial surface), applied symmetrically on either side of the centroid.
+
+    **The operative element is the two-sidedness, and within it the near-side bound in y.** Each
+    axis used to be trimmed on its far side only, so the excursion that *set* a half-width was
+    never itself trimmed: a slab reaching far anteriorly sized the coronal half-width on its own
+    anterior reach, was then granted an equally large posterior allowance it never came near, and
+    kept every one of those anterior points in the cloud the sphere was fitted to. Closing that
+    near side in y is where essentially all of the movement comes from -- over the 46 NMDID
+    verification cases (92 image halves) the full box moves the fitted radius on 54 halves, by up
+    to 6.034 mm.
+
+    Two things that are **not** the mechanism, recorded so the attribution is not misread. The
+    lateral (+x) cut is the primary cutoff and does real work, unchanged in substance: on this
+    module's CT fixture it removes 15.4% and 19.0% of the slab's points. The medial (-x) bound
+    added beside it is near-vacuous -- 0 points removed on either of those halves -- and *by
+    construction* it can never clip a point of ``superior_half`` at all, since ``half_x`` is that
+    half's own distance to its own minimum x. Second, taking the coronal half-width from
+    ``superior_half`` rather than from the already x-cut cloud is a tidy-up and not the fix: the
+    old half-width was genuinely inflated by the neck and shaft points it was measured on (by a
+    factor 1.35 and 1.91 on the two fixture halves), but making only that change, still one-sided,
+    moves the radius on 2 of 92 halves by at most 0.053 mm -- a median 0.00% and at most 9.77% of
+    the total movement. It is done anyway, because a bound sized by the contamination it exists to
+    exclude has no defensible reading, not because it is what moved the numbers.
+
     **Mirror-equivariant, as in the MRI variant**: a RIGHT image half is measured as the
     reflection of a left one and the centre mapped back with :func:`_mirror_physical_point_x`, so
     the body below is left-side-only and the two sides cannot be different measurements. The
@@ -544,18 +571,28 @@ def get_femoral_head_center_ct(femur_image: Segmentation, segmentation_label: in
     middle_slice = (layer_high + (layer_low - layer_high) // 2)
     superior_half = contour_points[contour_points[:, 2] >= middle_slice]
 
-    # left image half: in this physical frame the head's medial surface is at the smallest x, so the
-    # lateral cutoff goes one "medial radius" on the +x side of the top-slice centroid. The mirrored
-    # form the right side used to carry is now reached through the reflection at the top.
-    min_s = np.min(superior_half[:, 0])
-    radius = com_high[0] - min_s
-    max_s = com_high[0] + radius
-    contour_points = contour_points[contour_points[:, 0] <= max_s]
-
-    min_c = np.min(contour_points[:, 1])
-    radius = com_high[1] - min_c
-    max_c = com_high[1] + radius
-    contour_points = contour_points[contour_points[:, 1] <= max_c]
+    # Left image half: a two-sided box about the top-slice centroid, with BOTH half-widths taken
+    # from ``superior_half`` -- the head-dominated top of the slab. In this physical frame the
+    # head's medial surface is at the smallest x, so each half-width is one "head radius" measured
+    # from the centroid out to the superior half's own smallest coordinate on that axis, and each
+    # axis is then trimmed on *both* sides of the centroid.
+    # What does the work is the two-sidedness in y. The old code trimmed each axis on its far side
+    # only, so the anterior excursion that SET the coronal half-width was never trimmed, and the
+    # posterior allowance it bought was one the cloud never reached; closing that near side is
+    # where essentially all of the movement comes from (54 of 92 verification halves, up to
+    # 6.034 mm of radius). The lateral (+x) cut is unchanged in substance and still removes
+    # 15.4% / 19.0% of the slab on the CT fixture's two halves, while the medial (-x) bound added
+    # beside it is near-vacuous and cannot clip a ``superior_half`` point at all, half_x being that
+    # half's own distance to its own minimum x. Sourcing half_y from ``superior_half`` rather than
+    # from the already x-cut cloud is a tidy-up -- the old half-width really was inflated by the
+    # neck and shaft points it was measured on (x1.35 and x1.91 here) -- but on its own it is worth
+    # under 10% of the movement on any half. The mirrored form the right side used to carry is now
+    # reached through the reflection at the top.
+    half_x = com_high[0] - np.min(superior_half[:, 0])
+    half_y = com_high[1] - np.min(superior_half[:, 1])
+    contour_points = contour_points[
+        (np.abs(contour_points[:, 0] - com_high[0]) <= half_x)
+        & (np.abs(contour_points[:, 1] - com_high[1]) <= half_y)]
 
     return sphere_fit(contour_points)
 
