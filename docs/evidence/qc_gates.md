@@ -85,3 +85,44 @@ something on this page. Nothing was reworded, which is the point; the file it ca
 - Physical (mm) coordinates stay floats: `get_femoral_shaft_axis_ct` returns float endpoints in physical space (consumers: `calculate_ccd_ct`, `calculate_femoral_offset_projected(ct=True)`). Its MRI counterpart `get_femoral_shaft_axis` likewise returns unrounded (continuous-index) slice centroids (consumers: `calculate_ccd`, `calculate_femoral_offset{,_projected}`). Only *index* coordinates are rounded/cast, and only where an array is indexed. Casting mm coordinates to `int` truncates toward zero, which makes a measurement depend on the image's position in the scanner frame.
 - **A QC gate should be shown non-mutating at RUNTIME, not only by diff — and that check is cheap (established 2026-11-06).** "Purely additive" is normally argued from `git diff`: no measurement module touched, no golden moved. That is necessary and not sufficient, because a gate re-resolves the same landmarks from the same arrays and could in principle perturb them. The strong form is to measure, call the gate, measure again, and compare bitwise. Done for the condylar gate on PA000001 (both halves, independently by the implementer's reviewer and by the lead): the array is byte-equal afterwards and `calculate_knee_rotation_angle` returns **bit-identical** values either side of the gate (2.4396980035280196 left, 6.104684876928884 right). It holds by construction — the gate's `np.where` copies and its `mask[::-1]` is a read-only view — but it is worth demonstrating rather than asserting. **The Murphy and Lee gates now have the same check, and all three are pinned as tests rather than run by hand (2026-11-09).** On PA000001's two halves both hip gates return `''`, the hip array is byte-equal afterwards, and the Lee torsion, the Murphy torsion and the anteversion are all **bit-identical** either side of the two gate calls (the Lee values being 6.025752 and 13.043961, i.e. exactly their goldens, which is a free cross-check that the probe measured the shipped path); the condylar gate likewise leaves the knee rotation angle bit-identical with both bones gated. `tests/characterization/test_qc_gates_non_mutating.py` pins all of it, so the property is enforced rather than remembered. **Its two assertions are independent, and that was mutation-tested rather than assumed**: a value-neutral single-voxel write into the mask a gate was handed is caught **only** by the byte-equality check (the measurement does not move at all — one interior hole is invisible to the angle), while a 1e-9-degree perturbation with the array untouched is caught **only** by the bitwise value check. That second case is the reason the comparison is `np.array_equal` and not `pytest.approx`: `approx` would pass it. Runtime cost for the same gate, since both precedents quote theirs: ~65 ms for the two QC calls of one image half, i.e. about 0.9x one `calculate_knee_rotation_angle` over both halves and roughly **90 s over the whole 954-case Augsburg cohort** single-process — two orders cheaper in relative terms than the Murphy/Lee QC's +11.4% per NaKo case, because it duplicates two section searches rather than a femoral-head fit. That is an argument *for* the resolve-it-twice design rather than a cost to apologise for.
 - **The QC wrappers' never-raises contract has a live justification, now verified rather than assumed.** In both Augsburg scripts the `get_murphy_neck_qc` / `get_lee_neck_qc` calls sit **outside any `try`** — in the gap between the measurement try block above them and the plotting one below, with the only enclosing try being the loader's `FileNotFoundError`. So an exception escaping either wrapper propagates out of `process_patient` into `pool.map` and **aborts the whole cohort run**. That is why both wrappers catch `Exception` and report a failed landmark as a flag string instead of raising, and why that contract must not be narrowed. `scripts/process_nako_large.py`'s QC call is by contrast inside a bare `except Exception`, and `process_nmdid.py` wraps its own.
+
+## NMDID extent and plausibility flags (2026-11-13)
+
+**Why they exist.** After the 2026-11-12 NMDID re-run (`results/nmdid_6cec5b1/`), four subagents
+reviewed 84 outlier cases visually (renders, re-run landmarks), sampled from: femoral offset > 80 mm
+or CE > 70° (39 legs), femur < 300 mm or tibia < 250 mm (164), every `murphy_landmark_failed` reason
+(337), |tibial torsion| > 70° or a failed condylar search (187). The dominant causes are acquisition,
+not code: fields of view that stop at the thigh (52 of the 114 short femurs have femur in the last
+axial slice, and carried no flag, because the truncated femur is one intact piece), legs crossing
+the split line or leaving the lateral border, flexed / abducted post-mortem poses, arms labelled
+femur or tibia that `clean_leg` keeps because they reach below the pelvis top, dislocated hips
+(CE 108–165°, none flagged), and femur slivers at the split line seeding the CT head sphere fit
+(radii 2.9 mm to 214 km; the source of the 209,609 mm femoral offset). The search defects the review
+also found (Murphy lesser-trochanter search, knee crop ending at the fibula top, ankle centroids over
+all components) are **not** addressed by these flags and are open; fixing them moves values.
+
+**No bound was fitted to these cases.** The head-radius bound is a factor-two convention around the
+adult range; CE ≥ 90° is geometry; the tilt bound is derived from the 4° line budget
+(`axial_angle_error_bound_deg`: an axial section of a bone tilted by θ is its true section
+stretched by 1/cos θ, worst-case line error atan(1/√cos θ) − atan(√cos θ), 4° at θ = 29.6°). The
+reviewers' own suggestions (radius 15–40 mm, tilt 20°, LT bound 30 mm) were read off the sampled
+cases and were deliberately not used.
+
+**Non-mutation, verified on data.** The 84 reviewed cases (168 legs) re-run with the flags give
+values, `status` and `failed` identical to `6cec5b1` on every row, and every earlier flag is still
+present, in order.
+
+**Rates — on the outlier sample (168 legs; biased by construction, do not quote as prevalence):**
+`tibia:at_split` 58, `femur:at_split` 57, `fibula:at_split` 41, `femur_tilt` 36,
+`femur:at_fov_bottom` 34, `tibia:above_femur_midshaft` 19, `tibia_tilt` 17,
+`femoral_head_radius_implausible` 11, `center_edge_not_above_head` 8, the rest ≤ 7.
+
+**Rates — on 60 control cases (120 legs; random among cases with both legs `ok`, no flag, femur
+> 380 mm):** 13 legs flagged. `tibia:at_split` 12 (usually both legs of a case: legs lying together,
+contacts of 2 to ~1100 voxels), `fibula:at_split` 3, `femur:at_lateral_edge` 1, `tibia_tilt` 1. That
+last one (case-120320 left, tilt 31.8°, femoral torsion −72.9°, femur at the lateral border) is a
+real catch on a leg that looked clean. No head-radius, CE, tilt-femur, fov-bottom or
+tibia-above-femur flag fired. So `tibia:at_split` alone marks a leg to look at, not a broken one;
+the others were silent on sound legs. The control pool was selected *by having no flag*, so these
+rates are a floor on specificity, not an estimate of cohort prevalence.
+

@@ -56,6 +56,7 @@ def test_nmdid_joins_the_murphy_flags_onto_the_segmentation_flags(monkeypatch):
                         lambda leg, side, segmentation_label: 'murphy_axis_short:7.00'
                         if side == 'left' else '')
     monkeypatch.setattr(nmdid, 'get_condylar_line_qc', lambda *a, **k: '')
+    monkeypatch.setattr(nmdid, 'plausibility_flags', lambda *a, **k: '')
 
     rows = {row['side']: row for row in nmdid.measure_case(pathlib.Path('case-1.nii.gz'))}
     assert rows['left']['qc_flags'] == 'femur:2pieces;murphy_axis_short:7.00'
@@ -100,6 +101,7 @@ def test_nmdid_appends_the_condylar_flags_after_the_murphy_ones(monkeypatch):
         return ''
 
     monkeypatch.setattr(nmdid, 'get_condylar_line_qc', condylar)
+    monkeypatch.setattr(nmdid, 'plausibility_flags', lambda *a, **k: '')
     rows = {row['side']: row for row in nmdid.measure_case(pathlib.Path('case-1.nii.gz'))}
     assert rows['left']['qc_flags'] == 'murphy_axis_short:7.00;tibial_condylar_line_short:9.00'
     assert rows['right']['qc_flags'] == 'tibia:2pieces;femoral_condylar_line_short:5.39'
