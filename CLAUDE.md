@@ -78,8 +78,9 @@ item 4 is partly fixed, the rest is open work:
    change; a new NMDID run is needed. **The largest-component ankle centroid (#9) was withdrawn**: on
    legs crossed at the ankle — including the CT golden fixture's left leg — the bigger piece is the
    other leg. **Still open:** #9's own-leg identity at the ankle, the threshold fixes (#4 LT lower bound, #6 fixed-mm hip crop, #7 knee crop end,
-   #13/#14 `clean_leg`) — choose them on held-out data, not the reviewed cases — and #5, a
-   femur-aligned frame for the Murphy search. Evidence:
+   #13/#14 `clean_leg`) — choose them on held-out data, not the reviewed cases; the user is annotating
+   80 held-out legs for #4/#6/#7 (set A to choose, set B to quote; [`nmdid_annotation/`](docs/evidence/nmdid_annotation/README.md))
+   — and #5, a femur-aligned frame for the Murphy search. Evidence:
    [`nmdid_outlier_review.md`](docs/evidence/nmdid_outlier_review.md).
 
 ## Repository layout

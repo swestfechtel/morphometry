@@ -42,6 +42,11 @@ legs whose femoral torsion went from NaN to a value.
 The MRI side of #1/#2 is **deliberately not changed**: the review's evidence is CT-only, and the
 same rule on Augsburg/NaKo would need its own blast-radius measurement.
 
+**Held-out annotation for group B (set up 2026-11-16):** 40 random usable cases (80 legs), split into
+set A (choose) and set B (quote), excluding the 84 reviewed cases, are being annotated by the user
+with five points per leg (three on the lesser trochanter, two on the posterior tibial plateau). The
+draw, protocol and Slicer helper are in [`nmdid_annotation/`](nmdid_annotation/README.md).
+
 **Still open:** the rest of #9 (own-leg identity at the ankle, above), group B (needs a threshold chosen on held-out data, *not* on the 84 reviewed
 cases) — #4 the 40 mm lower bound, #6 a fixed-mm hip crop (and with it the rest of #3), #7 the
 knee crop end, #13/#14 `clean_leg`; and group C — #5, the femur-aligned frame for the Murphy search.
