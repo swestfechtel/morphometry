@@ -243,7 +243,7 @@ def test_measure_case_puts_the_plausibility_flags_last(monkeypatch):
                         lambda seg: ({'left': leg, 'right': leg}, leg, {'left': 'femur:at_fov_bottom:5', 'right': ''}))
     monkeypatch.setattr(nmdid, 'split_ct_image', lambda *a, **k: (None, [None, leg, None]))
     monkeypatch.setattr(nmdid, '_measure',
-                        lambda results, failures, key, fn: [results.__setitem__(k, np.nan)
+                        lambda results, failures, key, fn, nan_failures=None: [results.__setitem__(k, np.nan)
                                                             for k in ((key,) if isinstance(key, str) else key)])
     monkeypatch.setattr(nmdid, 'get_murphy_neck_qc_ct', lambda *a, **k: 'murphy_axis_short:7.00')
     monkeypatch.setattr(nmdid, 'get_condylar_line_qc', lambda image, bone, **k:

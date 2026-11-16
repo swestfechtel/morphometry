@@ -52,7 +52,7 @@ do-not-pool paragraphs go into `docs/evidence/`; this file gets a one- or two-se
 
 Everything else here is shipped, closed by measurement, or a deliberate non-action. Items 1–3 are
 genuinely open and each is blocked on data or people that do not exist in this repo — not on work;
-item 4 is open work:
+item 4 is partly fixed, the rest is open work:
 
 1. **The CT femoral-head-radius arbiter.** 17 of 92 verification halves still fit a head radius
    outside the 18–26 mm adult range, and six candidate arbiters are closed by measurement, so
@@ -68,14 +68,18 @@ item 4 is open work:
    scans known anywhere are three `dfg_knees` cartilage scans no torsion pipeline can reach. Worth
    adding the day a cohort arrives that is not uniformly one raw orientation, and the spacing survey
    is the thing to re-run then. Evidence: [`in_plane_spacing.md`](docs/evidence/in_plane_spacing.md).
-4. **The NMDID outlier-review code defects (found 2026-11-13, not fixed).** The CT Murphy
-   lesser-trochanter search (`femur.py`: smaller component taken, no CT speck guard, exactly-two
-   components, 40 mm bound, pose, 30% crop) loses most failed femoral torsions on *sound* femurs; the
-   knee crop ends at the fibula top (`image_io.py:552`), the ankle centroids average every component
-   (`tibia.py:52-63`), `tibia.py:22` sizes on the wrong axis; the CE edge search accepts an edge below the
-   head; raw `IndexError`s in `utils.py` may escape `compute_torsion.py`. Every fix moves values (golden
-   re-capture, new NMDID run, do-not-pool), and the reviewers' suggested thresholds were read off the
-   reviewed cases — choose them on held-out data. Evidence:
+4. **The NMDID outlier-review code defects (found 2026-11-13; parameter-free group fixed 2026-11-16).**
+   Fixed (#1, #2, #8, #10–#12, part of #9): the CT lesser-trochanter search takes the *plausible*
+   component and drops specks under `C.MURPHY_TROCHANTER_MIN_COMPONENT_VOXELS` before counting
+   (`ct=True` only — MRI unchanged); `split_ct_image` refuses an empty/inverted crop; an absent ankle
+   label raises; `tibia.py`'s layer search no longer crashes on short masks; a CE side with its edge
+   not above the head is `NaN` (listed in NMDID's `failed`); the empty-input `IndexError`s in
+   `utils.py` are `ValueError`s. **Do not pool** NMDID CT femoral torsion or CE rows across this
+   change; a new NMDID run is needed. **The largest-component ankle centroid (#9) was withdrawn**: on
+   legs crossed at the ankle — including the CT golden fixture's left leg — the bigger piece is the
+   other leg. **Still open:** #9's own-leg identity at the ankle, the threshold fixes (#4 LT lower bound, #6 fixed-mm hip crop, #7 knee crop end,
+   #13/#14 `clean_leg`) — choose them on held-out data, not the reviewed cases — and #5, a
+   femur-aligned frame for the Murphy search. Evidence:
    [`nmdid_outlier_review.md`](docs/evidence/nmdid_outlier_review.md).
 
 ## Repository layout
@@ -120,7 +124,7 @@ The repo has four loosely-coupled parts; the three Python parts share a single v
 The API does not run inference in-process — the RQ worker invokes two external docker images built from this repo. Both are pulled/tagged as `swestfechtel/*:latest` and their tags are configured via `api/settings.py` (`MORPH_API_NNUNET_IMAGE` / `MORPH_API_TORSION_IMAGE`), used by `api/tasks/`.
 
 - **`swestfechtel/nnunet_torsion:latest`** — built from `api/docker/nnunet_torsion/`. Runs nnUNetv2 predictions on hip/knee/ankle using the ResEncUNetXL plans (datasets 004, 006, 007) with a 5-fold ensemble. Requires CUDA (`--runtime=nvidia --gpus all`) and expects checkpoints under `api/docker/nnunet_torsion/checkpoints/{hip,knee,ankle}/` at build time. These checkpoints are gitignored; they must be present locally before `docker build`.
-- **`swestfechtel/torsion:latest`** — built from `morphometry/Dockerfile` with entrypoint `morphometry/docker/compute_torsion.py`. Pure-Python torsion computation from masks; no GPU. **It carries a copy of the library, so it must be rebuilt after every landmark / measurement change in `morphometry/`** — otherwise the API silently serves the numbers of whatever commit it was built from. Preserve the outgoing image as `swestfechtel/torsion:pre-<sha>` when rebuilding. **The recorded sha is not evidence of what an image contains — run it, or hash its `/app/morphometry` against HEAD.** Current: rebuilt at `2d1fc91` (2026-11-12), all 33 `.py` files identical to HEAD, pushed as `swestfechtel/torsion@sha256:bb619140abec79ceb9f22a5393884ea78105c18cf0014cf7fe2d4f7b6eabe9eb`. Base pinned to `python:3.10.16-bookworm` (the venv's interpreter; pinned by tag, not digest); deps from `morphometry/requirements.txt` installed `--no-deps` + `pip check`; system libs `libgl1 libxrender1` only (needed because importing the measurements pulls in `pyvista` → `vtk` → `libGL`; nothing renders). Discriminating fixtures: PA000001 and PA001127 (the latter has non-empty Murphy flags). Rebuild records and why the pins matter numerically: [`torsion_image_rebuilds.md`](docs/evidence/torsion_image_rebuilds.md).
+- **`swestfechtel/torsion:latest`** — built from `morphometry/Dockerfile` with entrypoint `morphometry/docker/compute_torsion.py`. Pure-Python torsion computation from masks; no GPU. **It carries a copy of the library, so it must be rebuilt after every landmark / measurement change in `morphometry/`** — otherwise the API silently serves the numbers of whatever commit it was built from. Preserve the outgoing image as `swestfechtel/torsion:pre-<sha>` when rebuilding. **The recorded sha is not evidence of what an image contains — run it, or hash its `/app/morphometry` against HEAD.** **Stale since 2026-11-16** (the NMDID group-A fixes touch `tibia.py` / `utils.py`, which `compute_torsion.py` imports; rebuild pending). Last: rebuilt at `2d1fc91` (2026-11-12), all 33 `.py` files identical to HEAD, pushed as `swestfechtel/torsion@sha256:bb619140abec79ceb9f22a5393884ea78105c18cf0014cf7fe2d4f7b6eabe9eb`. Base pinned to `python:3.10.16-bookworm` (the venv's interpreter; pinned by tag, not digest); deps from `morphometry/requirements.txt` installed `--no-deps` + `pip check`; system libs `libgl1 libxrender1` only (needed because importing the measurements pulls in `pyvista` → `vtk` → `libGL`; nothing renders). Discriminating fixtures: PA000001 and PA001127 (the latter has non-empty Murphy flags). Rebuild records and why the pins matter numerically: [`torsion_image_rebuilds.md`](docs/evidence/torsion_image_rebuilds.md).
 
 Rebuild commands (run from each Dockerfile's directory):
 

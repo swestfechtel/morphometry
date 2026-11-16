@@ -156,7 +156,11 @@ def find_notch(mask: np.ndarray, most_ventral: int = None, percentage: float = 0
     :param thresh: The threshold for the discontinuity.
     :param break_after_first: Whether to break after the first notch was found.
     :return: The notch (sagittal, coronal).
+    :raises ValueError: If ``mask`` is empty (formerly a raw ``IndexError``, which
+        ``compute_torsion.py`` does not catch).
     """
+    if not np.any(mask):
+        raise ValueError('find_notch: the section is empty')
     # most_ventral is the threshold for the most ventral (anterior) point where the notch can be
     if most_ventral is None:
         contour_points = get_contour_points(mask)
@@ -307,6 +311,8 @@ def get_layer_with_biggest_convex_area(mask: np.ndarray) -> int:
     Get the index of the layer with the biggest convex area.
     :param mask: A 3D segmentation mask.
     :return: The index of the layer with the biggest convex area.
+    :raises ValueError: If the mask is empty on every layer (formerly the last layer index was
+        returned, as argsort of all zeros, and the caller failed later on an empty section).
     """
     area = np.zeros(mask.shape[2])
     # save diameters of the layers
@@ -321,6 +327,9 @@ def get_layer_with_biggest_convex_area(mask: np.ndarray) -> int:
                 area[i] = props[i_biggest].convex_area
             else:
                 area[i] = props[0].convex_area
+
+    if not np.any(area > 0):
+        raise ValueError('get_layer_with_biggest_convex_area: the mask is empty on every layer')
 
     # find index of the layer with the biggest diameter
     indices = np.argsort(area)
@@ -362,8 +371,11 @@ def get_side_contour_points(mask: np.ndarray, c: int) -> Tuple[int, int]:
     :param mask: The 2D mask.
     :param c: The coronal coordinate.
     :return: The smallest and largest sagittal coordinate of the contour.
+    :raises ValueError: If the mask has no voxel at coronal coordinate ``c``.
     """
     nonzero_sagittal_coordinates = np.nonzero(mask[:, c])[0]  # returns a 1-tuple, so need to index 0 at the end
+    if nonzero_sagittal_coordinates.size == 0:
+        raise ValueError(f'get_side_contour_points: no mask voxel at coronal coordinate {c}')
     return nonzero_sagittal_coordinates.min(), nonzero_sagittal_coordinates.max()
 
 

@@ -910,6 +910,31 @@ def _lateral_acetabular_edge_point(acetabulum_mask: np.ndarray, fhc: np.ndarray,
     return edge
 
 
+def _center_edge_angle_or_nan(d_perp: np.ndarray, edge_vector: np.ndarray, side: str) -> float:
+    """Compose one side's centre-edge angle, refusing an edge that is not above the head centre.
+
+    The angle is the unsigned angle between the proximal perpendicular ``d_perp`` to the line through
+    both head centres and the head-centre-to-edge vector. ``calculate_angle_between_vectors`` is an
+    arccos, so an edge at or below that line -- an uncovered head (dislocation) or an edge search
+    that found the wrong bone -- read as 90 degrees or more instead of failing (NMDID dislocations
+    112453 R, 131186 R, 148766 R, 151561 L, 151687 L read CE 108-165 degrees). Such an edge has no
+    centre-edge angle in the measurement's own sense, so this side returns ``NaN`` (and logs a
+    warning) while the other side is still measured. The test is the sign of the dot product, not
+    a threshold: ``dot <= 0`` is exactly ``angle >= 90``.
+    :param d_perp: The proximal direction perpendicular to the inter-head-centre line (mm-scaled
+        on the hip-bone path, index units otherwise -- the same space as ``edge_vector``).
+    :param edge_vector: Head centre to lateral acetabular edge, in the same space as ``d_perp``.
+    :param side: Image side, used only in the warning.
+    :return: The centre-edge angle in degrees, in [0, 90), or ``np.nan`` if the edge is not above
+        the head centre.
+    """
+    if float(np.dot(d_perp, edge_vector)) <= 0.:
+        logger.warning('center-edge angle (%s image side): the lateral acetabular edge is not above '
+                       'the femoral head centre; returning NaN', side)
+        return np.nan
+    return calculate_angle_between_vectors(d_perp, edge_vector)
+
+
 def calculate_center_edge_angle(hip_image: Segmentation, femur_label: int = 1, acetabulum_label: int = 3, isotropic: bool = False, ct: bool = False, project: bool = False, plot: bool | plt.Axes = False, image_path: str = None, acetabulum_radius_factor: float = 0.) -> Tuple[float, float]:
     """
     Calculate the center edge angle for both sides from a segmentation mask.
@@ -925,7 +950,9 @@ def calculate_center_edge_angle(hip_image: Segmentation, femur_label: int = 1, a
     voxels within this multiple of the femoral head radius around the femoral head centre.
     Use it when ``acetabulum_label`` covers the whole hip bone (as in whole-leg CT label maps)
     rather than the acetabulum alone, otherwise the iliac wing is picked as the lateral edge.
-    :return: The center edge angle for both sides.
+    :return: The center edge angle for both sides. A side whose lateral edge is not above the
+        femoral head centre (an angle that would read 90 degrees or more) is ``np.nan`` since
+        2026-11-16; see :func:`_center_edge_angle_or_nan`.
     """
     # image-side halves; the right half's geometry is translated so its physical points are correct
     left_image, right_image = split_image_left_right(hip_image)
@@ -1003,13 +1030,13 @@ def calculate_center_edge_angle(hip_image: Segmentation, femur_label: int = 1, a
     lat_right = _lateral_acetabular_edge_point(right_acetabulum, right_fhc, r_r, 'right',
                                                project=project, upper_margin_factor=C.CEA_UPPER_MARGIN_FACTOR)
     s2_right = (lat_right - right_fhc) * scale
-    cea_right = calculate_angle_between_vectors(d_perp, s2_right)
+    cea_right = _center_edge_angle_or_nan(d_perp, s2_right, 'right')
 
     s_left = left_fhc + d_perp_index
     lat_left = _lateral_acetabular_edge_point(left_acetabulum, left_fhc, r_l, 'left',
                                               project=project, upper_margin_factor=C.CEA_UPPER_MARGIN_FACTOR)
     s2_left = (lat_left - left_fhc) * scale
-    cea_left = calculate_angle_between_vectors(d_perp, s2_left)
+    cea_left = _center_edge_angle_or_nan(d_perp, s2_left, 'left')
 
     if plot is not False:
         if image_path:

@@ -29,7 +29,7 @@ right half reflected, as all three consumers do -- the gate flags **1 femoral li
 
 ``PA000001``, the fixture every torsion golden is pinned on, is clean on all four of its lines, and
 ``PA000120`` -- whose tibia label is empty on both halves -- comes back as
-``tibial_condylar_landmark_failed:IndexError`` rather than raising.
+``tibial_condylar_landmark_failed:ValueError`` (``IndexError`` before 2026-11-16) rather than raising.
 
 **The reflection is not a formality, and it changes which legs are flagged.** A survey that searches
 a right half directly, without the reflection its measurements apply, reproduces the cohort
@@ -177,12 +177,14 @@ def test_an_empty_bone_label_is_a_failure_flag_not_an_exception():
     """PA000120's tibia label is empty on both halves, and the wrapper reports rather than raises.
 
     The Augsburg scripts call the wrapper outside any try block, so this is the property that keeps
-    one unusable label from costing the whole patient. The measurements that read this line do raise
-    (``IndexError`` out of ``utils.find_notch``), which is why the flag is worth having.
+    one unusable label from costing the whole patient. The measurements that read this line do raise,
+    which is why the flag is worth having: since 2026-11-16 a named ``ValueError`` out of
+    ``utils.get_layer_with_biggest_convex_area`` (formerly a raw ``IndexError`` out of
+    ``utils.find_notch``, on the last layer the empty mask's argsort returned -- NMDID review #12).
     """
     flags = _flags(_cohort_knee('PA000120'))
     assert flags[('left', 'tibia')] == flags[('right', 'tibia')] == \
-        'tibial_condylar_landmark_failed:IndexError'
+        'tibial_condylar_landmark_failed:ValueError'
     assert flags[('left', 'femur')] == flags[('right', 'femur')] == ''
 
 

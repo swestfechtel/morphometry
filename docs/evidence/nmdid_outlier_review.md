@@ -1,4 +1,52 @@
-# NMDID outlier review: code defects found (2026-11-13, open)
+# NMDID outlier review: code defects found (2026-11-13; group A fixed 2026-11-16)
+
+## Status (2026-11-16)
+
+The defects split into three groups by what a fix needs. **Group A — no new parameter — is fixed**
+on branch `fix/nmdid-outlier-defects-a`, pinned by `tests/unit/test_nmdid_outlier_defects.py`:
+
+| # | fix | where | who it moves |
+|---|---|---|---|
+| 1 | CT LT search takes the component that passed the 40–75 mm test; the smaller one only when both pass | `femur.py::_find_trochanter_minor(ct=True)` | CT femoral torsion + CT Murphy QC flags; **MRI unchanged** (`ct=False` keeps the legacy smaller-component rule) |
+| 2 (+ speck part of 3) | CT drops components under `C.MURPHY_TROCHANTER_MIN_COMPONENT_VOXELS` (10, the pre-existing isotropic literal, *not* chosen on the review) **before** the two-component test | same | same |
+| 8 | `split_ct_image` raises a named `ValueError` for an empty/inverted hip, knee or ankle crop | `image_io.py` | legs that used to die on a raw `IndexError` now fail by name; every non-empty crop unchanged |
+| 9 (part) | a tibia or fibula label absent from the distal reference layer raises `ValueError` (formerly a NaN centroid). **The largest-component centroid was tried and withdrawn** — see below | `tibia.py::get_distal_reference_line` | only legs whose fibula is missing on that layer |
+| 10 | `get_layer_with_largest_diameter` sized on `shape[2]`; an empty mask raises `ValueError` | `tibia.py` | only previously-crashing or empty inputs |
+| 11 | a CE side whose edge is not above the head centre (`dot(d_perp, edge) <= 0`, i.e. angle ≥ 90°) is `NaN` with a warning; the other side is still measured | `measurements/hip.py::_center_edge_angle_or_nan` | CE ≥ 90° rows (all modalities) become NaN; `process_nmdid.py`'s `center_edge_not_above_head` flag can no longer fire on new runs — the refused side is listed in that row's `failed` column instead |
+| 12 | `find_notch`, `get_layer_with_biggest_convex_area`, `get_side_contour_points` raise `ValueError` on empty input (formerly a raw `IndexError`, or for the convex-area helper the last layer index) | `utils.py` | exception type only; `compute_torsion.py` now writes NaN instead of aborting. Visible in one place: an empty bone label's condylar QC flag reads `<bone>_condylar_landmark_failed:ValueError` (was `:IndexError`, e.g. Augsburg `PA000120` tibia) — don't pool `qc_flags` strings across it |
+
+**Why #9's largest-component fix was withdrawn (2026-11-16).** It moved the CT golden
+`tibial_torsion_ct_left` 66.84° → 71.33°. On the fixture (case-105094) the legs **cross at the
+ankle**: on the left half's reference layer (absolute z 460) the tibia label has two pieces, 1171
+voxels of the left leg's own tibia (3-D component spanning x 108–269) and 3157 voxels of the *right*
+leg's (x 193–444); the fibula likewise, 158 own vs 722 other. The legacy centroid averages both legs;
+the largest component measures the other leg outright — one wrong value swapped for a more
+confidently wrong one. It would fix a small fragment (188320 L) and break every crossed leg where
+the intruder is bigger (151348, 175037 L, 145316 L belong to this class). The real fix needs this
+leg's **own** 3-D bone identity (e.g. the 3-D tibia component continuous with the knee crop's), and
+the layer choice (`get_layer_with_largest_diameter`) is driven by the intruder too. Still open. The
+golden fixture's left tibial torsion is therefore a two-leg mixture — **do not quote it as a
+reference value**.
+
+**#10 keeps the old array length where it was valid** (`max(shape[0], shape[2])`): `np.argsort`
+is not stable, so with tied maximum diameters the chosen layer depends on the array length (the
+navigator review measured ties resolving differently in ~half of random trials at a changed length).
+
+**A risk of #1 to check in the next NMDID run before quoting it** (navigator review, not proven):
+a slice holding the head disc (small, implausible) and a shaft + trochanter component (large,
+plausible) used to select the head, whose superior layer then tripped the 10 mm
+`MURPHY_NECK_BASE_MIN_HEAD_DISTANCE_MM` guard (a NaN). It now selects the large component, and its top
+becomes the Murphy level — a plausible-looking number where there used to be a failure. Review the
+legs whose femoral torsion went from NaN to a value.
+
+The MRI side of #1/#2 is **deliberately not changed**: the review's evidence is CT-only, and the
+same rule on Augsburg/NaKo would need its own blast-radius measurement.
+
+**Still open:** the rest of #9 (own-leg identity at the ankle, above), group B (needs a threshold chosen on held-out data, *not* on the 84 reviewed
+cases) — #4 the 40 mm lower bound, #6 a fixed-mm hip crop (and with it the rest of #3), #7 the
+knee crop end, #13/#14 `clean_leg`; and group C — #5, the femur-aligned frame for the Murphy search.
+The group-A fixes need a new NMDID run (not launched) and **do not pool** NMDID CT femoral torsion
+or CE rows across them (tibial torsion moves only where a leg used to fail).
 
 After the NMDID re-run at `6cec5b1` (`results/nmdid_6cec5b1/`, superseded by `nmdid_d0f233f`, same
 values), four subagents reviewed 84 outlier cases visually and re-ran their landmarks exactly as

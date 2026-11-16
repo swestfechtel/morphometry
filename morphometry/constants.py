@@ -155,6 +155,14 @@ FEMORAL_HEAD_CONSENSUS_MAX_ITERATIONS = 100
 #: or above 11 mm; 5 and 10 mm reject the same legs.
 MURPHY_NECK_BASE_MIN_HEAD_DISTANCE_MM = 10.0
 
+#: Smallest connected component (voxels, on one sagittal slice) that the lesser-trochanter search in
+#: ``femur.py::_find_trochanter_minor`` treats as bone. On the isotropic MRI path a slice holding a
+#: smaller component is skipped (the original literal 10, unchanged); on the whole-leg CT path
+#: (2026-11-16) such specks are dropped before the two-component test. **Not chosen on the NMDID
+#: outlier review** -- it is the pre-existing isotropic literal, reused; on 0.8 x 3.0 mm CT sagittal
+#: pixels it is ~24 mm^2. Changing it moves CT femoral torsion and the CT Murphy QC flags.
+MURPHY_TROCHANTER_MIN_COMPONENT_VOXELS = 10
+
 #: Angular tolerance, in degrees, that sets how short Murphy's head-to-base axis may become before
 #: the neck is flagged as ill-conditioned (``murphy_axis_short``, see
 #: :func:`morphometry.femur.murphy_neck_base_qc`). The torsion is the *direction* of that axis in

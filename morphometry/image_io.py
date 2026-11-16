@@ -558,6 +558,17 @@ def split_ct_image(segmentation: Segmentation, image: Image = None, femur_label:
     logging.debug("Hip slices: %s to %s, Knee slices: %s to %s, Ankle slices: %s to %s",
                   hip_start, hip_end, knee_start, knee_end, ankle_start, ankle_end)
 
+    # A crop whose end is not below its start is empty or inverted. It happens when a mislabelled
+    # bone (e.g. an arm labelled fibula) puts the fibula top above the patella top; every
+    # measurement on the knee would then fail later with a raw IndexError. Refuse it here, by
+    # name, as a ValueError (the exception every batch handler catches). No bound is moved:
+    # every crop that was non-empty before is unchanged.
+    for region, start, end in (('hip', hip_start, hip_end), ('knee', knee_start, knee_end),
+                               ('ankle', ankle_start, ankle_end)):
+        if end <= start:
+            raise ValueError(f'split_ct_image: the {region} crop is empty or inverted '
+                             f'(slices {start} to {end}); check the patella / fibula / femur labels')
+
     if image is not None:
         hip_image = Image(image.type)
         knee_image = Image(image.type)

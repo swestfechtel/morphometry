@@ -50,7 +50,7 @@ def test_nmdid_joins_the_murphy_flags_onto_the_segmentation_flags(monkeypatch):
     monkeypatch.setattr(nmdid, 'split_ct_image', lambda *a, **k: (None, [None, None, None]))
     # the measurements themselves are covered elsewhere; here they are stubbed out as NaN
     monkeypatch.setattr(nmdid, '_measure',
-                        lambda results, failures, key, fn: [results.__setitem__(k, np.nan)
+                        lambda results, failures, key, fn, nan_failures=None: [results.__setitem__(k, np.nan)
                                                             for k in ((key,) if isinstance(key, str) else key)])
     monkeypatch.setattr(nmdid, 'get_murphy_neck_qc_ct',
                         lambda leg, side, segmentation_label: 'murphy_axis_short:7.00'
@@ -86,7 +86,7 @@ def test_nmdid_appends_the_condylar_flags_after_the_murphy_ones(monkeypatch):
                         lambda seg: ({'left': leg, 'right': leg}, leg, {'left': '', 'right': 'tibia:2pieces'}))
     monkeypatch.setattr(nmdid, 'split_ct_image', lambda *a, **k: (None, [None, knee, None]))
     monkeypatch.setattr(nmdid, '_measure',
-                        lambda results, failures, key, fn: [results.__setitem__(k, np.nan)
+                        lambda results, failures, key, fn, nan_failures=None: [results.__setitem__(k, np.nan)
                                                             for k in ((key,) if isinstance(key, str) else key)])
     monkeypatch.setattr(nmdid, 'get_murphy_neck_qc_ct',
                         lambda leg, side, segmentation_label: 'murphy_axis_short:7.00' if side == 'left' else '')

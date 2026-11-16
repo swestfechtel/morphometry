@@ -521,12 +521,14 @@ def knee_condylar_line_qc(start_point: np.ndarray, end_point: np.ndarray,
 #: ``qc_flags`` cell does not carry two names for the same refusal.
 #:
 #: **Reachability, measured rather than assumed, because two of these codes read as though they
-#: covered more than they do.** An *empty* bone label does not reach either of the first two: the
-#: layer walk returns a layer regardless, and ``utils.find_notch`` then fails on the empty section
-#: with a bare ``IndexError`` whose message ("index 0 is out of bounds...") is too generic to match
-#: on, so it arrives as ``<bone>_condylar_landmark_failed:IndexError`` via the type-name fallback.
-#: That is the honest outcome and it is deliberately not given a named code by matching on an
-#: index-error message. ``condylar_section_empty`` therefore covers only the ``RuntimeError`` the
+#: covered more than they do.** An *empty* bone label does not reach either of the first two. Until
+#: 2026-11-16 the layer walk returned a layer regardless and ``utils.find_notch`` then failed on the
+#: empty section with a bare ``IndexError``, arriving as ``<bone>_condylar_landmark_failed:IndexError``;
+#: since the NMDID review fix #12 the layer walk (``utils.get_layer_with_biggest_convex_area``) raises
+#: a named ``ValueError`` on an empty mask, so it arrives as
+#: ``<bone>_condylar_landmark_failed:ValueError`` via the same type-name fallback. **Do not pool
+#: ``qc_flags`` strings across that change.** It is deliberately not given a named code by matching
+#: on an exception message. ``condylar_section_empty`` therefore covers only the ``RuntimeError`` the
 #: *tangent* search raises, which needs a section that passed the notch search first.
 #: ``obsolete_argument`` is unreachable from :func:`get_condylar_line_qc`, which never passes
 #: ``thresh`` or ``step_size``; it is here so that a future caller which does gets a named flag

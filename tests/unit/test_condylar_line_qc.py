@@ -342,10 +342,10 @@ def test_the_wrapper_never_raises_on_an_empty_label(kwargs, expected):
 
     The Augsburg scripts call this outside any ``try`` block, so an escaping exception would cost
     the caller the whole patient. An empty label is reported as
-    ``<bone>_condylar_landmark_failed:IndexError``: the layer walk returns a layer regardless and
-    ``utils.find_notch`` then fails on the empty section with a message too generic to match on, so
-    the type-name fallback names it. Deliberately not given a prettier code by matching on an index
-    error's message.
+    ``<bone>_condylar_landmark_failed:ValueError``: the layer walk refuses the empty mask (since
+    2026-11-16; formerly it returned a layer regardless and ``utils.find_notch`` then raised a bare
+    ``IndexError``), and the type-name fallback names it. Deliberately not given a prettier code by
+    matching on an exception message.
     """
     flags = get_condylar_line_qc(np.zeros((40, 40, 3), dtype=np.uint8), **kwargs)
     assert flags.startswith(expected)

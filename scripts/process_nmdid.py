@@ -88,13 +88,18 @@ MEASUREMENT_ERRORS = (RuntimeError, AssertionError, ValueError, IndexError, Type
 log = logging.getLogger('process_nmdid')
 
 
-def _measure(results: dict, failures: list, key: str, fn):
+def _measure(results: dict, failures: list, key: str, fn, nan_failures: list = None):
     """Run one measurement, storing NaN and recording the failure if it raises.
 
     :param results: The per-side result dict to write into.
     :param failures: A list collecting the names of the measurements that failed.
     :param key: Result key; a tuple of keys when the measurement returns several values.
     :param fn: A zero-argument callable performing the measurement.
+    :param nan_failures: If given, a list collecting the keys for which the measurement *returned*
+        NaN (kept apart from ``failures`` so the caller can attribute them per side). Used for the
+        centre-edge angle, which since 2026-11-16 returns NaN for one side (rather than raising and
+        losing both) when that side's edge is not above the head centre; without it the refused side
+        would read status ``ok`` with no flag.
     :return: None.
     """
     keys = (key,) if isinstance(key, str) else key
@@ -110,6 +115,8 @@ def _measure(results: dict, failures: list, key: str, fn):
     values = (value,) if len(keys) == 1 else value
     for k, v in zip(keys, values):
         results[k] = float(v)
+        if nan_failures is not None and not np.isfinite(results[k]):
+            nan_failures.append(k)
 
 
 def load_case(path: Path) -> Segmentation:
@@ -369,7 +376,10 @@ def plausibility_flags(leg: Segmentation, side: str, row: dict) -> str:
     * ``center_edge_not_above_head:<deg>`` -- a CE angle of 90 degrees or more, i.e. the lateral
       acetabular edge point found is not above the femoral head centre. That is geometry, not a
       threshold: the head is uncovered (dislocated) or the edge point is not a roof. The CE angle
-      is unsigned, so a value above 90 is not a large coverage either.
+      is unsigned, so a value above 90 is not a large coverage either. **Since 2026-11-16 the
+      measurement itself refuses such a side** (``calculate_center_edge_angle`` returns NaN for
+      it), so this flag cannot fire on new runs; it is kept for reading older tables. The refused
+      side is listed as ``center_edge_angle_<side>`` in that row's ``failed`` column instead.
     * ``femur_tilt:<deg>`` / ``tibia_tilt:<deg>`` -- the bone's long axis (``bone_tilt_deg``) is
       tilted from the scanner z-axis by more than ``TILT_THRESHOLD_DEG``, beyond which an axial
       reference line can be off by more than ``TILT_ANGLE_TOLERANCE_DEG``: the torsion that bone
@@ -492,10 +502,12 @@ def measure_case(path: Path) -> list:
     # centres, so these are computed once on the whole mask and split per side.
     both = {}
     both_failures = []
+    refused = []  # both-sides keys returned as NaN for one side only (attributed per side below)
     _measure(both, both_failures, ('center_edge_angle_left', 'center_edge_angle_right'),
              lambda: calculate_center_edge_angle(seg, femur_label=FEMUR_LABEL, acetabulum_label=PELVIS_LABEL,
                                                  ct=True, project=True,
-                                                 acetabulum_radius_factor=ACETABULUM_RADIUS_FACTOR))
+                                                 acetabulum_radius_factor=ACETABULUM_RADIUS_FACTOR),
+             nan_failures=refused)
     _measure(both, both_failures, ('acetabular_version_left', 'acetabular_version_right'),
              lambda: calculate_acetabular_anteversion(seg, femur_label=FEMUR_LABEL, acetabulum_label=PELVIS_LABEL,
                                                       ct=True,
@@ -505,7 +517,8 @@ def measure_case(path: Path) -> list:
     for side in ('left', 'right'):
         leg = legs[side]
         row = {'case': case, 'side': side}
-        failures = list(both_failures)
+        # a raised both-sides measurement fails both rows (pre-existing); a one-side NaN only its own
+        failures = list(both_failures) + [k for k in refused if k.endswith(f'_{side}')]
 
         # The hip / knee / ankle crops are shared by every measurement below that
         # needs them; splitting is expensive, so it is done once per leg.

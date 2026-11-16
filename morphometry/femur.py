@@ -738,17 +738,35 @@ def get_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, segm
 
 
 def _find_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1,
-                           isotropic: bool = False) -> Tuple[np.ndarray, int]:
+                           isotropic: bool = False, ct: bool = False) -> Tuple[np.ndarray, int]:
     """
     Find the trochanter minor and the axial slice of its superior extent.
 
     The trochanter minor is the smaller component of the first sagittal slice, scanning from medial to
     lateral, that splits the femur into two components one of which lies 40-75 mm from the femoral
     head centre in the medial-lateral / superior-inferior plane.
+
+    On whole-leg CT (``ct=True``, since 2026-11-16) two defects found in the NMDID outlier review are
+    repaired; the MRI paths (``ct=False``) are unchanged bit for bit:
+
+    * **Specks are dropped before counting.** Components under
+      ``C.MURPHY_TROCHANTER_MIN_COMPONENT_VOXELS`` voxels are discarded from each sagittal slice
+      before the two-component test, so a 1-voxel speck neither counts as the second component nor
+      turns a head + trochanter slice into three components. (The isotropic MRI path instead *skips*
+      a slice holding a speck; the CT path used to have no guard at all.)
+    * **The plausible component is taken**, not the smaller one: the component whose centroid passed
+      the 40-75 mm test is the trochanter. Only when both pass does the smaller one win, as before.
+      Formerly the smaller component was taken even when only the larger was plausible, which on
+      9 of 10 traced NMDID legs made the "trochanter" a speck 15-24 mm from the head.
+
+    No threshold is new: the speck size is the isotropic path's existing literal, the distance band
+    is untouched (its lower bound is a separate, still-open defect).
     :param hip_image: An Image object of the hip segmentation mask.
     :param femoral_head_centre: The centre of the femoral head (voxel index).
     :param segmentation_label: The label of the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
+    :param ct: Whether the mask is a whole-leg CT crop (enables the speck filter and the
+        plausible-component selection described above).
     :return: The point returned by :func:`get_trochanter_minor`, and the most superior axial slice
         (smallest index; LPI) holding that sagittal component.
     """
@@ -779,12 +797,17 @@ def _find_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, se
     two_components_found = False
     candidate_1, candidate_2 = False, False
     components_large_enough = False
+    min_voxels = C.MURPHY_TROCHANTER_MIN_COMPONENT_VOXELS
     for layer in range(start, stop, step):
         connected_components = extract_connected_components_2d(hip_mask[layer])
+        if ct:
+            # drop specks before counting, so they can neither be the second component nor make a
+            # head + trochanter slice read as three components
+            connected_components = [c for c in connected_components if np.count_nonzero(c) >= min_voxels]
         if len(connected_components) == 2:
             two_components_found = True
 
-            if isotropic and (np.count_nonzero(connected_components[0]) < 10 or np.count_nonzero(connected_components[1]) < 10):
+            if isotropic and (np.count_nonzero(connected_components[0]) < min_voxels or np.count_nonzero(connected_components[1]) < min_voxels):
                 continue
 
             components_large_enough = True
@@ -812,7 +835,12 @@ def _find_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, se
         else:
             raise RuntimeError('Could not find a plausible trochanter minor.')
 
-    smaller_component = min(connected_components, key=lambda x: np.count_nonzero(x))
+    if ct and (candidate_1 is True) != (candidate_2 is True):
+        # exactly one component is plausible: that one is the trochanter, whatever its size
+        smaller_component = connected_components[0] if candidate_1 is True else connected_components[1]
+    else:
+        # legacy rule (all MRI paths; on CT only when both are plausible): the smaller component
+        smaller_component = min(connected_components, key=lambda x: np.count_nonzero(x))
 
     start = layer
     most_distal_segmented_point_global = np.max(np.argwhere(hip_mask == segmentation_label)[:, 2])
@@ -845,7 +873,8 @@ def _find_trochanter_minor(hip_image: Image, femoral_head_centre: np.ndarray, se
     superior_layer = int(np.min(np.nonzero(smaller_component)[1]))  # sagittal slices are (y, z)
     return np.array([axial_layer_com[0], axial_layer_com[1], axial_layer]), superior_layer
 
-def get_femoral_neck_base(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1, isotropic: bool = False) -> np.ndarray:
+def get_femoral_neck_base(hip_image: Image, femoral_head_centre: np.ndarray, segmentation_label: int = 1, isotropic: bool = False,
+                          ct: bool = False) -> np.ndarray:
     """
     Get the centre of the base of the femoral neck as described by Murphy et al.
 
@@ -874,13 +903,15 @@ def get_femoral_neck_base(hip_image: Image, femoral_head_centre: np.ndarray, seg
     :param femoral_head_centre: The centre of the femoral head (voxel index).
     :param segmentation_label: The label of the segmentation mask.
     :param isotropic: Whether the image has isotropic voxels.
+    :param ct: Whether the mask is a whole-leg CT crop; passed to :func:`_find_trochanter_minor`
+        (speck filter, plausible-component selection). Only :func:`_ct_proximal_landmarks` sets it.
     :return: The centre of the base of the femoral neck, ``(x, y, layer)`` with ``x`` and ``y`` continuous.
     :raises RuntimeError: If the level is less than ``C.MURPHY_NECK_BASE_MIN_HEAD_DISTANCE_MM`` below the
         head centre (a mis-detected trochanter), holds no femur, or lies less than one in-plane voxel
         from the head centre in the axial plane (no in-plane direction is resolved).
     """
     _, superior_layer = _find_trochanter_minor(hip_image=hip_image, femoral_head_centre=femoral_head_centre,
-                                               segmentation_label=segmentation_label, isotropic=isotropic)
+                                               segmentation_label=segmentation_label, isotropic=isotropic, ct=ct)
     slice_mm = abs(float(hip_image.spacing[2]))
     level = superior_layer - 1
     if (level - femoral_head_centre[2]) * slice_mm < C.MURPHY_NECK_BASE_MIN_HEAD_DISTANCE_MM:
@@ -1494,7 +1525,7 @@ def _ct_proximal_landmarks(femur_image: Segmentation, segmentation_label: int = 
     mask[:, :, hip_end:] = 0
 
     hip_image = Segmentation.from_nibabel(nib.Nifti1Image(mask, femur_image.affine, femur_image.header))
-    return hip_image, fhc, float(r_fh), get_femoral_neck_base(hip_image, fhc, segmentation_label, False)
+    return hip_image, fhc, float(r_fh), get_femoral_neck_base(hip_image, fhc, segmentation_label, False, ct=True)
 
 
 def get_proximal_reference_line_ct(femur_image: Segmentation, side: str = 'left', segmentation_label: int = 1) -> Tuple[np.ndarray, np.ndarray]:

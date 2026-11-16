@@ -241,9 +241,10 @@ if __name__ == '__main__':
     #
     # Keys are the PATIENT side, like every other key here, so the image-left half carries the
     # '_right' name. get_condylar_line_qc never raises (a failed search is reported as a flag,
-    # including the bare IndexError get_knee_reference_line throws on an empty bone label, which
-    # is NOT in this module's (RuntimeError, AssertionError, ValueError) handler tuple), which is
-    # why these calls can sit outside the try blocks without risking the whole container.
+    # including an empty bone label -- formerly a bare IndexError out of get_knee_reference_line,
+    # which is NOT in this module's (RuntimeError, AssertionError, ValueError) handler tuple; since
+    # 2026-11-16 a named ValueError), which is why these calls can sit outside the try blocks
+    # without risking the whole container.
     #
     # As with the Murphy and Lee flags: NOTHING IN THE API READS THESE KEYS (ResultsModel has
     # extra="ignore" and api/tasks/torsion.py persists only model_dump()), so on the API path they
