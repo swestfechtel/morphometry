@@ -18,7 +18,7 @@ patient side.
 from typing import Literal, Optional, Sequence, Tuple
 
 import numpy as np
-from scipy.ndimage import center_of_mass
+from scipy.ndimage import center_of_mass, label as label_3d
 
 from morphometry import constants as C
 
@@ -229,6 +229,53 @@ def split_left_right(array: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     half = array.shape[0] // 2
     return array[:half], array[half:]
+
+
+def remove_other_halfs_bones(array: np.ndarray, labels: Sequence[int]) -> np.ndarray:
+    """Remove from each image half the voxels of bones that belong to the other half.
+
+    Whole-body CT puts both legs in one volume, split at ``array.shape[0] // 2``. When the legs
+    cross -- typically at the ankle in post-mortem scans -- one leg's tibia or fibula reaches into the
+    other leg's half, and every landmark search on that half then reads a mixture of two legs (the
+    NMDID review's defect #9: on case-105094 image-left the right leg's tibia has 45553 voxels and
+    its fibula 33% of its voxels in the left half, and the left tibial torsion averages both legs).
+    A 2-D rule on the reference slice cannot fix it -- there the intruder is the *larger* piece -- so
+    identity is decided here, in 3-D, on the whole volume:
+
+    * each 3-D connected component (6-connected, scipy's default) of each label in ``labels`` is
+      assigned to the half holding the **majority** of its voxels;
+    * in the other (minority) half its voxels are set to 0 -- **unless** the component is the largest
+      component of that label within that half. That guard is what keeps two bones that touch, and
+      so form a single component, from deleting one leg's whole bone: each half then keeps its share,
+      exactly as before. An exact tie removes nothing.
+
+    No threshold is involved. A component lying wholly in one half is untouched, so legs that do
+    not cross are bit-identical. Voxels are only removed, never moved, so the minority-half part of
+    a crossing bone is not added to its own half (that half already lacked it).
+    :param array: The whole-volume label array (both legs), first axis medial-lateral.
+    :param labels: The label values to process (e.g. tibia and fibula).
+    :return: A copy of ``array`` with the other half's bone voxels removed from each half.
+    """
+    out = array.copy()
+    half = array.shape[0] // 2
+    for value in labels:
+        components, n = label_3d(array == value)
+        if n < 2:
+            continue  # a single component cannot belong to the other leg
+        ids = np.arange(n + 1)
+        left = np.bincount(components[:half].ravel(), minlength=n + 1)
+        right = np.bincount(components[half:].ravel(), minlength=n + 1)
+        left[0] = right[0] = 0  # background
+        # never strip a half's largest component of this label (two touching bones = one component)
+        largest_left = int(np.argmax(left)) if left.any() else -1
+        largest_right = int(np.argmax(right)) if right.any() else -1
+        strip_from_left = ids[(right > left) & (left > 0) & (ids != largest_left)]
+        strip_from_right = ids[(left > right) & (right > 0) & (ids != largest_right)]
+        if strip_from_left.size:
+            out[:half][np.isin(components[:half], strip_from_left)] = 0
+        if strip_from_right.size:
+            out[half:][np.isin(components[half:], strip_from_right)] = 0
+    return out
 
 
 def rotate_indices(points: np.ndarray, origin: np.ndarray, angle: float) -> np.ndarray:

@@ -15,10 +15,12 @@ from a straight axis; the clinical hip-knee-ankle angle is 180 minus this value.
 
 Skipped unless the CT sample is available (set ``MORPH_CT_SAMPLE`` to override).
 """
+import nibabel as nib
 import pytest
 
 from morphometry import hip as Hg
-from morphometry.image_io import split_ct_image
+from morphometry.geometry import remove_other_halfs_bones
+from morphometry.image_io import Segmentation, split_ct_image
 from morphometry.measurements import hip as MH
 from morphometry.measurements import whole_leg as W
 from morphometry.measurements.femur import calculate_femoral_torsion_ct
@@ -98,6 +100,21 @@ def _ct_tibial_torsion(leg, side: str) -> float:
 def test_tibial_torsion_ct_left(ct_left):
     """Pin the CT tibial torsion of the image-left half (no golden covered CT tibial torsion)."""
     assert_golden("tibial_torsion_ct_left", _ct_tibial_torsion(ct_left, "left"))
+
+
+def test_tibial_torsion_ct_left_own_bones(ct_whole_leg):
+    """Pin the CT tibial torsion of the image-left half after ``remove_other_halfs_bones``.
+
+    This fixture's legs cross at the ankle: the right leg's tibia (45553 voxels) and fibula (33%
+    of it) reach into the left half, so ``tibial_torsion_ct_left`` above is a two-leg mixture and
+    stays pinned only as a regression anchor of the bare library path. This is the value of the
+    left leg's own bones, as ``scripts/process_nmdid.py::split_legs`` now prepares them (NMDID
+    review defect #9).
+    """
+    own = remove_other_halfs_bones(ct_whole_leg.array, (2, 3))
+    whole = Segmentation.from_nibabel(nib.Nifti1Image(own, ct_whole_leg.affine, ct_whole_leg.header))
+    left, _ = split_left_right(whole)
+    assert_golden("tibial_torsion_ct_left_own_bones", _ct_tibial_torsion(left, "left"))
 
 
 def test_tibial_torsion_ct_right(ct_right):

@@ -1,4 +1,4 @@
-# NMDID outlier review: code defects found (2026-11-13; group A fixed 2026-11-16)
+# NMDID outlier review: code defects found (2026-11-13; group A and #9 fixed 2026-11-16)
 
 ## Status (2026-11-16)
 
@@ -10,7 +10,7 @@ on branch `fix/nmdid-outlier-defects-a`, pinned by `tests/unit/test_nmdid_outlie
 | 1 | CT LT search takes the component that passed the 40–75 mm test; the smaller one only when both pass | `femur.py::_find_trochanter_minor(ct=True)` | CT femoral torsion + CT Murphy QC flags; **MRI unchanged** (`ct=False` keeps the legacy smaller-component rule) |
 | 2 (+ speck part of 3) | CT drops components under `C.MURPHY_TROCHANTER_MIN_COMPONENT_VOXELS` (10, the pre-existing isotropic literal, *not* chosen on the review) **before** the two-component test | same | same |
 | 8 | `split_ct_image` raises a named `ValueError` for an empty/inverted hip, knee or ankle crop | `image_io.py` | legs that used to die on a raw `IndexError` now fail by name; every non-empty crop unchanged |
-| 9 (part) | a tibia or fibula label absent from the distal reference layer raises `ValueError` (formerly a NaN centroid). **The largest-component centroid was tried and withdrawn** — see below | `tibia.py::get_distal_reference_line` | only legs whose fibula is missing on that layer |
+| 9 | crossing legs: tibia/fibula components are assigned to the half holding most of them before the split (`geometry.remove_other_halfs_bones`, in `process_nmdid.py::split_legs`); a label absent from the distal reference layer raises `ValueError`. The 2-D largest-component rule was tried and withdrawn — see below | `geometry.py`, `scripts/process_nmdid.py`, `tibia.py` | NMDID tibial torsion of every leg with bone across the split (31% of a random sample); MHA/HKA/tibia length may move |
 | 10 | `get_layer_with_largest_diameter` sized on `shape[2]`; an empty mask raises `ValueError` | `tibia.py` | only previously-crashing or empty inputs |
 | 11 | a CE side whose edge is not above the head centre (`dot(d_perp, edge) <= 0`, i.e. angle ≥ 90°) is `NaN` with a warning; the other side is still measured | `measurements/hip.py::_center_edge_angle_or_nan` | CE ≥ 90° rows (all modalities) become NaN; `process_nmdid.py`'s `center_edge_not_above_head` flag can no longer fire on new runs — the refused side is listed in that row's `failed` column instead |
 | 12 | `find_notch`, `get_layer_with_biggest_convex_area`, `get_side_contour_points` raise `ValueError` on empty input (formerly a raw `IndexError`, or for the convex-area helper the last layer index) | `utils.py` | exception type only; `compute_torsion.py` now writes NaN instead of aborting. Visible in one place: an empty bone label's condylar QC flag reads `<bone>_condylar_landmark_failed:ValueError` (was `:IndexError`, e.g. Augsburg `PA000120` tibia) — don't pool `qc_flags` strings across it |
@@ -23,10 +23,48 @@ leg's (x 193–444); the fibula likewise, 158 own vs 722 other. The legacy centr
 the largest component measures the other leg outright — one wrong value swapped for a more
 confidently wrong one. It would fix a small fragment (188320 L) and break every crossed leg where
 the intruder is bigger (151348, 175037 L, 145316 L belong to this class). The real fix needs this
-leg's **own** 3-D bone identity (e.g. the 3-D tibia component continuous with the knee crop's), and
-the layer choice (`get_layer_with_largest_diameter`) is driven by the intruder too. Still open. The
-golden fixture's left tibial torsion is therefore a two-leg mixture — **do not quote it as a
-reference value**.
+leg's **own** 3-D bone identity, and the layer choice (`get_layer_with_largest_diameter`) is driven
+by the intruder too. The golden fixture's bare-library `tibial_torsion_ct_left` is therefore a
+two-leg mixture — **do not quote it as a reference value**.
+
+**#9 fixed by 3-D identity (2026-11-16, same day).** `geometry.remove_other_halfs_bones`, called by
+`process_nmdid.py::split_legs` *before* the split, assigns every 3-D (6-connected) tibia and fibula
+component of the whole volume to the half holding the majority of its voxels and removes it from the
+other half — except a half's own largest component of that label, so two bones in contact (one
+component) are left as before. No threshold; legs that do not cross are bit-identical. The library's
+`get_distal_reference_line` is unchanged (it averages every voxel of the label again); the fix is in
+what the half contains. Femur and other labels are not processed (not measured).
+
+Probe through the production path (`load_case` + `split_legs` + `split_ct_image` +
+`calculate_tibial_torsion`, with and without the step), voxels removed from the left/right half:
+
+| case | removed L / R | left leg | right leg |
+|---|---|---|---|
+| 105094 (golden fixture) | 58031 / 3715 | 65.58 → **47.92** | 44.77 (same) |
+| 188320 | 1031 / 0 | −79.13 → **38.07** | −74.42 (same) |
+| 151348 | 0 / 50998 | ValueError (same) | 88.19 → **30.15** |
+| 175037 | 21002 / 0 | 88.37 → **23.97** | ValueError (same) |
+| 145316 | 18294 / 11493 | 70.34 → 63.66 | ValueError (same) |
+| 106371 | 29041 / 0 | −84.85 → 69.77 | 71.77 (same) |
+| 189047, 164164, 138142 | 0 / 0 | bit-identical | bit-identical |
+
+On **16 random control cases** (usable, not reviewed, not in the annotation sets, not named in the
+repo; seed 99): **11 have nothing removed and are bit-identical on both legs**; 5 have voxels removed,
+all on one side: 143237 R (77062 voxels; ValueError before and after), 182153 R (11620; ValueError
+both), 146537 R (376; 22.87 → 24.19), **189052 R (10799; 45.33 → 66.68)** and **118355 R (3363;
+72.94 → 87.81)**. The last two look *worse* and were checked: in both, the removed voxels are a sliver
+of the **left** leg's tibia crossing the midline (189052: x 256–278, the right tibia at x 365–474,
+~66 mm away; 118355: x 256–271 vs 310–380) — they cannot be the right leg's bone. So the new values
+are the right legs' own bones read for the first time, and what is extreme about them is some other
+defect (#7's knee crop is the leading suspect, unverified). **Not quoted as validation:** this shows
+the step removes only other legs' bone; it does not show the own-leg values are right.
+
+**Blast radius:** 5 of 16 random controls (31%) have tibia/fibula voxels across the split — consistent
+with `tibia:at_split` firing on 10% of clean legs — so this moves a large share of NMDID tibial
+torsions. **Do not pool NMDID tibial torsion rows across this change.** The mechanical-axis deviation
+and HKA angle (which read tibia/fibula through the same halves) can move too; the tibia length can.
+New CT golden `tibial_torsion_ct_left_own_bones` = 48.03 pins the fixture's own-leg value;
+`tibial_torsion_ct_left` (66.84, bare library path) is kept as the mixture's regression anchor.
 
 **#10 keeps the old array length where it was valid** (`max(shape[0], shape[2])`): `np.argsort`
 is not stable, so with tied maximum diameters the chosen layer depends on the array length (the
@@ -47,11 +85,11 @@ set A (choose) and set B (quote), excluding the 84 reviewed cases, are being ann
 with five points per leg (three on the lesser trochanter, two on the posterior tibial plateau). The
 draw, protocol and Slicer helper are in [`nmdid_annotation/`](nmdid_annotation/README.md).
 
-**Still open:** the rest of #9 (own-leg identity at the ankle, above), group B (needs a threshold chosen on held-out data, *not* on the 84 reviewed
+**Still open:** group B (needs a threshold chosen on held-out data, *not* on the 84 reviewed
 cases) — #4 the 40 mm lower bound, #6 a fixed-mm hip crop (and with it the rest of #3), #7 the
 knee crop end, #13/#14 `clean_leg`; and group C — #5, the femur-aligned frame for the Murphy search.
 The group-A fixes need a new NMDID run (not launched) and **do not pool** NMDID CT femoral torsion
-or CE rows across them (tibial torsion moves only where a leg used to fail).
+or CE rows across them, nor tibial torsion rows across the #9 fix.
 
 After the NMDID re-run at `6cec5b1` (`results/nmdid_6cec5b1/`, superseded by `nmdid_d0f233f`, same
 values), four subagents reviewed 84 outlier cases visually and re-ran their landmarks exactly as

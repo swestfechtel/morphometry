@@ -231,3 +231,51 @@ def test_measure_without_nan_failures_is_unchanged():
     results, failures = {}, []
     nmdid._measure(results, failures, 'x', lambda: np.nan)
     assert np.isnan(results['x']) and failures == []
+
+
+# --------------------------------------------------------------------------------------------
+# #9: bones crossing the split line are assigned to the half holding most of them
+# --------------------------------------------------------------------------------------------
+
+from morphometry.geometry import remove_other_halfs_bones  # noqa: E402
+
+
+def _two_legs() -> np.ndarray:
+    """Two tibiae (label 2) in a 20-wide volume split at x = 10; the right one crosses into the left.
+
+    :return: The label array.
+    """
+    array = np.zeros((20, 10, 30), dtype=np.uint8)
+    array[2:6, 2:6, :] = 2              # left leg's tibia, wholly in the left half
+    array[12:16, 2:6, :] = 2            # right leg's tibia, in the right half ...
+    array[7:12, 2:6, 20:24] = 2         # ... crossing into the left half at the "ankle"
+    return array
+
+
+def test_a_crossing_bone_is_removed_from_the_minority_half():
+    """The right tibia's voxels left of the split are removed; nothing else changes."""
+    array = _two_legs()
+    out = remove_other_halfs_bones(array, (2,))
+    assert not out[7:10, 2:6, 20:24].any()                       # intruder gone from the left half
+    np.testing.assert_array_equal(out[10:], array[10:])          # right half untouched
+    np.testing.assert_array_equal(out[2:6], array[2:6])          # own tibia untouched
+
+
+def test_legs_that_do_not_cross_are_bit_identical():
+    """Components lying wholly in one half are never touched."""
+    array = _two_legs()
+    array[7:10] = 0
+    np.testing.assert_array_equal(remove_other_halfs_bones(array, (2,)), array)
+
+
+def test_touching_bones_forming_one_component_are_left_alone():
+    """Two tibiae in contact are one component; the guard keeps each half's share (no leg loses its bone)."""
+    array = _two_legs()
+    array[5:12, 2:6, 20:24] = 2   # bridge the left tibia to the crossing part: one component
+    np.testing.assert_array_equal(remove_other_halfs_bones(array, (2,)), array)
+
+
+def test_labels_not_listed_are_untouched():
+    """Only the listed labels are processed."""
+    array = _two_legs()
+    np.testing.assert_array_equal(remove_other_halfs_bones(array, (3,)), array)

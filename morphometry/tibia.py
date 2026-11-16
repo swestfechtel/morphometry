@@ -60,7 +60,9 @@ def _label_centroid(mask_2d: np.ndarray, name: str) -> Tuple[float, float]:
     piece -- on the CT golden fixture case-105094 image-left both the larger tibia (3157 vs 1171
     voxels) and the larger fibula (722 vs 158) on the reference layer are the right leg's, so the
     tibial torsion moved 66.84 -> 71.33 degrees, from one wrong leg mixture to the wrong leg. The
-    fix needs this leg's own 3-D bone identity (see ``docs/evidence/nmdid_outlier_review.md``).
+    fix is 3-D identity on the whole volume, before the split
+    (:func:`morphometry.geometry.remove_other_halfs_bones`, applied by ``scripts/process_nmdid.py``);
+    callers that split a whole-body volume themselves should do the same.
     :param mask_2d: A 2D binary mask (one axial layer of one label).
     :param name: The bone's name, used in the error message.
     :return: The (sagittal, coronal) centre of mass, in index units.
@@ -78,7 +80,7 @@ def get_distal_reference_line(segmentation_mask: np.ndarray, tibia_label: int, f
     Finds the layer with the biggest diameter of the tibia and calculates the center of mass of the tibia and fibula
     on that layer. The reference line connects both center of mass points. Each centre of mass
     averages every voxel of the label on the layer, so fragments of another leg -- or a whole
-    crossed leg -- drag it (an open defect, see :func:`_label_centroid`); a label absent from the
+    crossed leg -- drag it unless the caller removed them first (see :func:`_label_centroid`); a label absent from the
     layer raises ``ValueError`` (since 2026-11-16; formerly a NaN centroid).
     :param segmentation_mask: A 3D segmentation mask of the tibia and fibula.
     :param tibia_label: The segmentation label of the tibia.

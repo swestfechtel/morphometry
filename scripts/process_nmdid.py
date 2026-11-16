@@ -47,6 +47,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from morphometry.femur import get_murphy_neck_qc_ct
 from morphometry.hip import get_femoral_head_center_ct
 from morphometry.knee import get_condylar_line_qc
+from morphometry.geometry import remove_other_halfs_bones
 from morphometry.image_io import Segmentation, split_ct_image, split_image_left_right
 from morphometry.measurements.femur import calculate_femoral_torsion_ct
 from morphometry.measurements.hip import (calculate_acetabular_anteversion, calculate_ccd_ct,
@@ -461,17 +462,28 @@ def condylar_qc(knee: Segmentation, side: str) -> str:
     return ';'.join(f for f in flags if f)
 
 
+#: Labels whose crossing bones are assigned to the half holding most of them before the split
+#: (``geometry.remove_other_halfs_bones``, NMDID review defect #9). Tibia and fibula only: that is
+#: where the legs cross (the ankle). The femur is deliberately left out until measured on its own.
+OWN_BONE_LABELS = (TIBIA_LABEL, FIBULA_LABEL)
+
+
 def split_legs(seg: Segmentation) -> tuple:
     """Split a both-legs mask into cleaned left / right image halves and their union.
 
     The mask is split at ``array.shape[0] // 2`` (the package-wide convention; verified
-    on this cohort to fall in the gap between the two legs), each half is cleaned by
-    ``clean_leg``, and the halves are re-joined so the both-sides hip measurements see
-    the same voxels as the per-leg ones.
+    on this cohort to fall in the gap between the two legs, except where the legs cross).
+    Before the split, every 3-D tibia / fibula component is assigned to the half holding most of
+    its voxels and removed from the other (``geometry.remove_other_halfs_bones``, since
+    2026-11-16), so a leg crossing at the ankle no longer lends its bones to the other leg's
+    tibial torsion. Each half is then cleaned by ``clean_leg``, and the halves are re-joined so
+    the both-sides hip measurements see the same voxels as the per-leg ones.
     :param seg: The prepared whole-body segmentation.
     :return: ``(halves, whole, flags)`` -- per-side Segmentations, the re-joined
     Segmentation, and the per-side QC flag strings.
     """
+    own = remove_other_halfs_bones(seg.array, OWN_BONE_LABELS)
+    seg = Segmentation.from_nibabel(nib.Nifti1Image(own, seg.affine, seg.header))
     # split with per-half geometry: the right half's index 0 is the whole mask's index ``half``
     raw = dict(zip(('left', 'right'), split_image_left_right(seg)))
     arrays = {side: clean_leg(half.array) for side, half in raw.items()}

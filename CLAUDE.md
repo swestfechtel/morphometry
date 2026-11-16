@@ -69,15 +69,18 @@ item 4 is partly fixed, the rest is open work:
    adding the day a cohort arrives that is not uniformly one raw orientation, and the spacing survey
    is the thing to re-run then. Evidence: [`in_plane_spacing.md`](docs/evidence/in_plane_spacing.md).
 4. **The NMDID outlier-review code defects (found 2026-11-13; parameter-free group fixed 2026-11-16).**
-   Fixed (#1, #2, #8, #10–#12, part of #9): the CT lesser-trochanter search takes the *plausible*
-   component and drops specks under `C.MURPHY_TROCHANTER_MIN_COMPONENT_VOXELS` before counting
-   (`ct=True` only — MRI unchanged); `split_ct_image` refuses an empty/inverted crop; an absent ankle
-   label raises; `tibia.py`'s layer search no longer crashes on short masks; a CE side with its edge
-   not above the head is `NaN` (listed in NMDID's `failed`); the empty-input `IndexError`s in
-   `utils.py` are `ValueError`s. **Do not pool** NMDID CT femoral torsion or CE rows across this
-   change; a new NMDID run is needed. **The largest-component ankle centroid (#9) was withdrawn**: on
-   legs crossed at the ankle — including the CT golden fixture's left leg — the bigger piece is the
-   other leg. **Still open:** #9's own-leg identity at the ankle, the threshold fixes (#4 LT lower bound, #6 fixed-mm hip crop, #7 knee crop end,
+   Fixed (#1, #2, #8–#12): the CT lesser-trochanter search takes the *plausible* component and drops
+   specks under `C.MURPHY_TROCHANTER_MIN_COMPONENT_VOXELS` before counting (`ct=True` only — MRI
+   unchanged); `split_ct_image` refuses an empty/inverted crop; `tibia.py`'s layer search no longer
+   crashes on short masks; a CE side with its edge not above the head is `NaN` (listed in NMDID's
+   `failed`); the empty-input `IndexError`s in `utils.py` are `ValueError`s; and **crossed legs**
+   (#9): `process_nmdid.py::split_legs` first assigns every 3-D tibia/fibula component to the half
+   holding most of it (`geometry.remove_other_halfs_bones`) — a 2-D largest-component rule was tried
+   and withdrawn, since on crossed legs the bigger piece is the other leg's. **Do not pool** NMDID CT
+   femoral torsion, CE or tibial torsion rows across these changes (#9 alone touches 5 of 16 random
+   legs); a new NMDID run is needed. The CT golden `tibial_torsion_ct_left` is a two-leg mixture
+   (fixture legs cross at the ankle); `tibial_torsion_ct_left_own_bones` (48.03) is its own-leg value.
+   **Still open:** the threshold fixes (#4 LT lower bound, #6 fixed-mm hip crop, #7 knee crop end,
    #13/#14 `clean_leg`) — choose them on held-out data, not the reviewed cases; the user is annotating
    80 held-out legs for #4/#6/#7 (set A to choose, set B to quote; [`nmdid_annotation/`](docs/evidence/nmdid_annotation/README.md))
    — and #5, a femur-aligned frame for the Murphy search. Evidence:
