@@ -3,7 +3,8 @@
 Manual landmarks on held-out NMDID legs, used to choose — and separately to quote — the thresholds of
 the outlier review's open defects #4 (lesser-trochanter distance bound), #6 (fixed-mm hip crop) and
 #7 (knee crop end); see [`../nmdid_outlier_review.md`](../nmdid_outlier_review.md). Set up 2026-11-16;
-annotation by the user, not started at the time of writing.
+annotated by the user, finished 2026-11-17 (repeat pass not done). **Results — #7 shipped at 15 mm,
+#4/#6 left unchanged, set B spent: [`results.md`](results.md).**
 
 ## Files
 
@@ -13,6 +14,8 @@ annotation by the user, not started at the time of writing.
 | `annotation_sets.csv` | the draw: `order, case, set, repeat` — **the record; do not redraw once annotation has started** |
 | `../../../scripts/draw_nmdid_annotation_sets.py` | the seeded draw (seed 20261116); re-running reproduces the CSV byte for byte |
 | `../../../scripts/slicer_annotate_nmdid.py` | the 3D Slicer helper that opens each case and saves the points |
+| `../../../scripts/analyse_nmdid_annotations.py` | measures the pipeline against the points (`--set A`; `--set B --quote`) |
+| `results.md`, `results_set_{A,B}.csv` | what that gave, and the per-leg tables |
 
 Annotations themselves are written next to the data, `nmdid/annotations/<case>_<R|L>.mrk.json`
 (repeat pass: `annotations/repeat/`), not into this repo.

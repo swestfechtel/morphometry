@@ -30,7 +30,7 @@ def calculate_mechanical_axis_deviation(whole_leg_image: Segmentation, femur_lab
     :return: The deviation of the center of the knee from the Mikulicz line.
     """
     if masks is None:
-        _, masks = split_ct_image(whole_leg_image, None, femur_label=femur_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label)
+        _, masks = split_ct_image(whole_leg_image, None, femur_label=femur_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label, tibia_label=tibia_label)
 
     femoral_head_center, ankle_center = get_mechanical_axis(whole_leg_image, femur_label=femur_label, tibia_label=tibia_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label, side=side, masks=masks)
     knee_mask = masks[1]
@@ -76,7 +76,7 @@ def calculate_hip_knee_ankle_angle(whole_leg_image: Segmentation, femur_label: i
     :return: The hip-knee-ankle angle in degrees.
     """
     if masks is None:
-        _, masks = split_ct_image(whole_leg_image, None, femur_label=femur_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label)
+        _, masks = split_ct_image(whole_leg_image, None, femur_label=femur_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label, tibia_label=tibia_label)
 
     femoral_head_center, ankle_center = get_mechanical_axis(whole_leg_image, femur_label=femur_label, tibia_label=tibia_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label, side=side, masks=masks)
     knee_mask = masks[1]

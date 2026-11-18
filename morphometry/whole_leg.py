@@ -63,7 +63,7 @@ def get_mechanical_axis(whole_leg_image: Segmentation, femur_label: int = 1, tib
 
     r, femoral_head_center = get_femoral_head_center_ct(whole_leg_image, femur_label, side)
     if masks is None:
-        _, masks = split_ct_image(whole_leg_image, None, femur_label=femur_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label)
+        _, masks = split_ct_image(whole_leg_image, None, femur_label=femur_label, fibula_label=fibula_label, patella_label=patella_label, hip_label=hip_label, tibia_label=tibia_label)
     ankle_mask = masks[2]
 
     ankle_array = np.where(ankle_mask.array == tibia_label, 1, 0)  # set distal tibia to 1

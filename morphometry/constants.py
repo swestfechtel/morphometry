@@ -163,6 +163,22 @@ MURPHY_NECK_BASE_MIN_HEAD_DISTANCE_MM = 10.0
 #: pixels it is ~24 mm^2. Changing it moves CT femoral torsion and the CT Murphy QC flags.
 MURPHY_TROCHANTER_MIN_COMPONENT_VOXELS = 10
 
+#: How far below the tibia top, in mm, the whole-leg CT knee crop reaches at least
+#: (``image_io.split_ct_image``; NMDID outlier review defect #7, shipped 2026-11-18). The crop used
+#: to end at the fibula top alone, which on legs whose fibula head sits high leaves 1-3 tibia
+#: slices: the tibial condylar line is then read on the eminence or a partial plateau (182719 R:
+#: 62 degrees off the annotated line). The crop now ends at ``max(fibula top, tibia top + this)``.
+#:
+#: **Chosen on held-out set A** (20 random cases, 40 legs, user-annotated posterior condyles;
+#: ``docs/evidence/nmdid_annotation/``) from the grid 0-60 mm, **quoted on set B**, never on the
+#: 84 reviewed cases. On set A, 15 mm gave the lowest 90th-percentile angle error to the annotated
+#: line (5.0 vs 7.0 degrees) and one leg over 10 degrees (vs 2). The choice rests on one or two
+#: legs and is within noise; the review's suggested ~20 mm was **worse** on set A (3 legs over 10
+#: degrees), because the largest-convex-area layer then often lands one slice below the plateau,
+#: where the line is fragile. Longer is therefore not safer. Changing it moves CT tibial torsion,
+#: and whatever else reads the knee crop.
+CT_KNEE_CROP_BELOW_TIBIA_TOP_MM = 15.0
+
 #: Angular tolerance, in degrees, that sets how short Murphy's head-to-base axis may become before
 #: the neck is flagged as ill-conditioned (``murphy_axis_short``, see
 #: :func:`morphometry.femur.murphy_neck_base_qc`). The torsion is the *direction* of that axis in

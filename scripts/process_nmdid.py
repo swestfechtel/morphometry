@@ -536,7 +536,8 @@ def measure_case(path: Path) -> list:
         # needs them; splitting is expensive, so it is done once per leg.
         try:
             _, masks = split_ct_image(leg, None, femur_label=FEMUR_LABEL, hip_label=PELVIS_LABEL,
-                                      patella_label=PATELLA_LABEL, fibula_label=FIBULA_LABEL)
+                                      patella_label=PATELLA_LABEL, fibula_label=FIBULA_LABEL,
+                                      tibia_label=TIBIA_LABEL)
         except MEASUREMENT_ERRORS as exc:
             log.warning('%s %s: cannot split into hip/knee/ankle: %s: %s', case, side, type(exc).__name__, exc)
             masks = None

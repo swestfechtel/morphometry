@@ -1,4 +1,4 @@
-# NMDID outlier review: code defects found (2026-11-13; group A and #9 fixed 2026-11-16)
+# NMDID outlier review: code defects found (2026-11-13; group A and #9 fixed 2026-11-16; #7 2026-11-18)
 
 ## Status (2026-11-16)
 
@@ -85,9 +85,18 @@ set A (choose) and set B (quote), excluding the 84 reviewed cases, are being ann
 with five points per leg (three on the lesser trochanter, two on the posterior tibial plateau). The
 draw, protocol and Slicer helper are in [`nmdid_annotation/`](nmdid_annotation/README.md).
 
-**Still open:** group B (needs a threshold chosen on held-out data, *not* on the 84 reviewed
-cases) — #4 the 40 mm lower bound, #6 a fixed-mm hip crop (and with it the rest of #3), #7 the
-knee crop end, #13/#14 `clean_leg`; and group C — #5, the femur-aligned frame for the Murphy search.
+**Group B on the held-out annotation (2026-11-17/18; [`nmdid_annotation/results.md`](nmdid_annotation/results.md)).**
+**#7 shipped:** the knee crop ends at `max(fibula top, tibia top + C.CT_KNEE_CROP_BELOW_TIBIA_TOP_MM)`
+(15 mm, chosen on set A from a 0–60 mm grid; the review's ~20 mm was *worse* there). Quoted on set B
+it is roughly **neutral** (median 1.98° → 2.04°, p90 9.18° → 8.33°, legs > 10° 4 → 4, one failure
+rescued, one already-unusable leg worse) — no harm, not a demonstrated improvement; 14 of 39 legs
+move, so **do not pool** NMDID tibial torsion / MAD / HKA rows across it. No golden moved (the
+fixture's fibula top is already deep enough). **#4 and #6 left unchanged:** on set A the search
+found every base, so neither bound bit; set B (quote only) shows 5 of 37 Murphy failures, only one
+with its LT under 40 mm. They need a sample drawn from failing legs of the next run.
+
+**Still open:** group B — #4 the 40 mm lower bound, #6 a fixed-mm hip crop (and with it the rest of
+#3), #13/#14 `clean_leg`; and group C — #5, the femur-aligned frame for the Murphy search.
 The group-A fixes need a new NMDID run (not launched) and **do not pool** NMDID CT femoral torsion
 or CE rows across them, nor tibial torsion rows across the #9 fix.
 
@@ -150,7 +159,8 @@ not visually confirmed); 139618 R and 181483 L still failed.
    eminence, the notch search fails, and the line is short or random. Behind 9 of 16 sampled
    |TT| > 70° legs (106172 R, 106371, 122783 R, 138142 R, 164164 R, 188320 R, 189047 L) and several
    failures (122783 L, 141066 L, 188197 R, 145316 R). These are the legs `tibial_condylar_line_short`
-   catches. Suggested: end at max(fibula top, tibia top + ~20 mm).
+   catches. Suggested: end at max(fibula top, tibia top + ~20 mm). **Fixed 2026-11-18 at 15 mm**,
+   chosen on held-out set A, where ~20 mm was worse; see the group-B paragraph above.
 8. **Inverted knee crop:** when a mislabelled fibula (arm bone) sits above the patella,
    `knee_end < knee_start` and the crop is empty/inverted, failing later with a raw IndexError
    (140223, 149024 R). Raise a named `ValueError` when the crop end is not below its start.

@@ -6,6 +6,8 @@ reproduces one defect and pins the repaired behaviour; the defect numbers are th
 * #1 / #2 -- the CT lesser-trochanter search takes the *plausible* component and drops specks
   before counting (``femur.py::_find_trochanter_minor`` with ``ct=True``); the MRI path is unchanged;
 * #8 -- ``split_ct_image`` refuses an empty or inverted crop with a named ``ValueError``;
+* #7 (threshold, 2026-11-18) -- the knee crop reaches at least ``C.CT_KNEE_CROP_BELOW_TIBIA_TOP_MM``
+  below the tibia top, whatever the fibula does, and the ankle crop still hangs off the fibula top;
 * #9 (partial) -- a label absent from the distal reference layer raises ``ValueError``; the
   largest-component centroid was withdrawn (it measures the wrong leg when legs cross);
 * #10 -- ``get_layer_with_largest_diameter`` is sized on the axial axis and refuses an empty mask;
@@ -97,6 +99,58 @@ def test_split_ct_image_refuses_a_fibula_above_the_patella():
     array[6:8, 8:12, 125:190] = 3   # fibula
     array[0:2, 0:2, 40:60] = 3      # an "arm" labelled fibula, above the patella
     with pytest.raises(ValueError, match='knee crop is empty or inverted'):
+        split_ct_image(_segmentation(array), None)
+
+
+# --------------------------------------------------------------------------------------------
+# #7: knee crop end
+# --------------------------------------------------------------------------------------------
+
+def _knee_leg(fibula_top: int, spacing_z: float = 3.0) -> Segmentation:
+    """A leg whose tibia starts at slice 120 and whose fibula starts at ``fibula_top``.
+
+    :param fibula_top: First fibula slice.
+    :param spacing_z: Slice spacing in mm.
+    :return: The Segmentation (1 mm in plane).
+    """
+    array = np.zeros((20, 20, 200))
+    array[8:12, 8:12, 20:60] = 7    # hip
+    array[8:12, 8:12, 30:120] = 1   # femur
+    array[8:12, 8:12, 100:104] = 5  # patella
+    array[8:12, 8:12, 120:190] = 2  # tibia
+    array[6:8, 8:12, fibula_top:190] = 3  # fibula
+    return Segmentation.from_nibabel(nib.Nifti1Image(array, np.diag([1.0, 1.0, spacing_z, 1.0])))
+
+
+@pytest.mark.parametrize('spacing_z,expected_end', [(3.0, 125), (1.0, 135), (2.5, 126)])
+def test_knee_crop_reaches_below_a_high_fibula_head(spacing_z, expected_end):
+    """Defect #7: a fibula starting 1 slice below the tibia top no longer cuts the knee crop to a sliver.
+
+    The crop (end exclusive) now ends ``ceil(15 mm / slice)`` slices below the tibia top (120).
+    """
+    _, (_, knee, _) = split_ct_image(_knee_leg(fibula_top=121, spacing_z=spacing_z), None)
+    assert knee.array.shape[2] == expected_end - 100
+
+
+def test_knee_crop_still_ends_at_a_low_fibula_head():
+    """Where the fibula top is already deeper than the minimum, the crop is unchanged: it ends there."""
+    _, (_, knee, _) = split_ct_image(_knee_leg(fibula_top=140), None)
+    assert knee.array.shape[2] == 140 - 100
+
+
+def test_ankle_crop_hangs_off_the_fibula_top_not_the_knee_end():
+    """The ankle crop is the distal 30 % of the fibula; extending the knee crop must not move it."""
+    _, (_, _, ankle) = split_ct_image(_knee_leg(fibula_top=121), None)
+    # fibula 121..189: 69 slices, ankle starts at 189 - int(0.3 * 69) = 169, ends (exclusive) at 189
+    assert ankle.array.shape[2] == 189 - 169
+
+
+def test_split_ct_image_refuses_a_missing_tibia():
+    """No tibia label: a named ValueError (the knee crop end cannot be placed)."""
+    seg = _knee_leg(fibula_top=125)
+    array = seg.array.copy()
+    array[array == 2] = 0
+    with pytest.raises(ValueError, match='no tibia'):
         split_ct_image(_segmentation(array), None)
 
 

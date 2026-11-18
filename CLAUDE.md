@@ -80,10 +80,14 @@ item 4 is partly fixed, the rest is open work:
    femoral torsion, CE or tibial torsion rows across these changes (#9 alone touches 5 of 16 random
    legs); a new NMDID run is needed. The CT golden `tibial_torsion_ct_left` is a two-leg mixture
    (fixture legs cross at the ankle); `tibial_torsion_ct_left_own_bones` (48.03) is its own-leg value.
-   **Still open:** the threshold fixes (#4 LT lower bound, #6 fixed-mm hip crop, #7 knee crop end,
-   #13/#14 `clean_leg`) — choose them on held-out data, not the reviewed cases; the user is annotating
-   80 held-out legs for #4/#6/#7 (set A to choose, set B to quote; [`nmdid_annotation/`](docs/evidence/nmdid_annotation/README.md))
-   — and #5, a femur-aligned frame for the Murphy search. Evidence:
+   **#7 shipped (2026-11-18):** `split_ct_image`'s knee crop ends at `max(fibula top, tibia top +
+   C.CT_KNEE_CROP_BELOW_TIBIA_TOP_MM)` (15 mm, chosen on 40 user-annotated held-out legs, set A;
+   ~20 mm was worse). Quoted on set B it is roughly neutral — no harm, one failure rescued, not a
+   shown improvement; it moves ~36% of legs: **do not pool** NMDID tibial torsion / MAD / HKA rows
+   across it. No golden moved. **Still open:** #4 (LT lower bound) and #6 (fixed-mm hip crop) —
+   never bit on set A, so unchosen; they need a held-out sample of *failing* legs from the next run
+   (set B is spent) — #13/#14 `clean_leg`, and #5, a femur-aligned frame for the Murphy search.
+   Annotation and results: [`nmdid_annotation/results.md`](docs/evidence/nmdid_annotation/results.md). Evidence:
    [`nmdid_outlier_review.md`](docs/evidence/nmdid_outlier_review.md).
 
 ## Repository layout

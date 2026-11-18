@@ -12,6 +12,8 @@ import numpy as np
 import pydicom
 from scipy.ndimage import label
 
+from morphometry import constants as C
+
 # Module logger (a child of the package logger 'morphometry'); attach a handler to
 # logging.getLogger('morphometry') to collect its warnings. A library must not configure logging.
 logger = logging.getLogger(__name__)
@@ -531,17 +533,30 @@ def reflect_image_left_right(source):
     return reflected
 
 
-def split_ct_image(segmentation: Segmentation, image: Image = None, femur_label: int = 1, hip_label: int = 7, patella_label: int = 5, fibula_label: int = 3) -> Tuple[
+def split_ct_image(segmentation: Segmentation, image: Image = None, femur_label: int = 1, hip_label: int = 7, patella_label: int = 5, fibula_label: int = 3,
+                   tibia_label: int = 2) -> Tuple[
     Tuple[Image, Image, Image], Tuple[Segmentation, Segmentation, Segmentation]]:
     """
     Split a CT image to extract the hip, knee and ankle regions.
+
+    * **hip**: from the pelvis top over 30 % of the pelvis-top-to-femur-end extent;
+    * **knee**: from the patella top to ``max(fibula top, tibia top + C.CT_KNEE_CROP_BELOW_TIBIA_TOP_MM)``
+      (end exclusive). Until 2026-11-18 it ended at the fibula top alone, which on a leg with a
+      high fibula head left only a sliver of tibia, so the tibial condylar line was read on the
+      eminence (NMDID outlier review #7; the extension was chosen on held-out annotated legs,
+      see the constant). The femur above the joint is unaffected by the extension;
+    * **ankle**: the distal 30 % of the fibula -- still measured from the **fibula** top, not from
+      the knee crop's end, so the ankle crop did not move with #7.
+
     :param image: A whole-body CT image.
     :param segmentation: A segmentation mask corresponding to the CT image.
     :param femur_label: Label of the femur in the segmentation mask.
     :param hip_label: Label of the hip in the segmentation mask.
     :param patella_label: Label of the patella in the segmentation mask.
     :param fibula_label: Label of the fibula in the segmentation mask.
+    :param tibia_label: Label of the tibia in the segmentation mask (sets the knee crop's minimum end).
     :return: CT images of the hip, knee and ankle regions.
+    :raises ValueError: If a crop is empty or inverted, or the tibia label is absent.
     """
     hip_start = np.min(np.argwhere(segmentation.array == hip_label)[:, 2])  # get the most proximal slice of the hip bone
     femur_end = np.max(np.argwhere(segmentation.array == femur_label)[:, 2])  # get the most distal slice of the femur
@@ -549,10 +564,17 @@ def split_ct_image(segmentation: Segmentation, image: Image = None, femur_label:
     hip_end = hip_start + int(0.3 * num_femur_slices)
 
     knee_start = np.min(np.argwhere(segmentation.array == patella_label)[:, 2])  # get the most proximal slice of the patella
-    knee_end = np.min(np.argwhere(segmentation.array == fibula_label)[:, 2])  # get the most proximal slice of the fibula
+    fibula_top = np.min(np.argwhere(segmentation.array == fibula_label)[:, 2])  # get the most proximal slice of the fibula
+    tibia_slices = np.argwhere(segmentation.array == tibia_label)[:, 2]
+    if tibia_slices.size == 0:
+        raise ValueError(f'split_ct_image: no tibia (label {tibia_label}) in the segmentation')
+    # reach at least C.CT_KNEE_CROP_BELOW_TIBIA_TOP_MM below the tibia top (#7), so the tibial
+    # reference layer can be the plateau even when the fibula head sits high
+    min_tibia_slices = int(np.ceil(C.CT_KNEE_CROP_BELOW_TIBIA_TOP_MM / float(segmentation.spacing[2])))
+    knee_end = max(fibula_top, int(tibia_slices.min()) + min_tibia_slices)
 
     ankle_end = np.max(np.argwhere(segmentation.array == fibula_label)[:, 2])  # get the most distal slice of the fibula
-    num_fibula_slices = ankle_end - knee_end + 1
+    num_fibula_slices = ankle_end - fibula_top + 1
     ankle_start = ankle_end - int(0.3 * num_fibula_slices)
 
     logging.debug("Hip slices: %s to %s, Knee slices: %s to %s, Ankle slices: %s to %s",
@@ -561,9 +583,12 @@ def split_ct_image(segmentation: Segmentation, image: Image = None, femur_label:
     # A crop whose end is not below its start is empty or inverted. It happens when a mislabelled
     # bone (e.g. an arm labelled fibula) puts the fibula top above the patella top; every
     # measurement on the knee would then fail later with a raw IndexError. Refuse it here, by
-    # name, as a ValueError (the exception every batch handler catches). No bound is moved:
-    # every crop that was non-empty before is unchanged.
-    for region, start, end in (('hip', hip_start, hip_end), ('knee', knee_start, knee_end),
+    # name, as a ValueError (the exception every batch handler catches). #8 itself moved no
+    # bound (the knee end moved later, with #7).
+    # The knee check is made on the fibula top, not on the (possibly extended) knee end: the
+    # tibia-top minimum of #7 would otherwise silently "repair" a mislabelled fibula above the
+    # patella, whose ankle crop is then wrong too. Every crop refused before #7 is still refused.
+    for region, start, end in (('hip', hip_start, hip_end), ('knee', knee_start, fibula_top),
                                ('ankle', ankle_start, ankle_end)):
         if end <= start:
             raise ValueError(f'split_ct_image: the {region} crop is empty or inverted '
