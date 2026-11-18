@@ -21,10 +21,10 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=80G
 #SBATCH --time=04:00:00
 #SBATCH --output=logs/nmdid-morph-%A_%a.out
 #SBATCH --error=logs/nmdid-morph-%A_%a.out
+#SBATCH --partition=c23ms
 
 set -euo pipefail
 
