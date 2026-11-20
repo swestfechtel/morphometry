@@ -25,6 +25,7 @@
 #SBATCH --output=logs/nmdid-morph-%A_%a.out
 #SBATCH --error=logs/nmdid-morph-%A_%a.out
 #SBATCH --partition=c23ms
+#SBATCH --mem-per-cpu=6G   # c23ms default ~2.5 GB/core; a worker peaks at ~5 GB
 
 set -euo pipefail
 
