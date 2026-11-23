@@ -107,6 +107,11 @@ image geometry. The knee/ankle entry points that historically took a bare
 `np.ndarray` accept an `Image` too (preferred — the spacing then comes for free),
 or take it explicitly via `spacing=` / `knee_spacing=` / `ankle_spacing=`. An
 in-plane anisotropic mask raises `ValueError` instead of returning a sheared angle.
+Femoral anteversion comes in two references: `calculate_anteversion` (one image
+half, against the image x-axis) and `calculate_anteversion_head_line` (both halves,
+against the line through the two femoral head centres, as the NaKo readers measure;
+it falls back to the x-axis and says so when that line cannot be established). Their
+values are not interchangeable.
 See `CLAUDE.md` for the full architecture and conventions, and
 `docs/reader_measurement_guide.md` for anatomic descriptions of each measurement.
 
