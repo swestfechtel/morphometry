@@ -37,6 +37,7 @@
 #SBATCH --array=0-19
 #SBATCH --cpus-per-task=24
 #SBATCH --time=01:00:00
+#SBATCH --partition c23mm
 #SBATCH --output=logs/nako-morph-%A_%a.out
 #SBATCH --error=logs/nako-morph-%A_%a.out
 
