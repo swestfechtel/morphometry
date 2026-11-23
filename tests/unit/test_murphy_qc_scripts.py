@@ -124,10 +124,11 @@ def test_nmdid_condylar_qc_never_costs_a_row(monkeypatch):
 
 nako = _load('process_nako_large.py')
 
-#: The chunk-CSV header: the original cohort-table columns with ``qc_flags`` appended last.
+#: The chunk-CSV header: the original cohort-table columns, then ``AT_murphy_headline``, with
+#: ``qc_flags`` appended last.
 NAKO_HEADER = ('Patient,Side,CCD,AT_murphy,AA_anterior,AA_posterior,AAV,CE,Offset,'
                'Cartilage_thickness,Cartilage_thickness (mean),Cartilage_thickness (std),'
-               'Cartilage_thickness (min),Cartilage_thickness (max),qc_flags')
+               'Cartilage_thickness (min),Cartilage_thickness (max),AT_murphy_headline,qc_flags')
 
 
 def _nako_result(patient: str, left_flags: str = '', right_flags: str = '') -> dict:

@@ -80,6 +80,13 @@ if __name__ == '__main__':
         irm_auto_long_df = pd.concat([irm_auto_long_df, pd.Series({'Case': index, 'Metric': 'AT_murphy_right', 'Rater': 'IRM', 'Score': row['AT_murphy_right']}).to_frame().T], ignore_index=True)
         irm_auto_long_df = pd.concat([irm_auto_long_df, pd.Series({'Case': index, 'Metric': 'AT_murphy_left', 'Rater': 'IRM', 'Score': row['AT_murphy_left']}).to_frame().T], ignore_index=True)
 
+        # antetorsion against the inter-head line, scored against the same reader means as AT_murphy
+        # (the readers measure against that line); .get keeps tables from before the column readable
+        irm_auto_long_df = pd.concat([irm_auto_long_df, pd.Series({'Case': index, 'Metric': 'AT_murphy_headline_right', 'Rater': 'Auto', 'Score': auto_right.get('AT_murphy_headline', np.nan)}).to_frame().T], ignore_index=True)
+        irm_auto_long_df = pd.concat([irm_auto_long_df, pd.Series({'Case': index, 'Metric': 'AT_murphy_headline_left', 'Rater': 'Auto', 'Score': auto_left.get('AT_murphy_headline', np.nan)}).to_frame().T], ignore_index=True)
+        irm_auto_long_df = pd.concat([irm_auto_long_df, pd.Series({'Case': index, 'Metric': 'AT_murphy_headline_right', 'Rater': 'IRM', 'Score': row['AT_murphy_right']}).to_frame().T], ignore_index=True)
+        irm_auto_long_df = pd.concat([irm_auto_long_df, pd.Series({'Case': index, 'Metric': 'AT_murphy_headline_left', 'Rater': 'IRM', 'Score': row['AT_murphy_left']}).to_frame().T], ignore_index=True)
+
         irm_auto_long_df = pd.concat([irm_auto_long_df, pd.Series({'Case': index, 'Metric': 'AA_right', 'Rater': 'Auto', 'Score': auto_right['AA_anterior']}).to_frame().T], ignore_index=True)
         irm_auto_long_df = pd.concat([irm_auto_long_df, pd.Series({'Case': index, 'Metric': 'AA_left', 'Rater': 'Auto', 'Score': auto_left['AA_anterior']}).to_frame().T], ignore_index=True)
         irm_auto_long_df = pd.concat([irm_auto_long_df, pd.Series({'Case': index, 'Metric': 'AA_right', 'Rater': 'IRM', 'Score': row['AA_right']}).to_frame().T], ignore_index=True)
@@ -111,12 +118,15 @@ if __name__ == '__main__':
 
     # print(f'Number of rows after outlier removal: {len(long_df)}')
 
-    metrics = ['CCD_right', 'CCD_left', 'AT_murphy_right', 'AT_murphy_left', 'AA_right', 'AA_left', 'AAV_right', 'AAV_left', 'CEA_right', 'CEA_left', 'Offset_right', 'Offset_left']
+    metrics = ['CCD_right', 'CCD_left', 'AT_murphy_right', 'AT_murphy_left',
+               'AT_murphy_headline_right', 'AT_murphy_headline_left', 'AA_right', 'AA_left', 'AAV_right', 'AAV_left', 'CEA_right', 'CEA_left', 'Offset_right', 'Offset_left']
 
     print('\n\n\n Inter-reader agreement (IRA) for Tim and Marc:')
 
     for metric in metrics:
         metric_df = ira_long_df[ira_long_df['Metric'] == metric]
+        if metric_df.empty:
+            continue  # an Auto-only variant (AT_murphy_headline_*): the readers' rows are AT_murphy_*
         metric_df = metric_df.dropna()
         metric_df = metric_df.drop(columns=['Metric'])
         print(metric)

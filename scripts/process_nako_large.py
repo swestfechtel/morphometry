@@ -6,8 +6,12 @@ halves are measured (CCD, Murphy antetorsion, alpha angle, acetabular anteversio
 angle, projected femoral offset, cartilage thickness) and written to
 ``<output-dir>/results_chunk_<N>.csv`` in the layout of the original cohort tables: one row per
 (Patient, Side), where Side is the PATIENT side (the image-left half is the patient's right), plus
-an appended ``qc_flags`` column holding the Murphy femoral-neck QC flags of that hip
-(:func:`morphometry.femur.murphy_neck_base_qc`; empty when the neck looks sound).
+two appended columns: ``AT_murphy_headline``, the Murphy antetorsion measured against the line
+through both femoral head centres (the NaKo readers' reference;
+:func:`morphometry.measurements.hip.calculate_anteversion_head_line`), and ``qc_flags``, holding the
+Murphy femoral-neck QC flags of that hip (:func:`morphometry.femur.murphy_neck_base_qc`) and
+``at_headline_fallback:x_axis`` when the head line could not be established and
+``AT_murphy_headline`` was measured against the image x-axis instead (empty when all is sound).
 A ``results_chunk_<N>.meta.json`` next to it records the git commit, date and arguments, so every
 table is traceable to the code that produced it. An existing chunk CSV is never overwritten unless
 ``--overwrite`` is given. Failures are caught per measurement and written as NaN.
@@ -36,7 +40,8 @@ sys.path.append(str(REPO_ROOT))
 import pandas as pd
 import numpy as np
 
-from morphometry.measurements.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
+from morphometry.measurements.hip import calculate_ccd, calculate_anteversion, calculate_anteversion_head_line, \
+    calculate_acetabular_anteversion, \
     calculate_alpha_angle, calculate_acetabular_depth, calculate_center_edge_angle, \
     calculate_cartilage_thickness_knn, calculate_femoral_offset, calculate_femoral_offset_projected
 from morphometry.femur import get_murphy_neck_qc
@@ -45,6 +50,8 @@ from morphometry.image_io import Segmentation, split_image_left_right
 DEFAULT_INPUT_ROOT = '/hpcwork/p0021834/workspace_simon/nako'
 DEFAULT_OUTPUT_DIR = '/home/sw521914/Data/nako'
 COLUMNS = ['CCD', 'AT_murphy', 'AA_anterior', 'AA_posterior', 'AAV', 'CE', 'Offset', 'Cartilage_thickness']
+#: The QC flag written to both rows of a case whose ``AT_murphy_headline`` fell back to the x-axis.
+HEADLINE_FALLBACK_FLAG = 'at_headline_fallback:x_axis'
 
 
 def _nan_result(patient_id: str, load_failed: bool = False) -> dict:
@@ -60,7 +67,8 @@ def _nan_result(patient_id: str, load_failed: bool = False) -> dict:
             'aa_left': nan2, 'aa_right': nan2, 'aav_left': np.nan, 'aav_right': np.nan,
             'cea_left': np.nan, 'cea_right': np.nan, 'offset_left': np.nan, 'offset_right': np.nan,
             'cartilage_thickness_left': nan4, 'cartilage_thickness_right': nan4,
-            'murphy_qc_left': '', 'murphy_qc_right': ''}
+            'murphy_qc_left': '', 'murphy_qc_right': '',
+            'fat_headline_left': np.nan, 'fat_headline_right': np.nan, 'fat_headline_reference': ''}
 
 
 def f(patient):
@@ -102,6 +110,15 @@ def f(patient):
     except Exception as e:
         print(f"Error calculating FAT for right side of patient {patient.name}: {e}")
         fat_right = np.nan
+
+    # antetorsion against the inter-head line (the readers' reference) on the whole mask; a failed
+    # side is NaN inside, and the reference says whether the x-axis fallback fired ('' = it raised)
+    try:
+        fat_headline_left, fat_headline_right, fat_headline_reference = calculate_anteversion_head_line(
+            mask, 1, isotropic=True, plot=False)
+    except Exception as e:
+        print(f"Error calculating head-line FAT for patient {patient.name}: {e}")
+        fat_headline_left, fat_headline_right, fat_headline_reference = np.nan, np.nan, ''
 
     try:
         aa_left = calculate_alpha_angle(mask_left, 'left', 1, isotropic=True, plot=False)
@@ -166,7 +183,9 @@ def f(patient):
             'aa_left': aa_left, 'aa_right': aa_right, 'aav_left': aav[0], 'aav_right': aav[1],
             'cea_left': cea[0], 'cea_right': cea[1], 'offset_left': offset_left, 'offset_right': offset_right,
             'cartilage_thickness_left': cartilage_thickness_left,'cartilage_thickness_right': cartilage_thickness_right,
-            **murphy_qc}
+            **murphy_qc,
+            'fat_headline_left': fat_headline_left, 'fat_headline_right': fat_headline_right,
+            'fat_headline_reference': fat_headline_reference}
 
 
 def build_table(results: list, patients: list) -> pd.DataFrame:
@@ -176,9 +195,13 @@ def build_table(results: list, patients: list) -> pd.DataFrame:
     patient's right. Values are rounded to one decimal. The bare ``Cartilage_thickness`` column is
     kept (empty) because the original files have it.
 
-    A ``qc_flags`` column is appended after those historical columns: the ``;``-separated
-    ``name:value`` flags of :func:`morphometry.femur.murphy_neck_base_qc` for that hip's Murphy
-    neck landmarks (empty when the neck looks sound). ``AT_murphy`` is written whether or not the
+    Two columns are appended after those historical columns. ``AT_murphy_headline`` is the Murphy
+    antetorsion against the inter-head line (``fat_headline_*``), same side mapping and rounding.
+    ``qc_flags`` holds the ``;``-separated ``name:value`` flags of
+    :func:`morphometry.femur.murphy_neck_base_qc` for that hip's Murphy neck landmarks, followed by
+    ``at_headline_fallback:x_axis`` on both rows of a case whose head line could not be established
+    (``fat_headline_reference == 'x_axis'``), so a fallback value is never silently pooled with
+    head-line values (empty when all is sound). ``AT_murphy`` is written whether or not the
     hip is flagged -- the flag says the antetorsion of that row should not be trusted without
     looking at the mask, not that it was changed.
     :param results: Dicts as returned by :func:`f`.
@@ -214,11 +237,16 @@ def build_table(results: list, patients: list) -> pd.DataFrame:
         df.loc[(patient, 'left'), 'Cartilage_thickness (max)'] = round(x['cartilage_thickness_right'][3], 1)
 
     # appended after the original columns so the historical layout is untouched up to here
+    df['AT_murphy_headline'] = np.nan
     df['qc_flags'] = ''
     for x in results:
         patient = x['patient']
-        df.loc[(patient, 'right'), 'qc_flags'] = x.get('murphy_qc_left', '')
-        df.loc[(patient, 'left'), 'qc_flags'] = x.get('murphy_qc_right', '')
+        df.loc[(patient, 'right'), 'AT_murphy_headline'] = round(x.get('fat_headline_left', np.nan), 1)
+        df.loc[(patient, 'left'), 'AT_murphy_headline'] = round(x.get('fat_headline_right', np.nan), 1)
+        fallback = [HEADLINE_FALLBACK_FLAG] if x.get('fat_headline_reference', '') == 'x_axis' else []
+        for row_side, image_side in (('right', 'left'), ('left', 'right')):
+            flags = [x.get(f'murphy_qc_{image_side}', '')] + fallback
+            df.loc[(patient, row_side), 'qc_flags'] = ';'.join(flag for flag in flags if flag)
 
     return df
 

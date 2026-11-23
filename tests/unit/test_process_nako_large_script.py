@@ -19,12 +19,16 @@ _spec = importlib.util.spec_from_file_location('process_nako_large', _SCRIPT)
 mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mod)
 
-#: The header of the original results_chunk_*.csv / results.csv files, with the ``qc_flags``
-#: column (the Murphy femoral-neck QC flags) appended after them -- see
-#: ``tests/unit/test_murphy_qc_scripts.py`` for what goes into it.
-HEADER = ('Patient,Side,CCD,AT_murphy,AA_anterior,AA_posterior,AAV,CE,Offset,Cartilage_thickness,'
-          'Cartilage_thickness (mean),Cartilage_thickness (std),Cartilage_thickness (min),'
-          'Cartilage_thickness (max),qc_flags')
+#: The header of the original results_chunk_*.csv / results.csv files, up to and including
+#: ``Cartilage_thickness (max)``.
+HISTORICAL_HEADER = ('Patient,Side,CCD,AT_murphy,AA_anterior,AA_posterior,AAV,CE,Offset,Cartilage_thickness,'
+                     'Cartilage_thickness (mean),Cartilage_thickness (std),Cartilage_thickness (min),'
+                     'Cartilage_thickness (max)')
+
+#: The chunk header: the historical columns, then ``AT_murphy_headline`` (antetorsion against the
+#: inter-head line), then ``qc_flags`` (the Murphy femoral-neck QC flags and the head-line fallback
+#: flag -- see ``tests/unit/test_murphy_qc_scripts.py`` for the Murphy part).
+HEADER = HISTORICAL_HEADER + ',AT_murphy_headline,qc_flags'
 
 
 def _result(patient: str, base: float) -> dict:
@@ -40,7 +44,9 @@ def _result(patient: str, base: float) -> dict:
             'aav_left': base + 0.15, 'aav_right': base + 0.25, 'cea_left': base + 0.16, 'cea_right': base + 0.26,
             'offset_left': base + 0.17, 'offset_right': base + 0.27,
             'cartilage_thickness_left': (1.11, 1.12, 1.13, 1.14),
-            'cartilage_thickness_right': (2.11, 2.12, 2.13, np.nan)}
+            'cartilage_thickness_right': (2.11, 2.12, 2.13, np.nan),
+            'fat_headline_left': base + 0.18, 'fat_headline_right': base + 0.28,
+            'fat_headline_reference': 'head_line'}
 
 
 def test_table_keeps_the_original_layout_and_side_mapping(tmp_path):
@@ -59,6 +65,47 @@ def test_table_keeps_the_original_layout_and_side_mapping(tmp_path):
     assert table.loc[('p1', 'left'), 'Cartilage_thickness (mean)'] == 2.1
     assert np.isnan(table.loc[('p1', 'left'), 'Cartilage_thickness (max)'])
     assert table['Cartilage_thickness'].isna().all()  # kept empty, as in the original files
+    assert table.loc[('p1', 'right'), 'AT_murphy_headline'] == 10.2  # fat_headline_left 10.18
+    assert table.loc[('p1', 'left'), 'AT_murphy_headline'] == 10.3  # fat_headline_right 10.28
+
+
+@pytest.mark.parametrize('murphy_flags', ['', 'murphy_base_in_head:13.00'])
+def test_table_writes_headline_column_and_fallback_flag(tmp_path, murphy_flags):
+    """``AT_murphy_headline`` sits after the historical columns; an x-axis fallback flags both rows."""
+    head_line = _result('p1', 10)
+    fallback = dict(_result('p2', 20), fat_headline_reference='x_axis', fat_headline_right=np.nan)
+    for x in (head_line, fallback):
+        x.update(murphy_qc_left=murphy_flags, murphy_qc_right='')
+    df = mod.build_table([head_line, fallback], ['p1', 'p2'])
+    out = tmp_path / 'chunk.csv'
+    df.to_csv(out)
+    header = out.read_text().splitlines()[0]
+    assert header.startswith(HISTORICAL_HEADER + ',')  # historical layout unchanged
+    assert list(df.columns)[-2:] == ['AT_murphy_headline', 'qc_flags']
+
+    # image-left half (``*_left``) is the patient's right side
+    assert df.loc[('p1', 'right'), 'AT_murphy_headline'] == round(head_line['fat_headline_left'], 1)
+    assert df.loc[('p1', 'left'), 'AT_murphy_headline'] == round(head_line['fat_headline_right'], 1)
+    assert df.loc[('p2', 'right'), 'AT_murphy_headline'] == round(fallback['fat_headline_left'], 1)
+    assert np.isnan(df.loc[('p2', 'left'), 'AT_murphy_headline'])
+
+    # the head-line case carries no fallback flag; its Murphy flags are untouched
+    assert df.loc[('p1', 'right'), 'qc_flags'] == murphy_flags
+    assert df.loc[('p1', 'left'), 'qc_flags'] == ''
+    # the fallback flags both rows of its case, joined with ';' after any Murphy flags
+    expected_right = ';'.join(f for f in (murphy_flags, 'at_headline_fallback:x_axis') if f)
+    assert df.loc[('p2', 'right'), 'qc_flags'] == expected_right
+    assert df.loc[('p2', 'left'), 'qc_flags'] == 'at_headline_fallback:x_axis'
+
+
+def test_nan_result_has_the_headline_keys():
+    """An unmeasurable case has NaN head-line values and an empty reference (no fallback flag)."""
+    result = mod._nan_result('p1')
+    assert np.isnan(result['fat_headline_left']) and np.isnan(result['fat_headline_right'])
+    assert result['fat_headline_reference'] == ''
+    df = mod.build_table([result], ['p1'])
+    assert (df['qc_flags'] == '').all()
+    assert df['AT_murphy_headline'].isna().all()
 
 
 def test_existing_output_is_refused_without_overwrite(tmp_path):

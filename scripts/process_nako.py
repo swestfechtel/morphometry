@@ -10,7 +10,8 @@ import numpy as np
 import pyvista as pv
 
 from pathlib import Path
-from morphometry.measurements.hip import calculate_ccd, calculate_anteversion, calculate_acetabular_anteversion, \
+from morphometry.measurements.hip import calculate_ccd, calculate_anteversion, calculate_anteversion_head_line, \
+    calculate_acetabular_anteversion, \
     calculate_alpha_angle, calculate_center_edge_angle, \
     calculate_femoral_offset_projected
 from morphometry.image_io import Segmentation, split_image_left_right
@@ -72,6 +73,19 @@ def f(patient: Path):
     ax[0, 1].set_title(f'Antetorsion left: {fat_right:.1f}°')
     fig.savefig(f'/home/simon/Data/NaKo_sample/plots/anteversion/{patient.name}.png')
     plt.close(fig)
+
+    # antetorsion against the inter-head line (the readers' reference); 'x_axis' = fallback fired,
+    # '' = the measurement raised
+    fig, ax = plt.subplots(figsize=(10, 10))
+    try:
+        fat_headline_left, fat_headline_right, fat_headline_reference = calculate_anteversion_head_line(
+            mask, 1, isotropic=True, plot=ax)
+        fig.savefig(f'/home/simon/Data/NaKo_sample/plots/anteversion/{patient.name}_headline.png')
+    except Exception as e:
+        print(f"Error calculating head-line FAT of patient {patient.name}: {e}")
+        fat_headline_left, fat_headline_right, fat_headline_reference = np.nan, np.nan, ''
+    finally:
+        plt.close(fig)
 
     fig, ax = plt.subplots(ncols=2, figsize=(20, 10))
 
@@ -139,14 +153,19 @@ def f(patient: Path):
     return {'patient': patient.name.split('.')[0], 'ccd_left': ccd_left, 'ccd_right': ccd_right, 'fat_left': fat_left,
             'fat_right': fat_right,
             'aa_left': aa_left, 'aa_right': aa_right, 'aav_left': aav[0], 'aav_right': aav[1],
-            'cea_left': cea[0], 'cea_right': cea[1], 'offset_left': offset_left, 'offset_right': offset_right}
+            'cea_left': cea[0], 'cea_right': cea[1], 'offset_left': offset_left, 'offset_right': offset_right,
+            'fat_headline_left': fat_headline_left, 'fat_headline_right': fat_headline_right,
+            'fat_headline_reference': fat_headline_reference}
 
 
 if __name__ == '__main__':
     patients = [x.name.split('.')[0] for x in os.scandir('/home/simon/Data/NaKo_sample/segmentations')]
     iterables = [patients, ['right', 'left']]
     index = pd.MultiIndex.from_product(iterables, names=['Patient', 'Side'])
-    df = pd.DataFrame(columns=['CCD', 'AT_murphy', 'AA_anterior', 'AA_posterior', 'AAV', 'CE', 'Offset'], index=index)
+    # AT_murphy_headline (antetorsion against the inter-head line) and its reference ('head_line', or
+    # 'x_axis' when the fallback fired) are appended after the historical columns
+    df = pd.DataFrame(columns=['CCD', 'AT_murphy', 'AA_anterior', 'AA_posterior', 'AAV', 'CE', 'Offset',
+                               'AT_murphy_headline', 'AT_murphy_headline_reference'], index=index)
     patients = [patient for patient in Path('/home/simon/Data/NaKo_sample/segmentations').iterdir() if
                 patient.suffix == '.gz']
     # pv.start_xvfb()
@@ -170,6 +189,10 @@ if __name__ == '__main__':
         df.loc[(patient, 'left'), 'CE'] = round(x['cea_right'], 1)
         df.loc[(patient, 'right'), 'Offset'] = round(x['offset_left'], 1)
         df.loc[(patient, 'left'), 'Offset'] = round(x['offset_right'], 1)
+        df.loc[(patient, 'right'), 'AT_murphy_headline'] = round(x['fat_headline_left'], 1)
+        df.loc[(patient, 'left'), 'AT_murphy_headline'] = round(x['fat_headline_right'], 1)
+        df.loc[(patient, 'right'), 'AT_murphy_headline_reference'] = x['fat_headline_reference']
+        df.loc[(patient, 'left'), 'AT_murphy_headline_reference'] = x['fat_headline_reference']
 
     print(df)
     df.to_excel('/home/simon/Data/NaKo_sample/tables/eval.xlsx')
