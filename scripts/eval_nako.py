@@ -154,6 +154,13 @@ if __name__ == '__main__':
         metric_df = metric_df.dropna()
         metric_df = metric_df.drop(columns=['Metric'])
         print(metric)
+        if metric.startswith('AT_murphy_headline_') and 'AT_murphy_headline_reference' in auto.columns:
+            # rows measured against the image x-axis because the head line could not be established;
+            # they stay in the ICC, the count says how many there are
+            side = metric.rsplit('_', 1)[1]
+            references = auto.xs(side, level=1).reindex(irm_df.index)['AT_murphy_headline_reference']
+            print(f'{metric}: {int((references == "x_axis").sum())} of {len(references)} cases measured '
+                  f'against the x-axis fallback (kept in the ICC)')
 
         try:
             icc = pg.intraclass_corr(data=metric_df, targets='Case', raters='Rater', ratings='Score', nan_policy='omit')

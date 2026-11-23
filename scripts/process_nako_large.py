@@ -50,6 +50,11 @@ from morphometry.image_io import Segmentation, split_image_left_right
 DEFAULT_INPUT_ROOT = '/hpcwork/p0021834/workspace_simon/nako'
 DEFAULT_OUTPUT_DIR = '/home/sw521914/Data/nako'
 COLUMNS = ['CCD', 'AT_murphy', 'AA_anterior', 'AA_posterior', 'AAV', 'CE', 'Offset', 'Cartilage_thickness']
+#: The cartilage statistics that follow ``COLUMNS`` in the historical layout. Created up front so a
+#: table with no results (an empty partial file) has the same header as a filled one, which the
+#: header check in :func:`_check_header` relies on.
+CARTILAGE_COLUMNS = ['Cartilage_thickness (mean)', 'Cartilage_thickness (std)', 'Cartilage_thickness (min)',
+                     'Cartilage_thickness (max)']
 #: The QC flag written to both rows of a case whose ``AT_murphy_headline`` fell back to the x-axis.
 HEADLINE_FALLBACK_FLAG = 'at_headline_fallback:x_axis'
 
@@ -209,7 +214,7 @@ def build_table(results: list, patients: list) -> pd.DataFrame:
     :return: The table, indexed by (Patient, Side).
     """
     index = pd.MultiIndex.from_product([patients, ['right', 'left']], names=['Patient', 'Side'])
-    df = pd.DataFrame(columns=COLUMNS, index=index)
+    df = pd.DataFrame(columns=COLUMNS + CARTILAGE_COLUMNS, index=index)
 
     for x in results:
         patient = x['patient']
@@ -332,20 +337,49 @@ def _read_table(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, index_col=[0, 1], dtype={'Patient': str, 'Side': str})
 
 
+def _expected_header() -> str:
+    """The CSV header line :func:`build_table` writes (index names, then every column).
+
+    :return: The header line, without the newline.
+    """
+    return build_table([], []).to_csv().splitlines()[0]
+
+
+def _check_header(header: str, path: Path):
+    """Refuse a chunk file written with a different column layout than the current code's.
+
+    A partial file from an older commit (e.g. before ``AT_murphy_headline``) resumed by newer code
+    would otherwise only fail when the chunk is finalised, hours later, and in the other direction
+    pandas would pad the missing column silently; a final chunk of another layout would be merged
+    into a table of mixed provenance. Either way the fix is a fresh run of that chunk.
+    :param header: The file's header line.
+    :param path: The file, for the message.
+    :raises ValueError: If ``header`` is not :func:`_expected_header`.
+    """
+    expected = _expected_header()
+    if header != expected:
+        raise ValueError(f'{path} was written with a different column layout than this code writes '
+                         f'(file: {header!r}; expected: {expected!r}); it comes from another commit. '
+                         f'Re-run that chunk with --overwrite (or into a fresh --output-dir).')
+
+
 def _load_partial(partial: Path) -> pd.DataFrame:
     """Read the partial chunk file, dropping a case torn by a kill mid-write.
 
     A case is complete when both of its rows (right and left) are present and the file ends with a
     newline; a torn trailing line is cut off and an incomplete case is dropped, so it is recomputed.
     The file is rewritten if anything was dropped, and deleted if not even its header is complete.
+    A complete header of another column layout is refused before the file is touched.
     :param partial: The partial CSV.
     :return: The complete rows, indexed by (Patient, Side) (empty if nothing usable was left).
+    :raises ValueError: If the partial file's header is not the one :func:`build_table` writes.
     """
     text = partial.read_text()
     text = text[:text.rfind('\n') + 1]  # cut a torn trailing line ('' if no line is complete)
     if not text:
         partial.unlink()
         return build_table([], [])
+    _check_header(text.split('\n', 1)[0], partial)  # before anything is rewritten
     partial.write_text(text)
     table = _read_table(partial)
     sides = table.groupby(level=0).size()
@@ -523,7 +557,8 @@ def merge_chunks(out_dir: Path, output: Path, overwrite: bool, expected_chunks: 
     :param overwrite: Whether an existing merged file may be replaced.
     :param expected_chunks: The number of chunks the cohort was split into.
     :raises FileNotFoundError: If a chunk is missing or unfinished.
-    :raises ValueError: If a (Patient, Side) row occurs more than once.
+    :raises ValueError: If a (Patient, Side) row occurs more than once, or a chunk was written with
+        another column layout (another commit; see :func:`_check_header`).
     """
     check_writable(output, overwrite)
     chunk_number = lambda p: int(re.search(r'_(\d+)(\.partial)?\.csv$', p.name).group(1))
@@ -537,6 +572,9 @@ def merge_chunks(out_dir: Path, output: Path, overwrite: bool, expected_chunks: 
     if missing or unfinished:
         raise FileNotFoundError(f'in {out_dir}: missing chunks {missing}, unfinished chunks {unfinished} '
                                 f'(expected {expected_chunks})')
+    for c in sorted(finished):
+        with open(finished[c]) as fh:
+            _check_header(fh.readline().rstrip('\n'), finished[c])
     merged = pd.concat([_read_table(finished[c]) for c in sorted(finished)])
     duplicated = merged.index[merged.index.duplicated()].unique()
     if len(duplicated):

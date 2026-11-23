@@ -408,3 +408,43 @@ def test_merge_refuses_chunks_outside_the_expected_range(tmp_path):
         _chunk(tmp_path, chunk, [f'c{chunk}'])
     with pytest.raises(ValueError, match=r'\[2\]'):
         mod.merge_chunks(tmp_path, tmp_path / 'results.csv', overwrite=False, expected_chunks=2)
+
+
+# --- column-layout guard: chunk files from another commit ----------------------------------------
+
+def _old_layout_csv(path, patient='p1'):
+    """Write a chunk CSV in the layout from before ``AT_murphy_headline`` (historical + qc_flags).
+
+    :param path: The file to write.
+    :param patient: The patient id of its one case.
+    """
+    df = mod.build_table([_result(patient, 1)], [patient]).drop(columns=['AT_murphy_headline'])
+    df.to_csv(path)
+    assert path.read_text().splitlines()[0] == HISTORICAL_HEADER + ',qc_flags'
+
+
+def test_an_old_layout_partial_is_refused_at_startup(tmp_path):
+    """Resuming a partial written by older code fails before any case is measured, untouched."""
+    cases = _cases(tmp_path, ['p1', 'p2'])
+    out = tmp_path / 'out'
+    out.mkdir()
+    partial = out / 'results_chunk_0.partial.csv'
+    _old_layout_csv(partial)
+    before = partial.read_text()
+
+    def must_not_run(patient):
+        raise AssertionError('a case was measured before the header check')
+
+    with pytest.raises(ValueError, match='column layout') as exc:
+        mod.run_chunk(cases, out, chunk=0, workers=1, overwrite=False, args={}, worker=must_not_run)
+    assert str(partial) in str(exc.value) and 'AT_murphy_headline' in str(exc.value)
+    assert partial.read_text() == before
+
+
+def test_merge_refuses_an_old_layout_chunk(tmp_path):
+    """A finished chunk from older code is not merged with current ones."""
+    mod.build_table([_result('p0', 0)], ['p0']).to_csv(tmp_path / 'results_chunk_0.csv')
+    _old_layout_csv(tmp_path / 'results_chunk_1.csv')
+    with pytest.raises(ValueError, match='results_chunk_1.csv'):
+        mod.merge_chunks(tmp_path, tmp_path / 'results.csv', overwrite=False, expected_chunks=2)
+    assert not (tmp_path / 'results.csv').exists()
