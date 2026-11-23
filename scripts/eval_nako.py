@@ -4,7 +4,7 @@ import numpy as np
 
 
 if __name__ == '__main__':
-    auto = pd.read_excel('/home/simon/Data/NaKo_sample/eval.xlsx', index_col=[0, 1])
+    auto = pd.read_excel('/home/simon/Data/NaKo_sample/tables/eval.xlsx', index_col=[0, 1])
     manual_tim = pd.read_excel('/home/simon/Data/NaKo_sample/Referenzmessungen_TH.xlsx', index_col=0)
     manual_marc = pd.read_excel('/home/simon/Data/NaKo_sample/Referenzmessungen_MH.xlsx', index_col=0, skiprows=1)
 
