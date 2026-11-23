@@ -345,6 +345,160 @@ def calculate_anteversion(segmentation_mask: Image, side: str = 'left', segmenta
 
     return angle
 
+
+# Below this axial length (in voxels) the two femoral head centres are treated as coinciding in the
+# axial plane, so the inter-head line has no direction and the x-axis fallback is used. It is a
+# numerical-degeneracy guard, not a tuned parameter: two real head centres sit ~150-200 voxels apart.
+_HEAD_LINE_MIN_AXIAL_LENGTH = 1e-6
+
+# Exceptions a failed Murphy landmark search raises (missing lesser trochanter, empty slices, the
+# neck-base distance guard, ...). One side failing must not take the other side with it.
+_LANDMARK_ERRORS = (ValueError, RuntimeError, AssertionError, IndexError)
+
+
+def _head_line_antetorsion(left_head: np.ndarray, left_base: np.ndarray, right_head: np.ndarray,
+                           right_base: np.ndarray,
+                           reference: Optional[np.ndarray] = None) -> Tuple[float, float]:
+    """
+    Compose the signed antetorsion of both image halves against a common reference line.
+
+    Per side the angle is :func:`morphometry.geometry.signed_axial_angle` from the reference line to
+    the Murphy neck axis directed neck base -> head centre, in the axial (x, y) plane only (every z
+    component is ignored). Positive = antetorsion (neck turned anteriorly), negative = retrotorsion:
+    the sign of :func:`calculate_anteversion` and of the femoral torsion. With the reference equal to
+    the image x-axis ``[1, 0, 0]`` the left value equals :func:`calculate_anteversion`'s for any neck
+    axis whose head centre is medial of its base (the anatomical case).
+
+    The default reference is the inter-head line ``left_head - right_head``; since only directions
+    enter, both values are then invariant to an in-plane rotation of the whole pelvis in the scanner,
+    which the x-axis reference is not. ``side='right'`` negates x inside ``signed_axial_angle``, so a
+    mirrored pelvis gives the two values swapped.
+    :param left_head: Left (image-side) femoral head centre, parent-frame voxel index.
+    :param left_base: Left Murphy neck base, parent-frame voxel index.
+    :param right_head: Right (image-side) femoral head centre, parent-frame voxel index (i.e. the
+        right half's own index already shifted by the left half's width on x).
+    :param right_base: Right Murphy neck base, parent-frame voxel index.
+    :param reference: The reference line vector, or ``None`` for the inter-head line. The x-axis
+        fallback passes ``np.array([1., 0., 0.])``. The line is undirected (the fold makes its
+        sign irrelevant).
+    :return: ``(left, right)`` signed antetorsion angles in degrees, each in (-90, 90].
+    """
+    if reference is None:
+        reference = np.asarray(left_head, dtype=float) - np.asarray(right_head, dtype=float)
+    left = G.signed_axial_angle(reference, np.asarray(left_head, dtype=float) - left_base, 'left')
+    right = G.signed_axial_angle(reference, np.asarray(right_head, dtype=float) - right_base, 'right')
+    return left, right
+
+
+def calculate_anteversion_head_line(segmentation_mask: Image, segmentation_label: int = 1,
+                                    isotropic: bool = False, x_ratio: Optional[float] = None,
+                                    plot: plt.Axes | bool = False) -> Tuple[float, float, str]:
+    """
+    Calculate the femoral antetorsion of both sides against the line through both femoral head centres.
+
+    A variant of :func:`calculate_anteversion` for the NaKo hips. The NaKo reference readers measure
+    the Murphy neck axis against the line connecting the left and right femoral head centres;
+    :func:`calculate_anteversion` measures the same axis against the image x-axis, so a pelvis
+    rotated in the scanner enters its value but not the readers'. Here both halves' Murphy lines
+    (head centre and neck base, from :func:`morphometry.femur.get_proximal_reference_line`) are
+    mapped into the parent index frame (right half: ``+ left_half.shape[0]`` on x) and composed by
+    :func:`_head_line_antetorsion` against ``left_head - right_head``, axial plane only. The head
+    centres of the reference line are the same landmarks that start the neck axes.
+
+    **Fallback to the image x-axis.** When the inter-head line cannot be established, every side
+    whose own landmarks succeeded is measured against ``[1, 0, 0]`` -- the reference of
+    :func:`calculate_anteversion`, whose value it then reproduces -- and ``reference`` is returned as
+    ``'x_axis'`` so a fallback value is never silently mixed with head-line values. Two cases:
+
+    * one side's landmark search fails: that side is ``np.nan``, the other side uses the x-axis;
+    * the two head centres coincide in the axial plane (axial distance below
+      ``_HEAD_LINE_MIN_AXIAL_LENGTH`` voxels): both sides use the x-axis.
+
+    Each fallback logs a WARNING naming its reason. Both sides failing raises ``ValueError``.
+
+    A right image half is handled by ``get_proximal_reference_line``'s own reflection (no right-side
+    landmark branch here), so a reflected pelvis gives the two values swapped.
+    :param segmentation_mask: An Image of the whole (two-sided) hip segmentation mask, in LPI.
+    :param segmentation_label: The label of the femur in the segmentation mask.
+    :param isotropic: Whether the image has isotropic voxels (NaKo: ``True``).
+    :param x_ratio: Slice-thickness correction (slice spacing in in-plane voxels), passed to the
+        landmark search. ``None`` derives it from the image, ``spacing_z / spacing_x``, as
+        :func:`calculate_anteversion` does.
+    :param plot: A matplotlib Axes to draw the axial slice at the mean head-centre height with both
+        neck axes (red) and the reference line (cyan: inter-head line, yellow: x-axis fallback), or
+        False.
+    :raises ValueError: If the in-plane voxel spacing is anisotropic (the angle is composed from voxel
+        indices; see :func:`morphometry.geometry.validate_in_plane_isotropy`), or if the landmark
+        search fails on both sides.
+    :return: ``(left, right, reference)``: the signed antetorsion in degrees of the left and right
+        **image** halves (left = patient right; positive = antetorsion, ``np.nan`` for a side whose
+        landmarks failed) and the reference used, ``'head_line'`` or ``'x_axis'``.
+    """
+    G.validate_in_plane_isotropy(segmentation_mask.spacing, 'anteversion (head line) hip image')
+
+    spacing = np.abs(np.asarray(segmentation_mask.spacing, dtype=float))
+    if x_ratio is None:
+        x_ratio = float(spacing[2] / spacing[0])
+
+    left_image, right_image = split_image_left_right(segmentation_mask)
+    offset = np.array([left_image.array.shape[0], 0., 0.])  # right-half index -> parent index
+
+    landmarks = {}  # side -> (head centre, neck base) in the parent index frame
+    failures = {}  # side -> the exception that ended its landmark search
+    for side, half, shift in (('left', left_image, np.zeros(3)), ('right', right_image, offset)):
+        try:
+            head, base = get_proximal_reference_line(half, side=side, method='murphy',
+                                                     segmentation_label=segmentation_label,
+                                                     isotropic=isotropic, x_ratio=x_ratio)[:2]
+        except _LANDMARK_ERRORS as exc:
+            failures[side] = exc
+            continue
+        landmarks[side] = (np.asarray(head, dtype=float) + shift, np.asarray(base, dtype=float) + shift)
+
+    if not landmarks:
+        raise ValueError(f'anteversion (head line): Murphy landmarks failed on both sides '
+                         f'(left: {failures["left"]!r}; right: {failures["right"]!r}).')
+
+    x_axis = np.array([1., 0., 0.])
+    if failures:
+        failed = next(iter(failures))
+        logger.warning('anteversion (head line): Murphy landmarks failed on the %s side (%r); '
+                       'measuring the other side against the image x-axis.', failed, failures[failed])
+        reference_vector, reference = x_axis, 'x_axis'
+    else:
+        head_line = landmarks['left'][0] - landmarks['right'][0]
+        if np.linalg.norm(head_line[:2]) < _HEAD_LINE_MIN_AXIAL_LENGTH:
+            logger.warning('anteversion (head line): the two femoral head centres coincide in the '
+                           'axial plane; measuring both sides against the image x-axis.')
+            reference_vector, reference = x_axis, 'x_axis'
+        else:
+            reference_vector, reference = head_line, 'head_line'
+
+    # a missing side gets placeholder landmarks whose angle is discarded below
+    placeholder = (np.zeros(3), -x_axis)
+    left_head, left_base = landmarks.get('left', placeholder)
+    right_head, right_base = landmarks.get('right', placeholder)
+    left, right = _head_line_antetorsion(left_head, left_base, right_head, right_base,
+                                         reference=reference_vector)
+    left = left if 'left' in landmarks else np.nan
+    right = right if 'right' in landmarks else np.nan
+
+    if plot is not False:
+        heads = [landmarks[s][0] for s in landmarks]
+        layer = int(round(float(np.mean([h[2] for h in heads]))))
+        plot.imshow(segmentation_mask.array[:, :, layer].T, cmap='gray')
+        for head, base in landmarks.values():
+            plot.plot([base[0], head[0]], [base[1], head[1]], 'r-')
+        if reference == 'head_line':
+            plot.plot([left_head[0], right_head[0]], [left_head[1], right_head[1]], 'c-')
+        else:
+            y = float(np.mean([h[1] for h in heads]))
+            plot.plot([0, segmentation_mask.array.shape[0] - 1], [y, y], 'y--')
+        plot.set_title(f'Antetorsion ({reference}): left {left:.1f}°, right {right:.1f}°')
+        plot.set_aspect('equal')
+
+    return left, right, reference
+
 def _reslice_femoral_neck_section(femur: np.ndarray, head_center: np.ndarray, neck_center: np.ndarray,
                                   rotation_angle: float,
                                   plane_rotation: float = 0.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
