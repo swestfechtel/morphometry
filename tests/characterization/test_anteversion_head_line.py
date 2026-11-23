@@ -3,7 +3,7 @@
 ``calculate_anteversion_head_line`` measures both image halves' Murphy neck axes against the line
 through the two femoral head centres (the NaKo readers' reference). Pinned here on the first NaKo
 sample hip: the golden values, mirror equivariance (a reflected hip gives the two values swapped),
-and that the x-axis fallback reproduces ``calculate_anteversion`` exactly.
+and that the x-axis fallback reproduces ``calculate_anteversion`` exactly on either side.
 """
 import numpy as np
 import pytest
@@ -48,3 +48,22 @@ def test_x_axis_fallback_reproduces_calculate_anteversion(nako_sample, monkeypat
     assert reference == 'x_axis'
     assert np.isnan(right)
     assert left == pytest.approx(expected, abs=1e-9)
+
+
+def test_x_axis_fallback_reproduces_calculate_anteversion_right(nako_sample, monkeypatch):
+    """With the left side failing, the right value is exactly calculate_anteversion's."""
+    _, right_half = split_left_right(nako_sample)
+    expected = H.calculate_anteversion(right_half, 'right', 1, isotropic=True)
+
+    real = H.get_proximal_reference_line
+
+    def left_fails(hip_image, side='left', **kwargs):
+        if side == 'left':
+            raise ValueError('simulated left-side landmark failure')
+        return real(hip_image, side=side, **kwargs)
+
+    monkeypatch.setattr(H, 'get_proximal_reference_line', left_fails)
+    left, right, reference = H.calculate_anteversion_head_line(nako_sample, 1, isotropic=True)
+    assert reference == 'x_axis'
+    assert np.isnan(left)
+    assert right == pytest.approx(expected, abs=1e-9)

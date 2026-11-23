@@ -363,8 +363,8 @@ def _head_line_antetorsion(left_head: np.ndarray, left_base: np.ndarray, right_h
     Compose the signed antetorsion of both image halves against a common reference line.
 
     Per side the angle is :func:`morphometry.geometry.signed_axial_angle` from the reference line to
-    the Murphy neck axis directed neck base -> head centre, in the axial (x, y) plane only (every z
-    component is ignored). Positive = antetorsion (neck turned anteriorly), negative = retrotorsion:
+    the Murphy neck axis (passed as ``head - base``; the fold into (-90, 90] makes its direction
+    irrelevant), in the axial (x, y) plane only (every z component is ignored). Positive = antetorsion (neck turned anteriorly), negative = retrotorsion:
     the sign of :func:`calculate_anteversion` and of the femoral torsion. With the reference equal to
     the image x-axis ``[1, 0, 0]`` the left value equals :func:`calculate_anteversion`'s for any neck
     axis whose head centre is medial of its base (the anatomical case).
@@ -410,7 +410,8 @@ def calculate_anteversion_head_line(segmentation_mask: Image, segmentation_label
     :func:`calculate_anteversion`, whose value it then reproduces -- and ``reference`` is returned as
     ``'x_axis'`` so a fallback value is never silently mixed with head-line values. Two cases:
 
-    * one side's landmark search fails: that side is ``np.nan``, the other side uses the x-axis;
+    * one side's landmark search fails (raises, or returns a non-finite landmark): that side is
+      ``np.nan``, the other side uses the x-axis;
     * the two head centres coincide in the axial plane (axial distance below
       ``_HEAD_LINE_MIN_AXIAL_LENGTH`` voxels): both sides use the x-axis.
 
@@ -424,9 +425,9 @@ def calculate_anteversion_head_line(segmentation_mask: Image, segmentation_label
     :param x_ratio: Slice-thickness correction (slice spacing in in-plane voxels), passed to the
         landmark search. ``None`` derives it from the image, ``spacing_z / spacing_x``, as
         :func:`calculate_anteversion` does.
-    :param plot: A matplotlib Axes to draw the axial slice at the mean head-centre height with both
-        neck axes (red) and the reference line (cyan: inter-head line, yellow: x-axis fallback), or
-        False.
+    :param plot: A matplotlib Axes, or False. Given an Axes, the axial slice at the mean head-centre
+        height is drawn with both neck axes (red) and the reference line (cyan: inter-head line,
+        yellow dashed: x-axis fallback).
     :raises ValueError: If the in-plane voxel spacing is anisotropic (the angle is composed from voxel
         indices; see :func:`morphometry.geometry.validate_in_plane_isotropy`), or if the landmark
         search fails on both sides.
@@ -453,7 +454,13 @@ def calculate_anteversion_head_line(segmentation_mask: Image, segmentation_label
         except _LANDMARK_ERRORS as exc:
             failures[side] = exc
             continue
-        landmarks[side] = (np.asarray(head, dtype=float) + shift, np.asarray(base, dtype=float) + shift)
+        head, base = np.asarray(head, dtype=float) + shift, np.asarray(base, dtype=float) + shift
+        if not (np.all(np.isfinite(head)) and np.all(np.isfinite(base))):
+            # a NaN landmark would slip through the degeneracy check (NaN < tol is False) and be
+            # labelled 'head_line'; treat it as a failed side instead
+            failures[side] = ValueError(f'non-finite Murphy landmark (head {head}, base {base})')
+            continue
+        landmarks[side] = (head, base)
 
     if not landmarks:
         raise ValueError(f'anteversion (head line): Murphy landmarks failed on both sides '

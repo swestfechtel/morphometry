@@ -46,15 +46,17 @@ def _rotate_z(point: np.ndarray, angle_deg: float, origin: np.ndarray) -> np.nda
     return rot @ (point - origin) + origin
 
 
-def _tiny_mask(spacing=(1., 1., 1.)) -> Segmentation:
+def _tiny_mask(spacing=(1., 1., 1.), width: int = 20) -> Segmentation:
     """A small two-sided mask with one femur voxel per half; the landmark search is monkeypatched.
 
     :param spacing: Voxel spacing written into the affine.
-    :return: A Segmentation of shape (20, 10, 10).
+    :param width: Size of the sagittal axis; an odd width makes the right half one voxel wider than
+        the left (the split is at ``width // 2``).
+    :return: A Segmentation of shape (width, 10, 10).
     """
-    a = np.zeros((20, 10, 10), dtype=np.uint8)
+    a = np.zeros((width, 10, 10), dtype=np.uint8)
     a[4, 5, 5] = 1
-    a[15, 5, 5] = 1
+    a[width - 5, 5, 5] = 1
     return Segmentation.from_nibabel(nib.Nifti1Image(a, np.diag([*spacing, 1.])))
 
 
@@ -136,6 +138,41 @@ def test_head_line_reference_is_used(monkeypatch):
     left, right, reference = calculate_anteversion_head_line(_tiny_mask())
     assert reference == 'head_line'
     np.testing.assert_allclose((left, right), _head_line_antetorsion(lh, lb, rh, rb), atol=1e-12)
+
+
+def test_right_landmarks_are_shifted_by_the_left_half_width(monkeypatch):
+    """On an odd-width mask (left half 10, right half 11) the shift is the LEFT half's width.
+
+    With equal halves, shifting by the right half's width would go unnoticed; here it moves the right
+    head centre by one voxel and changes both head-line values.
+    """
+    lh, lb, rh, rb = (np.array([6., 5, 5]), np.array([3., 6, 4]),
+                      np.array([14., 3, 5]), np.array([17., 4, 4]))
+    half = 10  # 21 // 2
+    monkeypatch.setattr(H, 'get_proximal_reference_line', _fake_reference_line(
+        left=(lh, lb), right=(rh - [half, 0, 0], rb - [half, 0, 0])))
+    left, right, reference = calculate_anteversion_head_line(_tiny_mask(width=21))
+    assert reference == 'head_line'
+    np.testing.assert_allclose((left, right), _head_line_antetorsion(lh, lb, rh, rb), atol=1e-12)
+    wrong = _head_line_antetorsion(lh, lb, rh + [1, 0, 0], rb + [1, 0, 0])
+    assert not np.allclose((left, right), wrong, atol=1e-6)
+
+
+@pytest.mark.parametrize('bad', ['head', 'base'])
+def test_non_finite_landmark_counts_as_failed_side(monkeypatch, bad):
+    """A NaN landmark is a failed side (NaN value, x-axis for the other), never a 'head_line' row."""
+    lh, lb = np.array([6., 5, 5]), np.array([3., 6, 4])
+    rh, rb = np.array([4., 3, 5]), np.array([7., 4, 4])
+    if bad == 'head':
+        rh = np.array([np.nan, 3, 5])
+    else:
+        rb = np.array([7., np.nan, 4])
+    monkeypatch.setattr(H, 'get_proximal_reference_line', _fake_reference_line(
+        left=(lh, lb), right=(rh, rb)))
+    left, right, reference = calculate_anteversion_head_line(_tiny_mask())
+    assert reference == 'x_axis'
+    assert np.isnan(right)
+    assert left == pytest.approx(G_signed(X_AXIS, lh - lb, 'left'))
 
 
 def test_one_side_failing_falls_back_to_x_axis(monkeypatch, caplog):
