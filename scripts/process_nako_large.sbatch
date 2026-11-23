@@ -35,11 +35,8 @@
 #
 #SBATCH --job-name=nako-morph
 #SBATCH --array=0-19
-#SBATCH --cpus-per-task=32
-#SBATCH --gres=gpu:1
-#SBATCH --partition truhnlab
-#SBATCH --account truhnlab
-#SBATCH --time=04:00:00
+#SBATCH --cpus-per-task=24
+#SBATCH --time=01:00:00
 #SBATCH --output=logs/nako-morph-%A_%a.out
 #SBATCH --error=logs/nako-morph-%A_%a.out
 
