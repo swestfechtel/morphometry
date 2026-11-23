@@ -46,8 +46,8 @@ inter-head line so the evaluation compares like with like.
 - Refuses anisotropic in-plane spacing (`validate_in_plane_isotropy`, `ValueError`).
 - **Fallback:** if either side's Murphy landmarks fail, or the two head centres coincide in the
   axial plane, every side whose own landmarks succeeded is measured against the image x-axis
-  (`reference='x_axis'`); a side whose own landmarks failed raises as today (caught by the scripts
-  as NaN). *My call:* the return value always carries `reference`, so a fallback row is never
+  (`reference='x_axis'`); a side whose own landmarks failed comes back as `NaN`, and if both
+  sides fail the function raises `ValueError` (caught by the scripts as NaN). *My call:* the return value always carries `reference`, so a fallback row is never
   silently mixed with head-line rows.
 - Scripts: `process_nako.py` and `process_nako_large.py` write a new `AT_murphy_headline` column
   (appended after the historical columns) and add `at_headline_fallback:x_axis` to `qc_flags` when
