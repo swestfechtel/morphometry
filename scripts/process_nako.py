@@ -29,15 +29,15 @@ def f(patient: Path):
     p = pv.Plotter(off_screen=True)
 
     try:
-        # ccd_left, _ = calculate_ccd(mask_left, None, 'left', 1, isotropic=True, plot=p)
-        _, ccd_left = calculate_ccd(mask_left, None, 'left', 1, isotropic=True, plot=p)
+        # 3-D neck-shaft angle (since 2026-11-24; the coronal projection, the second return value, inflates
+        # the CCD of anteverted necks -- see CLAUDE.md, Hip)
+        ccd_left, _ = calculate_ccd(mask_left, None, 'left', 1, isotropic=True, plot=p)
     except Exception as e:
         print(f"Error calculating CCD for left side of patient {patient.name}: {e}")
         ccd_left = np.nan
 
     try:
-        # ccd_right, _ = calculate_ccd(mask_right, None, 'right', 1, isotropic=True, plot=p)
-        _, ccd_right = calculate_ccd(mask_right, None, 'right', 1, isotropic=True, plot=p)
+        ccd_right, _ = calculate_ccd(mask_right, None, 'right', 1, isotropic=True, plot=p)
     except Exception as e:
         print(f"Error calculating CCD for right side of patient {patient.name}: {e}")
         ccd_right = np.nan

@@ -91,15 +91,15 @@ def f(patient):
         return _nan_result(patient.name.split('.')[0], load_failed=True)
 
     try:
-        # ccd_left, _ = calculate_ccd(mask_left, None, 'left', 1, isotropic=True, plot=p)
-        _, ccd_left = calculate_ccd(mask_left, None, 'left', 1, isotropic=True, plot=False)  # use projected ccd
+        # 3-D neck-shaft angle (since 2026-11-24; the coronal projection, the second return value, inflates
+        # the CCD of anteverted necks -- see CLAUDE.md, Hip)
+        ccd_left, _ = calculate_ccd(mask_left, None, 'left', 1, isotropic=True, plot=False)
     except Exception as e:
         print(f"Error calculating CCD for left side of patient {patient.name}: {e}")
         ccd_left = np.nan
 
     try:
-        # ccd_right, _ = calculate_ccd(mask_right, None, 'right', 1, isotropic=True, plot=p)
-        _, ccd_right = calculate_ccd(mask_right, None, 'right', 1, isotropic=True, plot=False)
+        ccd_right, _ = calculate_ccd(mask_right, None, 'right', 1, isotropic=True, plot=False)
     except Exception as e:
         print(f"Error calculating CCD for right side of patient {patient.name}: {e}")
         ccd_right = np.nan

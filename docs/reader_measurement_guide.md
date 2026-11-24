@@ -226,10 +226,17 @@ plane**.
   component set to zero (projected onto the coronal plane), then the angle
   between them, again reported as the obtuse value.
 
-**For a reader:** the projected CCD corresponds to the conventional coronal
-neck–shaft angle; draw the neck axis (head centre → neck centre) and the shaft
-axis (mid-diaphyseal line) on the coronal view and measure the medial angle
-between them.
+**Which one is reported:** the NaKo scripts report the **3D CCD** since
+2026-11-24 (before: the projected one). Projecting onto the coronal plane
+makes an anteverted neck look more valgus — on the 60 NaKo reader cases the
+projected value was 7° higher on average, growing with antetorsion — while a
+reader who measures in an oblique coronal plane laid along the femoral neck
+measures the 3D angle.
+
+**For a reader:** draw the neck axis (head centre → neck centre) and the shaft
+axis (mid-diaphyseal line) in an oblique coronal plane through the femoral neck
+and measure the medial angle between them; a straight coronal view gives the
+projected value instead.
 
 ---
 
