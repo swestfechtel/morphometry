@@ -98,6 +98,39 @@ def test_closure_dunder_import_raises(tmp_path):
         import_closure([entry], tmp_path)
 
 
+def test_closure_relative_dynamic_import_raises(tmp_path):
+    """``import_module(".femur", "morphometry")`` names the package through its anchor argument."""
+    entry = _write(
+        tmp_path, "entry.py", "import importlib\nimportlib.import_module('.femur', 'morphometry')\n"
+    )
+
+    with pytest.raises(UnresolvedImport):
+        import_closure([entry], tmp_path)
+
+
+def test_closure_package_kwarg_dynamic_import_raises(tmp_path):
+    """The ``package=`` keyword is inspected too."""
+    entry = _write(
+        tmp_path,
+        "entry.py",
+        "from importlib import import_module\nimport_module('.femur', package='morphometry')\n",
+    )
+
+    with pytest.raises(UnresolvedImport):
+        import_closure([entry], tmp_path)
+
+
+def test_closure_star_import_raises(tmp_path):
+    """``from morphometry.x import *`` is refused rather than guessed at."""
+    _write(tmp_path, "morphometry/__init__.py", "")
+    _write(tmp_path, "morphometry/x.py", "A = 1\n")
+    entry = _write(tmp_path, "entry.py", "from morphometry.x import *\n")
+
+    with pytest.raises(UnresolvedImport) as info:
+        import_closure([entry], tmp_path)
+    assert info.value.name == "morphometry.x.*"
+
+
 def test_closure_ignores_dynamic_import_of_other_packages(tmp_path):
     """A dynamic import of another package (or of a non-literal) is not this walker's concern."""
     entry = _write(

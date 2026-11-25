@@ -9,7 +9,8 @@ Gated sets ("what affects an image", see ``docs/superpowers/specs/2026-11-25-api
 - **nnunet**: tracked files under ``api/docker/nnunet_torsion/`` except ``checkpoints/`` (which
   is untracked anyway); this includes the committed ``checkpoints.sha256`` manifest.
 - **torsion**: the ``morphometry`` import closure of ``morphometry/docker/compute_torsion.py``,
-  plus that entry point, ``morphometry/Dockerfile`` and ``morphometry/requirements.txt``.
+  plus that entry point, ``morphometry/Dockerfile``, ``morphometry/.dockerignore`` and
+  ``morphometry/requirements.txt``.
 - **api**: tracked files under ``api/`` except ``api/docker/``, ``api/tests/``, ``api/data/``,
   ``api/logs/``, ``*.ipynb`` and ``api/tests.py``; plus the ``morphometry`` import closure of
   every ``.py`` among them; plus ``api/Dockerfile``, ``api/requirements.txt``, ``.dockerignore``.
@@ -49,26 +50,57 @@ def _git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
     ).stdout
 
 
-def tracked_files(root: Path) -> set[str]:
-    """List the files of a source tree, as git tracks them.
+def _env_without_git_overrides() -> dict[str, str]:
+    """The current environment minus variables that redirect git to another repository.
 
-    :param root: either the top level of a git work tree — then ``git ls-files`` is used, so
-        untracked files (``node_modules/``, checkpoints, build output) are ignored — or a plain
-        directory holding an export of one ref (see :func:`export_ref`), whose every file is
-        tracked at that ref by construction.
+    Git exports an absolute ``GIT_DIR`` (and possibly ``GIT_WORK_TREE`` / ``GIT_INDEX_FILE``)
+    to hooks; left in place they would make ``git`` run in ``root`` answer for the hook's
+    repository instead of the directory asked about.
+
+    :return: a copy of ``os.environ`` without ``GIT_DIR``, ``GIT_WORK_TREE``,
+        ``GIT_INDEX_FILE``, ``GIT_COMMON_DIR`` and ``GIT_PREFIX``.
+    """
+    overrides = {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX"}
+    return {k: v for k, v in os.environ.items() if k not in overrides}
+
+
+def tracked_files(root: Path) -> set[str]:
+    """List the files of a source tree, as git tracks them (the work-tree default).
+
+    Used only when a gated function is called without an explicit ``tracked`` set, i.e. on a
+    work tree. :func:`changed_images` never relies on it: it lists each ref's files with
+    ``git ls-tree`` (:func:`tracked_at_ref`) and passes them in.
+
+    :param root: either the top level of a git work tree — then ``git ls-files`` is used (with
+        ``GIT_DIR`` & co. removed from the environment), so untracked files (``node_modules/``,
+        checkpoints, build output) are ignored — or a plain directory, whose every file is
+        listed.
     :return: POSIX-style paths relative to ``root``.
     """
     root = Path(root).resolve()
+    env = _env_without_git_overrides()
     top = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"], cwd=root, capture_output=True, text=True
+        ["git", "rev-parse", "--show-toplevel"], cwd=root, capture_output=True, text=True, env=env
     )
     if top.returncode == 0 and Path(top.stdout.strip()).resolve() == root:
-        return {p for p in _git(root, "ls-files", "-z").split("\0") if p}
+        return {p for p in _git(root, "ls-files", "-z", env=env).split("\0") if p}
     files = set()
     for dirpath, _dirnames, filenames in os.walk(root):
         for name in filenames:
             files.add((Path(dirpath) / name).relative_to(root).as_posix())
     return files
+
+
+def tracked_at_ref(repo: Path, ref: str) -> set[str]:
+    """List the files tracked at a ref, straight from its tree object.
+
+    :param repo: path of the git repository.
+    :param ref: any commit-ish (sha, tag, ``HEAD``).
+    :return: POSIX-style repo-relative paths of every blob in ``ref``'s tree.
+    :raises subprocess.CalledProcessError: if ``ref`` does not resolve.
+    """
+    listing = _git(repo, "ls-tree", "-r", "--name-only", "-z", f"{ref}^{{tree}}")
+    return {p for p in listing.split("\0") if p}
 
 
 def export_ref(repo: Path, ref: str, dest: Path) -> None:
@@ -100,29 +132,37 @@ def _paths(paths: set[Path]) -> set[str]:
     return {p.as_posix() for p in paths}
 
 
-def _nnunet_gated(root: Path) -> set[str]:
+def _nnunet_gated(root: Path, tracked: set[str] | None = None) -> set[str]:
     """Gated files of the nnUNet image.
 
     :param root: source tree (work tree or export of one ref).
+    :param tracked: files tracked at the ref examined; ``None`` → :func:`tracked_files` of ``root``.
     :return: tracked files under ``api/docker/nnunet_torsion/`` except ``checkpoints/``.
     """
     prefix = "api/docker/nnunet_torsion/"
     return {
-        f for f in tracked_files(root)
+        f for f in (tracked_files(root) if tracked is None else tracked)
         if f.startswith(prefix) and not f.startswith(prefix + "checkpoints/")
     }
 
 
-def _torsion_gated(root: Path) -> set[str]:
+def _torsion_gated(root: Path, tracked: set[str] | None = None) -> set[str]:
     """Gated files of the torsion image.
 
     :param root: source tree (work tree or export of one ref).
-    :return: the import closure of :data:`TORSION_ENTRY` plus the entry point, Dockerfile and
-        pinned requirements, filtered to tracked files.
+    :param tracked: files tracked at the ref examined; ``None`` → :func:`tracked_files` of ``root``.
+    :return: the import closure of :data:`TORSION_ENTRY` plus the entry point, Dockerfile,
+        ``.dockerignore`` (it shapes the build context) and pinned requirements, filtered to
+        tracked files.
     :raises versioning.closure.UnresolvedImport: if the closure walker cannot resolve an import.
     """
-    tracked = tracked_files(root)
-    gated = {TORSION_ENTRY, "morphometry/Dockerfile", "morphometry/requirements.txt"}
+    tracked = tracked_files(root) if tracked is None else tracked
+    gated = {
+        TORSION_ENTRY,
+        "morphometry/Dockerfile",
+        "morphometry/.dockerignore",
+        "morphometry/requirements.txt",
+    }
     if TORSION_ENTRY in tracked:
         gated |= _paths(import_closure([Path(root) / TORSION_ENTRY], Path(root)))
     return gated & tracked
@@ -131,16 +171,17 @@ def _torsion_gated(root: Path) -> set[str]:
 _API_EXCLUDED_PREFIXES = ("api/docker/", "api/tests/", "api/data/", "api/logs/")
 
 
-def _api_gated(root: Path) -> set[str]:
+def _api_gated(root: Path, tracked: set[str] | None = None) -> set[str]:
     """Gated files of the api image.
 
     :param root: source tree (work tree or export of one ref).
+    :param tracked: files tracked at the ref examined; ``None`` → :func:`tracked_files` of ``root``.
     :return: the api's own sources (see module docstring for the exclusions), the
         ``morphometry`` import closure of its ``.py`` files, and ``api/Dockerfile``,
         ``api/requirements.txt``, ``.dockerignore``; filtered to tracked files.
     :raises versioning.closure.UnresolvedImport: if the closure walker cannot resolve an import.
     """
-    tracked = tracked_files(root)
+    tracked = tracked_files(root) if tracked is None else tracked
     own = {
         f for f in tracked
         if f.startswith("api/")
@@ -153,15 +194,16 @@ def _api_gated(root: Path) -> set[str]:
     return (own | closure | {"api/Dockerfile", "api/requirements.txt", ".dockerignore"}) & tracked
 
 
-def _frontend_gated(root: Path) -> set[str]:
+def _frontend_gated(root: Path, tracked: set[str] | None = None) -> set[str]:
     """Gated files of the frontend image.
 
     :param root: source tree (work tree or export of one ref).
+    :param tracked: files tracked at the ref examined; ``None`` → :func:`tracked_files` of ``root``.
     :return: tracked files under ``frontend/`` except ``node_modules/``, ``.next/``,
         ``*.tsbuildinfo`` and ``.env*``.
     """
     gated = set()
-    for f in tracked_files(root):
+    for f in tracked_files(root) if tracked is None else tracked:
         parts = f.split("/")
         if parts[0] != "frontend":
             continue
@@ -181,15 +223,17 @@ class ImageSpec:
     :param repo: Docker Hub repository, e.g. ``swestfechtel/torsion``.
     :param context: repo-relative docker build context directory (``.`` = repo root).
     :param dockerfile: repo-relative path of the Dockerfile.
-    :param gated: function mapping a source-tree root to the repo-relative files that affect
-        this image (see the module docstring).
+    :param gated: ``gated(root, tracked=None)`` maps a source-tree root (and optionally the set
+        of files tracked at the ref that tree was exported from) to the repo-relative files
+        that affect this image (see the module docstring). Without ``tracked``, ``root`` must
+        be a work tree (or plain directory) and :func:`tracked_files` lists it.
     """
 
     key: str
     repo: str
     context: str
     dockerfile: str
-    gated: Callable[[Path], set[str]]
+    gated: Callable[..., set[str]]
 
 
 #: The four images in release (build) order: nnunet and torsion first, because the api image
@@ -235,6 +279,7 @@ def changed_images(repo: Path, base_ref: str | None, head_ref: str = "HEAD") -> 
         for index, ref in enumerate((head_ref, base_ref)):
             tree = Path(tmp) / str(index)
             export_ref(repo, ref, tree)
+            tracked = tracked_at_ref(repo, ref)  # from the tree object, never an index
             for key, spec in IMAGES.items():
-                gated[key] |= spec.gated(tree)
+                gated[key] |= spec.gated(tree, tracked)
     return {key: sorted(changed & files) for key, files in gated.items() if changed & files}

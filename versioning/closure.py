@@ -9,6 +9,9 @@ one package it reaches.
 The walker is deliberately conservative and loud: a ``package`` import it cannot map to a
 file, and any ``importlib.import_module`` / ``__import__`` call whose literal argument names
 the package, raise :class:`UnresolvedImport` instead of silently shrinking the closure.
+
+Not seen (so not guarded): an aliased ``import_module`` (``im = importlib.import_module``),
+``runpy``, ``importlib.util.spec_from_file_location`` and non-literal module names.
 """
 import ast
 from pathlib import Path
@@ -220,7 +223,7 @@ class _Walker:
 
         :param node: the ``ImportFrom`` node.
         :param path: absolute path of the importing file.
-        :raises UnresolvedImport: if neither reading resolves.
+        :raises UnresolvedImport: if neither reading resolves, and for any ``from X import *``.
         """
         if node.level:
             base = self.current_package(path)
@@ -233,17 +236,19 @@ class _Walker:
         if not _is_in_package(target, self.package):
             return
         for alias in node.names:
-            if alias.name != "*":
-                submodule = f"{target}.{alias.name}"
-                if self.module_location(submodule) is not None:
-                    self.add_module(submodule, path, node.lineno)
-                    continue
+            if alias.name == "*":
+                # Conservative: which names (and submodules) a star import binds is not checked.
+                raise UnresolvedImport(path, node.lineno, f"{target}.*")
+            submodule = f"{target}.{alias.name}"
+            if self.module_location(submodule) is not None:
+                self.add_module(submodule, path, node.lineno)
+                continue
             self.add_module(target, path, node.lineno)
-            if alias.name != "*" and not self.has_name(target, alias.name):
+            if not self.has_name(target, alias.name):
                 raise UnresolvedImport(path, node.lineno, f"{target}.{alias.name}")
 
     def check_dynamic(self, node: ast.Call, path: Path) -> None:
-        """Reject ``import_module`` / ``__import__`` calls whose literal argument names the package.
+        """Reject ``import_module`` / ``__import__`` calls whose literal name or package names the package.
 
         Non-literal arguments are not inspected: they cannot be resolved statically, and the
         codebase's only such call (``api/tasks/queue.py``) resolves ``api`` job functions.
@@ -256,8 +261,9 @@ class _Walker:
         called = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
         if called not in _DYNAMIC_IMPORT_CALLS:
             return
-        # The module name (first positional or ``name=``) and importlib's ``package=`` anchor.
-        candidates = list(node.args[:1]) + [
+        # The module name (first positional or ``name=``) and importlib's ``package`` anchor
+        # (second positional or ``package=``), e.g. ``import_module(".femur", "morphometry")``.
+        candidates = list(node.args[:2]) + [
             kw.value for kw in node.keywords if kw.arg in ("name", "package")
         ]
         for arg in candidates:
@@ -286,8 +292,9 @@ def import_closure(entry_files: list[Path], repo: Path, package: str = "morphome
     :param package: name of the top-level package to collect, default ``"morphometry"``.
     :return: repo-relative paths of the closure's files.
     :raises UnresolvedImport: for a ``package`` import that maps to no file (or to no name in an
-        existing module), and for an ``importlib.import_module`` / ``__import__`` call whose
-        literal argument starts with ``package``.
+        existing module), for ``from <package...> import *``, and for an
+        ``importlib.import_module`` / ``__import__`` call whose literal name or ``package``
+        argument starts with ``package``.
     """
     repo = Path(repo).resolve()
     walker = _Walker(repo, package)

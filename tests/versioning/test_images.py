@@ -10,6 +10,7 @@ MINI_FILES = {
     # A miniature morphometry package laid out at the real entry-point path.
     "morphometry/__init__.py": "",
     "morphometry/Dockerfile": "FROM python\n",
+    "morphometry/.dockerignore": "**/__pycache__\n",
     "morphometry/requirements.txt": "numpy==1.26.4\n",
     "morphometry/docker/compute_torsion.py": "from morphometry.femur import f\n",
     "morphometry/femur.py": "from morphometry import shared\n\ndef f():\n    return 1\n",
@@ -77,6 +78,7 @@ def test_gated_sets(mini_repo):
     assert IMAGES["torsion"].gated(mini_repo) == {
         "morphometry/__init__.py",
         "morphometry/Dockerfile",
+        "morphometry/.dockerignore",
         "morphometry/requirements.txt",
         "morphometry/docker/compute_torsion.py",
         "morphometry/femur.py",
@@ -150,6 +152,37 @@ def test_changed_images_deleted_closure_module_counts(mini_repo):
         "torsion": ["morphometry/femur.py", "morphometry/shared.py"],
         "api": ["api/main.py", "morphometry/shared.py"],
     }
+
+
+def test_changed_images_under_git_dir(mini_repo, monkeypatch, tmp_path):
+    """With ``GIT_DIR`` exported (as git does for hooks), tracked sets still come from each ref.
+
+    Regression: the export-dir probe used to match under ``GIT_DIR`` and filter both refs'
+    gated sets against the *current index*. With the index at ``head`` a deleted gated file
+    vanished from both sides; with the index at ``base`` a gated file added at ``head`` did.
+    """
+    base = run_git(mini_repo, "rev-parse", "HEAD")
+    (mini_repo / "morphometry/shared.py").unlink()
+    (mini_repo / "morphometry/femur.py").write_text("def f():\n    return 1\n")
+    (mini_repo / "api/main.py").write_text("from .helpers import h\n")
+    (mini_repo / "frontend/app/y.ts").write_text("export const y = 2;\n")
+    run_git(mini_repo, "add", "-A")
+    run_git(mini_repo, "commit", "-q", "-m", "drop shared, add y.ts")
+    head = run_git(mini_repo, "rev-parse", "HEAD")
+    expected = {
+        "torsion": ["morphometry/femur.py", "morphometry/shared.py"],
+        "api": ["api/main.py", "morphometry/shared.py"],
+        "frontend": ["frontend/app/y.ts"],
+    }
+    monkeypatch.setenv("GIT_DIR", str(mini_repo / ".git"))
+    monkeypatch.chdir(tmp_path)
+
+    # Index at head: the deleted shared.py must still be reported.
+    assert changed_images(mini_repo, base, head) == expected
+
+    # Index at base: the added y.ts must still be reported.
+    run_git(mini_repo, "reset", "-q", base)
+    assert changed_images(mini_repo, base, head) == expected
 
 
 def test_changed_images_reads_sources_at_each_ref(mini_repo):
