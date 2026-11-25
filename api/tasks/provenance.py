@@ -68,14 +68,15 @@ def stage_record(image_ref: str) -> dict:
               "git_commit": None, "dirty": None,
               "ran_at": datetime.now(timezone.utc).isoformat()}
     try:
-        record["api_version"] = get_version()
-        commit = get_git_commit()
-        # guard against non-JSON values (e.g. a mocked subprocess returning bytes)
-        record["git_commit"] = commit if isinstance(commit, str) else None
-        record["dirty"] = is_dirty()
         repo_digest, image_id = inspect_image(image_ref)
         record["digest"] = repo_digest or image_id
         record["released"] = bool(repo_digest) and repo_digest in released_digests()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Provenance incomplete for %s: %s", image_ref, exc)
+        logger.warning("Provenance digest lookup failed for %s: %s", image_ref, exc)
+    try:
+        record["api_version"] = get_version()
+        record["git_commit"] = get_git_commit()
+        record["dirty"] = is_dirty()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Provenance version info incomplete for %s: %s", image_ref, exc)
     return record

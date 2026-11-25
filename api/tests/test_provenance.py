@@ -80,3 +80,13 @@ def test_inspect_image_failure(monkeypatch):
         raise FileNotFoundError("docker")
     monkeypatch.setattr(subprocess, "run", missing)
     assert provenance.inspect_image(REF) == (None, None)
+
+
+def test_stage_record_version_failure_keeps_digest(monkeypatch):
+    _patch(monkeypatch, (DIGEST, "sha256:bb"), {DIGEST})
+
+    def boom():
+        raise RuntimeError("no VERSION")
+    monkeypatch.setattr(provenance, "get_version", boom)
+    rec = provenance.stage_record(REF)
+    assert rec["digest"] == DIGEST and rec["released"] is True and rec["api_version"] is None
