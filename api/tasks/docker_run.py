@@ -32,7 +32,7 @@ def run_segmentation_container(mount_dir: str, settings: Settings) -> None:
         "--shm-size", settings.docker_shm_size,
         "--group-add", "root",
         "-v", f"{mount_dir}:/app/mnt:rw,Z",
-        settings.nnunet_image,
+        settings.resolved_nnunet_image,
     ], timeout=settings.job_timeout)
 
 
@@ -43,5 +43,5 @@ def run_torsion_container(mount_dir: str, settings: Settings) -> None:
         "--shm-size", settings.docker_shm_size,
         "-u", "root",
         "-v", f"{mount_dir}:/app/temp:rw,z",
-        settings.torsion_image,
+        settings.resolved_torsion_image,
     ], timeout=settings.job_timeout)

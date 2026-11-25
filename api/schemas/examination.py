@@ -62,6 +62,7 @@ class TorsionDetail(ExaminationSummary):
     ankle_offset: int | None = None
     torsion: TorsionValues = TorsionValues()
     landmarks: dict = {}
+    provenance: dict | None = None
 
 
 class SeriesInfo(BaseModel):

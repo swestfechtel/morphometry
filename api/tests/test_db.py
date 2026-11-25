@@ -78,3 +78,12 @@ def test_job_lifecycle(engine):
         assert repository.get_job(s, job_id).status == "running"
         # distinct job id, not the accession (fixes the legacy collision)
         assert job_id != "ACC3"
+
+
+def test_existing_db_gains_provenance_column(tmp_path):
+    from sqlalchemy import inspect, text
+    eng = make_engine(f"sqlite:///{tmp_path/'old.db'}")
+    with eng.begin() as conn:
+        conn.execute(text("CREATE TABLE examinations (id VARCHAR PRIMARY KEY)"))
+    init_db(eng)
+    assert "provenance" in {c["name"] for c in inspect(eng).get_columns("examinations")}

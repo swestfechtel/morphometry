@@ -46,7 +46,7 @@ def init_db(engine: Engine) -> None:
 # Columns added to models after the initial schema, and their SQLite type — added
 # to an existing DB if absent (see init_db).
 _ADDED_COLUMNS: dict[str, dict[str, str]] = {
-    "examinations": {"series": "JSON"},
+    "examinations": {"series": "JSON", "provenance": "JSON"},
 }
 
 

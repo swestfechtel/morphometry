@@ -41,4 +41,5 @@ def to_detail(row: Examination, store: Store):
         ankle_offset=row.ankle_offset,
         torsion=TorsionValues(**_sanitize(row.torsion_values)) if row.torsion_values else TorsionValues(),
         landmarks=_sanitize(row.landmarks) if row.landmarks else {},
+        provenance=row.provenance,
     )

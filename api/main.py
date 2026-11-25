@@ -18,7 +18,7 @@ from api.db.engine import session_scope
 from api.deps import require_auth
 from api.errors import DomainError
 from api.logging_config import configure_logging
-from api.routers import auth, examinations, health, jobs, uploads, volumes
+from api.routers import auth, examinations, health, jobs, uploads, version, volumes
 from api.schemas.enums import JobState
 from api.schemas.errors import ErrorResponse
 from api.version import get_version
@@ -73,6 +73,7 @@ def create_app() -> FastAPI:
                             content=ErrorResponse(detail=str(exc), code="validation_error").model_dump())
 
     app.include_router(health.router)
+    app.include_router(version.router)  # unauthenticated, like /health
     app.include_router(auth.router)  # /auth/login must be reachable pre-authentication
     for router in (examinations.router, uploads.router, jobs.router):
         app.include_router(router, dependencies=[Depends(require_auth)])
