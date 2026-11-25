@@ -22,6 +22,7 @@ from api.domain.masks import combine_region_masks
 from api.runtime import get_engine, get_settings, get_store
 from api.schemas.docker_io import ErrorsModel, LandmarksModel, ResultsModel
 from api.schemas.enums import ExaminationStatus, JobState
+from api.tasks.provenance import stage_record
 from api.tasks.docker_run import run_segmentation_container, run_torsion_container
 
 logger = logging.getLogger("api")
@@ -85,6 +86,7 @@ def _segment(examination_id: str) -> None:
                 f"{tempdir}/{region}/input/{region}_0000.nii.gz")
 
         run_segmentation_container(tempdir, settings)
+        record = stage_record(settings.resolved_nnunet_image)
 
         mask_paths = {}
         for region in ("hip", "knee", "ankle"):
@@ -105,6 +107,7 @@ def _segment(examination_id: str) -> None:
 
     with session_scope(engine) as session:
         ex = repository.get_examination(session, examination_id)
+        ex.provenance = {**(ex.provenance or {}), "segmentation": record}
         ex.mask_paths = mask_paths
         ex.encoded_paths = encoded_paths
         ex.status = ExaminationStatus.SEGMENTED.value
@@ -123,6 +126,7 @@ def _align(examination_id: str) -> None:
             store.load_segmentation(mask_paths[region]).save_image(f"{tempdir}/{region}_segmentation.nii.gz")
 
         run_torsion_container(tempdir, settings)
+        record = stage_record(settings.resolved_torsion_image)
 
         results = ResultsModel.model_validate_json(Path(f"{tempdir}/results.json").read_text())
         landmarks = LandmarksModel.model_validate_json(Path(f"{tempdir}/landmarks.json").read_text())
@@ -133,6 +137,7 @@ def _align(examination_id: str) -> None:
 
     with session_scope(engine) as session:
         ex = repository.get_examination(session, examination_id)
+        ex.provenance = {**(ex.provenance or {}), "torsion": record}
         ex.torsion_values = results.model_dump()
         ex.landmarks = landmarks.root
         ex.status = ExaminationStatus.PROCESSED.value

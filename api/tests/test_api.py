@@ -262,3 +262,15 @@ def test_upload_torsion_multi_wiring(client, runtime, monkeypatch):
     resp = client.post("/upload/torsion/multi", files=files)
     assert resp.status_code == 201
     assert resp.json() == {"examination_id": "MULTI1"}
+
+
+def test_detail_exposes_provenance(client, runtime):
+    from api.db import repository
+    from api.db.engine import session_scope
+    from api.db.models import Examination
+    with session_scope(runtime.get_engine()) as s:
+        repository.upsert_examination(s, Examination(
+            id="PROV1", examination_type="torsion", status="processed",
+            provenance={"torsion": {"digest": "sha256:aa", "released": False}}))
+    body = client.get("/examinations/PROV1").json()
+    assert body["provenance"]["torsion"]["digest"] == "sha256:aa"
