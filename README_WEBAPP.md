@@ -317,7 +317,8 @@ change `MORPH_API_PORT` without building the frontend image with a matching
 | `MORPH_API_NNUNET_IMAGE` | digest from `release/images.json` | Segmentation image. Unset = the manifest entry of the running `VERSION` (or the newest released one); `:latest` with a warning if there is none. Env wins. |
 | `MORPH_API_TORSION_IMAGE` | digest from `release/images.json` | Torsion image, same resolution |
 | `MORPH_API_JOB_TMP_DIR` | system temp | Parent of per-job scratch dirs; created on use. Must be a path the host docker daemon sees identically (compose sets `<MORPH_DATA_DIR>/_jobs`) |
-| `MORPH_API_SELF_IMAGE` | unset | Ref of the api image itself, recorded as `api_image` in provenance (compose sets it; unset on the venv) |
+| `MORPH_API_SELF_IMAGE` | unset | Ref of the api image itself, recorded as `api_image` in provenance (compose sets it to the **tag** `<repo>:<MORPH_VERSION>`, not a digest; release tags are immutable by rule, so the tag identifies the image; unset on the venv) |
+| `MORPH_API_RELEASE_MANIFEST` | `release/images.json` of the source tree | Release manifest read for `/version`, `/releases`, the version search and the model-image defaults. The api image ships no `release/`, so compose bind-mounts the deploy checkout's file and sets this; a missing file is an empty manifest, a corrupt one is logged and treated as empty |
 | `MORPH_API_DOCKER_SHM_SIZE` | `32G` | `--shm-size` for both containers |
 | `MORPH_API_ENCODE_POOL_SIZE` | OS default | Worker pool for legacy PNG slice rendering |
 | `MORPH_API_API_KEYS` | empty | Comma-separated machine keys (`X-API-Key`) |
@@ -432,6 +433,9 @@ Cornerstone loader decides whether to gunzip from the URL suffix alone.
                                "git_commit": "…", "dirty": false, "ran_at": "…" } } }
 ```
 
+`api_image` is the compose tag of the api image (`swestfechtel/morphometry_api:<version>`, from
+`MORPH_API_SELF_IMAGE`), not a digest: `:<version>` tags are never overwritten (the release script
+refuses), so the tag is as specific as a digest. It is `null` on a venv run.
 Re-running a stage overwrites only its own provenance entry; a torsion entry
 older than its segmentation entry is visible, not marked stale. See
 [`docs/releasing.md`](docs/releasing.md) for finding results by version.

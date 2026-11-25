@@ -36,8 +36,10 @@ image's gated paths:
   (cartilage, deformation maps; the lazy re-exports in `morphometry/measurements/__init__.py` keep
   cartilage out) does not count.
 - **api**: `api/**` except `api/docker/`, `api/tests*`, `api/data/`, `api/logs/`, notebooks; the
-  `morphometry` closure of the `.py` files among them; `api/Dockerfile`, `api/requirements.txt`.
-- **frontend**: `frontend/**` except `node_modules/`, `.next/`, `*.tsbuildinfo`, `.env*`.
+  `morphometry` closure of the `.py` files among them; `api/Dockerfile`, `api/requirements.txt` and
+  the repo-root `.dockerignore` (it shapes the api build context). Markdown (`*.md`) is not gated.
+- **frontend**: `frontend/**` except `node_modules/`, `.next/`, `*.tsbuildinfo`, `.env*` and Markdown
+  (`*.md`), except Markdown under `frontend/public/`, which is served and therefore gated.
 
 Bump `VERSION` once per release cycle (the first gated commit after a release raises it; later ones
 may reuse the pending version, raising it further only if they need a bigger bump) and add the
@@ -95,6 +97,9 @@ python scripts/release.py              # execute the plan
 python scripts/release.py --adopt nnunet   # 1.0.0 only, see the bootstrap
 ```
 
+`--adopt` combines with `--dry-run` (`python scripts/release.py --adopt nnunet --dry-run` previews the
+bootstrap plan).
+
 **It refuses** (exit 1, with the reasons listed) unless: the work tree is clean, the branch is `main`
 and equals `origin/main`; `check_version` passes (bump above the last tag, changelog section, golden
 rule); git tag `v<VERSION>` exists neither locally nor on origin; and `:<VERSION>` on Docker Hub is
@@ -106,9 +111,12 @@ nnunet is rebuilt (there is no option to verify another directory).
 **The plan.** Per image: `build` if its gated paths changed since the last release tag (or there is no
 tag), else `retag`: add `:<VERSION>` to the previous release's digest registry-side, no rebuild and
 no upload. In particular the 79.5 GB nnunet image is only rebuilt when its own gated paths change.
-Order is nnunet, torsion, api, frontend: the api image is built with this release's nnunet and torsion
-digests baked in. Built images carry the OCI labels `version`, `revision` (full git sha), `created` and
-`morphometry.changelog`. After pushing, the script reads the digest back, writes
+**The api image is the exception: it is built on every release**, never retagged, because it bakes
+this release's `MORPH_VERSION` and the nnunet/torsion image references in at build time; a retagged
+api image would make release N+1's stack launch release N's model images and report N's version.
+(Its only `skip` is the resume case below.) Order is nnunet, torsion, api, frontend: the api image is
+built with this release's nnunet and torsion digests baked in. Built images carry the OCI labels
+`version`, `revision` (full git sha), `created` and `morphometry.changelog`. After pushing, the script reads the digest back, writes
 `release/images.json[<version>]`, commits `release: v<version>`, tags `v<version>` and pushes `main` and
 the tag; `:latest` of each image is moved last (convenience only; nothing should run `:latest`).
 
@@ -125,7 +133,9 @@ refuses, correctly. The images are already published; only the git side needs fi
 
 ## Rolling back and finding results by version
 
-- **Roll back or upgrade** a deployment: set `MORPH_VERSION` in `deploy/.env` and
+- **Roll back or upgrade** a deployment: `git pull` the deploy checkout (compose mounts its
+  `release/images.json` into the api and worker, since an image cannot contain its own manifest entry;
+  it must be at or after the `release: v<version>` commit), set `MORPH_VERSION` in `deploy/.env` and
   `docker compose -f deploy/compose.yml --env-file deploy/.env up -d`. Old versions stay pullable by
   `:<version>` tag and by digest. Schema additions made by a newer API are not undone: back up
   `MORPH_DATA_DIR` first. See [`deploy/README.md`](../deploy/README.md).
@@ -158,20 +168,25 @@ the inputs: `VERSION` is `1.0.0` and `CHANGELOG.md` has its section already.
    (~32 GB hashed.) `checkpoints.sha256` is a gated nnunet path: committing it **after** `v1.0.0` would
    count as an nnunet change and force a 79.5 GB rebuild for 1.0.1.
 4. **Adopt the existing nnunet image as 1.0.0** (only nnunet is adopted). The local image `70229af9...`
-   is the one the API has been running; push it as the release image:
+   is the one the API has been running; first confirm the local `:latest` still is that image, then push
+   it as the release image:
    ```bash
+   docker image inspect --format '{{.Id}}' swestfechtel/nnunet_torsion:latest   # must be sha256:70229af9…; stop otherwise
    docker tag swestfechtel/nnunet_torsion:latest swestfechtel/nnunet_torsion:1.0.0
    docker push swestfechtel/nnunet_torsion:1.0.0
    ```
    It has no revision label, so `release.py` would refuse it without `--adopt nnunet`. The superseded Hub
    `:latest` stays reachable by its manifest digest (recorded in the changelog).
-5. **Push `main`** (so `HEAD` equals `origin/main`) and make sure the work tree is clean.
-6. **Dry run:** `python scripts/release.py --dry-run`. Expect nnunet `skip` (adopted), torsion, api and
+5. **Push `main`** (so `HEAD` equals `origin/main`) and make sure the work tree is clean. The pre-push
+   hook from step 1 runs `scripts/check_version.py`; a violation stops the push.
+6. **Dry run:** `python scripts/release.py --adopt nnunet --dry-run` (without `--adopt nnunet` it
+   refuses the unlabelled nnunet tag). Expect nnunet `skip` (adopted), torsion, api and
    frontend `build`. Read the refusals if any.
 7. **Release:** `python scripts/release.py --adopt nnunet`. If interrupted, re-run it (see resume).
 8. **Verify:** `docker manifest inspect swestfechtel/<image>:1.0.0` for each of the four; `release/images.json`
    holds four digests; `git tag` shows `v1.0.0` and it is on origin; CI is green on the release commit;
-   bring up `deploy/compose.yml` with `MORPH_VERSION=1.0.0` and check that `GET /version` reports `1.0.0`
-   with the manifest digests.
+   on the deploy host, `git pull` (to get the `release: v1.0.0` commit, whose `release/images.json` compose
+   mounts), bring up `deploy/compose.yml` with `MORPH_VERSION=1.0.0` and check that `GET /version` reports
+   `1.0.0` with `images_from` `1.0.0` and the manifest digests, and `GET /releases` lists 1.0.0.
 
 After 1.0.0, `--adopt` is refused (it applies to an initial release only).

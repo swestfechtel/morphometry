@@ -164,13 +164,16 @@ The API shares one semver (`VERSION`, read by `api/version.py`) with the other t
   git commit, dirty flag and the model images the worker will run; `GET /releases` (open) lists released
   versions with their image refs.
 - `nnunet_image` / `torsion_image` default to the digests of the manifest entry for the running version
-  (`api/release_manifest.py`); `MORPH_API_NNUNET_IMAGE` / `MORPH_API_TORSION_IMAGE` still override.
+  (`api/release_manifest.py`); `MORPH_API_NNUNET_IMAGE` / `MORPH_API_TORSION_IMAGE` still override. The
+  manifest is `release/images.json` of the source tree, or `MORPH_API_RELEASE_MANIFEST` (compose bind-mounts
+  the deploy checkout's file; the image ships none). Missing or corrupt → treated as empty (corrupt is
+  logged as an error); a non-semver `MORPH_VERSION` (e.g. the image default `0.0.0-dev`) matches no entry.
 - Each pipeline stage writes its own entry of `Examination.provenance` (JSON column, `api/tasks/provenance.py`):
   version, image ref, digest (`docker image inspect` at job time), `released`, `api_image`
-  (`MORPH_API_SELF_IMAGE`), git commit, dirty flag, time. A local or unknown image is run and recorded with
+  (`MORPH_API_SELF_IMAGE`: the compose tag, not a digest; release tags are immutable), git commit, dirty flag, time. A local or unknown image is run and recorded with
   `released: false`.
 - `GET /examinations?version=<X>&stage=any|torsion|segmentation` finds results by the image actually used
-  (`unreleased` / `none` are special values; an unknown version is a 404); list items carry `image_versions`.
+  (`unreleased` / `none` are special values; a version that is not a released `MAJOR.MINOR.PATCH` is a 404); list items carry `image_versions`.
 - `MORPH_API_JOB_TMP_DIR` puts per-job scratch dirs under a chosen parent. In compose it is under the
   same-path bind mount so the host docker daemon can resolve the worker's `docker run -v` paths.
 - The api image (`api/Dockerfile`, build context = repo root) runs both the `api` and the `worker` service;
