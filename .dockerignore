@@ -1,0 +1,14 @@
+# Deny everything, then allow only what the api image copies. The build context is the repo root
+# (api/Dockerfile is built with `docker build -f api/Dockerfile .`), which holds a venv, data,
+# the frontend and 32 GB of nnUNet checkpoints under api/docker/.
+*
+!api
+!morphometry
+!VERSION
+# Re-deny runtime state, checkpoints, secrets and bytecode inside the allowed trees.
+api/data
+api/logs
+api/docker
+api/.env
+**/__pycache__
+**/*.pyc

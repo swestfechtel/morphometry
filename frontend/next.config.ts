@@ -6,6 +6,8 @@ import createNextIntlPlugin from "next-intl/plugin";
 const withNextIntl = createNextIntlPlugin("./i18n/request.ts");
 
 const nextConfig: NextConfig = {
+  // Self-contained server bundle (.next/standalone) for the docker image.
+  output: "standalone",
   // Cornerstone3D ships ESM workers/WASM that must be transpiled by the bundler.
   transpilePackages: [
     "@cornerstonejs/core",

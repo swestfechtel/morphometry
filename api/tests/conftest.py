@@ -5,6 +5,7 @@ docker subprocess, so the HTTP + orchestration logic can be tested without a GPU
 Redis, or docker. App/client/db fixtures are added as those layers land.
 """
 import json
+import subprocess as _subprocess
 from pathlib import Path
 
 import nibabel as nib
@@ -12,6 +13,10 @@ import numpy as np
 import pytest
 
 from api.settings import Settings
+
+
+# captured before any test patches subprocess.run, so the fake can delegate non-docker commands (git)
+_REAL_RUN = _subprocess.run
 
 
 @pytest.fixture
@@ -69,6 +74,8 @@ def fake_docker_run():
 
     def _factory(returncode: int = 0, malformed: bool = False):
         def _run(cmd, *args, **kwargs):
+            if not cmd or cmd[0] != "docker":
+                return _REAL_RUN(cmd, *args, **kwargs)
             # locate the host path of the bind mount (-v host:container)
             mount = next((c for c in cmd if isinstance(c, str) and ":/app/" in c), None)
             host_dir = Path(mount.split(":")[0]) if mount else None

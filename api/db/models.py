@@ -34,6 +34,7 @@ class Examination(SQLModel, table=True):
     # uid/description/modality/instances/rows/cols/preview_count). Cleared once a
     # series is selected and the examination is materialized.
     series: list | None = Field(default=None, sa_column=Column(JSON))
+    provenance: dict | None = Field(default=None, sa_column=Column(JSON))
     torsion_values: dict | None = Field(default=None, sa_column=Column(JSON))
     landmarks: dict | None = Field(default=None, sa_column=Column(JSON))
     source_paths: dict = Field(default_factory=dict, sa_column=Column(JSON))
