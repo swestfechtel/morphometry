@@ -21,6 +21,7 @@ from api.logging_config import configure_logging
 from api.routers import auth, examinations, health, jobs, uploads, volumes
 from api.schemas.enums import JobState
 from api.schemas.errors import ErrorResponse
+from api.version import get_version
 
 logger = logging.getLogger("api")
 
@@ -47,7 +48,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = runtime.get_settings()
-    app = FastAPI(title="Morphometry API", lifespan=lifespan)
+    app = FastAPI(title="Morphometry API", version=get_version(), lifespan=lifespan)
 
     allow_all = settings.cors_allow_origins == ["*"]
     app.add_middleware(
