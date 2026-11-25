@@ -5,9 +5,15 @@ where each ref is a ``repo@sha256:...`` digest reference. Versions that did not 
 image (e.g. the gated nnUNet image) are resolved by falling back to the newest lower entry.
 """
 import json
+import logging
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 MANIFEST_PATH = Path(__file__).resolve().parent.parent / "release" / "images.json"
+
+# provenance stage key -> manifest image key
+STAGE_IMAGE = {"segmentation": "nnunet", "torsion": "torsion"}
 
 
 def _parse(version: str) -> tuple[int, int, int]:
@@ -55,3 +61,44 @@ def released_digests(manifest: dict | None = None) -> set[str]:
     if manifest is None:
         manifest = load_manifest()
     return {ref for entry in manifest.values() for ref in entry.values() if isinstance(ref, str)}
+
+
+def sorted_versions(manifest: dict) -> list[str]:
+    """Manifest versions in ascending order, skipping (with a warning) keys that are not ``MAJOR.MINOR.PATCH``.
+
+    :param manifest: version -> entry mapping.
+    :return: the parseable versions, oldest first.
+    """
+    good = []
+    for v in manifest:
+        try:
+            good.append((_parse(v), v))
+        except (ValueError, AttributeError):
+            logger.warning("skipping unparseable release manifest version %r", v)
+    return [v for _, v in sorted(good)]
+
+
+def stage_digests(version: str, manifest: dict) -> dict[str, str]:
+    """Image refs a release used per provenance stage.
+
+    :param version: release version; must be a key of ``manifest`` (exact, no fallback).
+    :param manifest: version -> entry mapping.
+    :return: stage (``segmentation``/``torsion``) -> image ref; stages the entry lacks are omitted.
+    :raises KeyError: if ``version`` is not in the manifest.
+    """
+    entry = manifest[version]
+    return {stage: entry[key] for stage, key in STAGE_IMAGE.items() if isinstance(entry.get(key), str)}
+
+
+def versions_for_digest(stage: str, digest: str | None, manifest: dict) -> list[str]:
+    """Release versions whose image for ``stage`` equals ``digest``.
+
+    :param stage: provenance stage, ``segmentation`` or ``torsion``.
+    :param digest: recorded image digest; ``None`` matches nothing.
+    :param manifest: version -> entry mapping.
+    :return: matching versions, ascending; unparseable manifest keys are skipped with a warning.
+    """
+    if digest is None:
+        return []
+    key = STAGE_IMAGE[stage]
+    return [v for v in sorted_versions(manifest) if manifest[v].get(key) == digest]

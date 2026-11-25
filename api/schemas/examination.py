@@ -17,6 +17,9 @@ class ExaminationSummary(BaseModel):
     # Id of a currently queued/running job for this examination (else null). Lets the
     # list show live progress and poll the right job; null means nothing is in flight.
     active_job_id: str | None = None
+    # Per provenance stage, the release versions whose manifest image equals the digest that stage
+    # ran ({"segmentation": [...], "torsion": [...]}); empty lists for unreleased/unrecorded stages.
+    image_versions: dict[str, list[str]] = {}
 
 
 class ExaminationList(BaseModel):

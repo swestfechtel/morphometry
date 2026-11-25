@@ -26,3 +26,21 @@ def version() -> dict:
         "dirty": is_dirty(),
         "images": {"nnunet": settings.resolved_nnunet_image, "torsion": settings.resolved_torsion_image},
     }
+
+
+@router.get("/releases")
+def releases() -> dict:
+    """List released versions for the UI's version filter.
+
+    :return: ``{"releases": [{"version", "date", "images": {nnunet, torsion, api, frontend}}]}``, newest
+        first; manifest keys that are not ``MAJOR.MINOR.PATCH`` are skipped with a warning.
+    """
+    manifest = release_manifest.load_manifest()
+    return {"releases": [
+        {
+            "version": v,
+            "date": manifest[v].get("date"),
+            "images": {k: manifest[v].get(k) for k in ("nnunet", "torsion", "api", "frontend")},
+        }
+        for v in reversed(release_manifest.sorted_versions(manifest))
+    ]}
