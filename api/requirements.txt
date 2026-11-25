@@ -1,0 +1,92 @@
+# Pinned dependency set for the API image (swestfechtel/morphometry_api): the FastAPI service,
+# the RQ worker and the morphometry library they import.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# Same discipline as morphometry/requirements.txt: every version is exactly the one the repo-root
+# requirements.txt (the research venv) holds, and the file is the COMPLETE transitive closure, so
+# it is installed with `pip install --no-deps` and checked with `pip check`; a missing package
+# fails the build instead of resolving unpinned. Versions in this file, morphometry/requirements.txt
+# and the root requirements.txt must stay equal (tests/versioning/test_api_requirements.py).
+#
+# WHAT IS IN IT
+# -------------
+# NOT the research environment: no torch / nnunetv2 / TotalSegmentator -- inference runs in the
+# separate nnunet_torsion image the worker launches with `docker run`. The first block is the
+# API's own third-party imports (grep of api/, minus api/tests, api/docker, the legacy
+# api/examination.py); then everything morphometry/requirements.txt holds (the API imports the
+# library, including pyvista/vtk at import time); then the rest of the closure.
+#
+# KEEPING IT IN SYNC
+# ------------------
+# When a version changes, change the root requirements.txt and morphometry/requirements.txt too.
+
+# --- direct imports of api/ ------------------------------------------------------------------
+fastapi==0.115.12   # api.main, api.routers.*: the web framework
+uvicorn==0.34.0   # image CMD: the ASGI server
+python-multipart==0.0.20   # api.routers.uploads: UploadFile / Form parsing
+pydantic==2.11.2   # api.schemas.*: request/response models
+pydantic-settings==2.14.1   # api.settings: MORPH_API_* / .env configuration
+sqlmodel==0.0.38   # api.db: SQLite models
+sqlalchemy==2.0.50   # api.db: engine / session
+redis==8.0.0   # api.tasks: RQ broker connection
+rq==2.9.1   # api.tasks: job queue and worker
+argon2-cffi==23.1.0   # api.auth: password hashes
+itsdangerous==2.2.0   # api.auth.tokens: signed session tokens
+ruptures==1.1.9   # api.ingest.dicom: slab gap detection (KernelCPD)
+click==8.1.8   # api.users CLI
+requests==2.32.3   # api: HTTP calls (also morphometry closure)
+pillow==10.4.0   # api: preview rendering (PIL)
+pydicom==3.0.1   # api.ingest: DICOM reading
+SimpleITK==2.4.0   # api.ingest / image_io
+nibabel==5.3.2   # api.storage / image_io
+matplotlib==3.9.2   # api: preview rendering
+numpy==1.26.4   # everywhere
+
+# --- morphometry/requirements.txt and the transitive closure of everything above ---------------
+annotated-types==0.7.0
+anyio==4.4.0
+argon2-cffi-bindings==21.2.0
+async-timeout==4.0.3
+certifi==2024.8.30
+cffi==1.17.1
+charset-normalizer==3.3.2
+contourpy==1.3.0
+croniter==6.2.2
+cycler==0.12.1
+exceptiongroup==1.2.2
+fonttools==4.53.1
+greenlet==3.5.1
+h11==0.14.0
+idna==3.8
+imageio==2.35.1
+importlib_resources==6.4.5
+joblib==1.4.2
+kiwisolver==1.4.7
+lazy_loader==0.4
+networkx==3.3
+packaging==24.1
+pandas==2.2.3
+platformdirs==4.3.2
+pooch==1.8.2
+pycparser==2.22
+pydantic-core==2.33.1
+pyparsing==3.1.4
+python-dateutil==2.9.0.post0
+python-dotenv==1.1.0
+pytz==2024.2
+pyvista==0.44.1
+scikit-image==0.24.0
+scikit-learn==1.5.1
+scipy==1.14.1
+scooby==0.10.0
+six==1.16.0
+sniffio==1.3.1
+starlette==0.46.1
+threadpoolctl==3.5.0
+tifffile==2024.8.30
+typing_extensions==4.12.2
+typing-inspection==0.4.0
+tzdata==2024.2
+urllib3==2.2.2
+vtk==9.3.1
