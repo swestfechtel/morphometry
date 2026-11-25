@@ -40,3 +40,48 @@ def test_version_endpoint_dev_suffix(runtime, monkeypatch, tmp_path):
     assert body["images_from"] == "1.3.0"
     assert body["images"] == {"nnunet": "n@sha256:a", "torsion": "t@sha256:b"}
     assert set(body) == {"version", "images_from", "git_commit", "dirty", "images"}
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("running", ["0.0.0-dev", "garbage"])
+def test_version_endpoint_non_semver(runtime, monkeypatch, tmp_path, running):
+    """A non-semver MORPH_VERSION (the api Dockerfile default is 0.0.0-dev) is a 200, not a 500."""
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from api import release_manifest as rm
+    from api.main import create_app
+
+    p = tmp_path / "images.json"
+    p.write_text(json.dumps({"1.0.0": {"nnunet": "n@sha256:a", "torsion": "t@sha256:b"}}))
+    monkeypatch.setattr(rm, "MANIFEST_PATH", p)
+    monkeypatch.setenv("MORPH_VERSION", running)
+    monkeypatch.delenv("MORPH_API_NNUNET_IMAGE", raising=False)
+    monkeypatch.delenv("MORPH_API_TORSION_IMAGE", raising=False)
+    runtime.reset()
+    with TestClient(create_app()) as c:
+        r = c.get("/version")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["version"] == running
+    assert body["images_from"] is None
+    assert body["images"] == {"nnunet": "swestfechtel/nnunet_torsion:latest", "torsion": "swestfechtel/torsion:latest"}
+
+
+def test_version_endpoint_corrupt_manifest(runtime, monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from api import release_manifest as rm
+    from api.main import create_app
+
+    p = tmp_path / "images.json"
+    p.write_text("{corrupt")
+    monkeypatch.setattr(rm, "MANIFEST_PATH", p)
+    monkeypatch.setenv("MORPH_VERSION", "1.0.0")
+    runtime.reset()
+    with TestClient(create_app()) as c:
+        assert c.get("/version").status_code == 200
+        assert c.get("/releases").json() == {"releases": []}

@@ -104,6 +104,26 @@ def test_unparseable_manifest_entry_skipped(api, monkeypatch, tmp_path):
     assert rows["A"]["image_versions"]["segmentation"] == ["1.0.0", "1.1.0"]
 
 
+def test_unknown_or_unparseable_version_is_404(api, monkeypatch, tmp_path):
+    """``?version=`` must name a parseable released version: junk is a 404 even if a manifest key."""
+    assert api.get("/examinations/?version=junk").status_code == 404
+    assert api.get("/examinations/?version=9.9.9").status_code == 404
+    p = tmp_path / "bad.json"
+    p.write_text(json.dumps({**MANIFEST, "junk": {"nnunet": N1, "torsion": T10}}))
+    monkeypatch.setattr(rm, "MANIFEST_PATH", p)
+    r = api.get("/examinations/?version=junk")
+    assert r.status_code == 404
+    assert "1.0.0, 1.1.0" in r.text
+
+
+def test_corrupt_manifest_lists_without_500(api, monkeypatch, tmp_path):
+    p = tmp_path / "corrupt.json"
+    p.write_text("{corrupt")
+    monkeypatch.setattr(rm, "MANIFEST_PATH", p)
+    assert ids(api.get("/examinations/")) == ["A", "B", "C", "D", "E"]
+    assert api.get("/examinations/?version=1.0.0").status_code == 404
+
+
 def test_releases_endpoint(runtime, monkeypatch, tmp_path):
     p = tmp_path / "images.json"
     p.write_text(json.dumps(MANIFEST))

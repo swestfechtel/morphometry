@@ -90,3 +90,69 @@ def test_job_tmp_dir_used(runtime, fake_docker_run, monkeypatch, tmp_path):
     from api.tasks.torsion import run_torsion
     run_torsion("ACC1", job_id)
     assert seen and all(m.startswith(str(tmp_path / "jobs")) for m in seen)
+
+
+# --- tolerance: non-semver running versions, unparseable keys, corrupt files ----------------------
+
+
+def test_images_for_strips_suffix():
+    assert rm.images_for("1.4.0-dev", {"1.3.0": E13}) == ("1.3.0", E13)
+    assert rm.images_for("1.3.0-dev", {"1.3.0": E13, "1.2.0": E12}) == ("1.3.0", E13)
+    assert rm.images_for("0.0.0-dev", {"1.3.0": E13}) == (None, {})
+
+
+def test_images_for_garbage_version(caplog):
+    with caplog.at_level(logging.WARNING):
+        assert rm.images_for("garbage", {"1.3.0": E13}) == (None, {})
+    assert any("garbage" in r.message for r in caplog.records)
+
+
+def test_images_for_skips_unparseable_manifest_keys():
+    assert rm.images_for("1.4.0", {"junk": E12, "1.3.0": E13}) == ("1.3.0", E13)
+
+
+@pytest.mark.parametrize("text", ["{not json", "[1, 2]", "\xff\xfe"])
+def test_load_manifest_corrupt_is_empty(tmp_path, caplog, text):
+    p = tmp_path / "images.json"
+    p.write_text(text)
+    with caplog.at_level(logging.ERROR):
+        assert rm.load_manifest(p) == {}
+    assert any(r.levelno == logging.ERROR and "images.json" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("version", ["0.0.0-dev", "garbage"])
+def test_settings_resolve_non_semver_version(manifest, monkeypatch, version):
+    monkeypatch.setattr("api.settings.get_version", lambda: version)
+    s = Settings()
+    assert s.resolved_nnunet_image == "swestfechtel/nnunet_torsion:latest"
+    assert s.resolved_torsion_image == "swestfechtel/torsion:latest"
+
+
+# --- MORPH_API_RELEASE_MANIFEST -------------------------------------------------------------------
+
+
+def test_release_manifest_setting_default_is_none(monkeypatch):
+    monkeypatch.delenv("MORPH_API_RELEASE_MANIFEST", raising=False)
+    s = Settings()
+    assert s.release_manifest is None
+    assert s.manifest_file == rm.MANIFEST_PATH
+
+
+def test_release_manifest_setting_from_env(runtime, manifest, monkeypatch, tmp_path):
+    """The env setting wins over MANIFEST_PATH, for load_manifest() and for Settings' image defaults."""
+    mounted = tmp_path / "mounted.json"
+    mounted.write_text(json.dumps({"1.2.0": E12}))
+    monkeypatch.setenv("MORPH_API_RELEASE_MANIFEST", str(mounted))
+    runtime.reset()  # clear the cached settings
+    assert rm.manifest_path() == mounted
+    assert rm.load_manifest() == {"1.2.0": E12}
+    s = Settings()
+    assert s.release_manifest == mounted
+    assert s.resolved_torsion_image == E12["torsion"]  # get_version() is 1.4.0 -> newest lower 1.2.0
+
+
+def test_release_manifest_unset_uses_manifest_path(runtime, manifest, monkeypatch):
+    monkeypatch.delenv("MORPH_API_RELEASE_MANIFEST", raising=False)
+    runtime.reset()
+    assert rm.manifest_path() == manifest
+    assert rm.load_manifest() == {"1.3.0": E13}

@@ -21,13 +21,15 @@ def _build_version_filter(version: str, stage: str, manifest: dict) -> repositor
     :param stage: ``any``, ``torsion`` or ``segmentation``.
     :param manifest: version -> entry mapping.
     :return: the filter.
-    :raises NotFoundError: for a version that is neither special nor in the manifest (lists the known ones).
+    :raises NotFoundError: for a version that is neither special nor a parseable released version in
+        the manifest (lists the known ones).
     """
     stages = tuple(release_manifest.STAGE_IMAGE) if stage == "any" else (stage,)
     if version in ("unreleased", "none"):
         return repository.VersionFilter(stages=stages, mode=version)
-    if version not in manifest:
-        known = ", ".join(release_manifest.sorted_versions(manifest)) or "none"
+    released = release_manifest.sorted_versions(manifest)  # only parseable MAJOR.MINOR.PATCH keys
+    if version not in released:
+        known = ", ".join(released) or "none"
         raise NotFoundError(f"Unknown version {version}; known versions: {known}")
     return repository.VersionFilter(stages=stages, mode="digest",
                                     digests=release_manifest.stage_digests(version, manifest))

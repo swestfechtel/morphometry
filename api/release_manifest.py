@@ -3,6 +3,13 @@
 ``release/images.json`` maps ``"MAJOR.MINOR.PATCH"`` to ``{"nnunet": ref, "torsion": ref, ...}``
 where each ref is a ``repo@sha256:...`` digest reference. Versions that did not rebuild an
 image (e.g. the gated nnUNet image) are resolved by falling back to the newest lower entry.
+
+Where the file is read from: ``MORPH_API_RELEASE_MANIFEST`` (setting ``release_manifest``) when
+set, else :data:`MANIFEST_PATH` in the source tree. The api image ships no ``release/`` directory
+(an image can never contain its own manifest entry: the entry is written after the image is
+pushed), so production compose bind-mounts the deploy checkout's ``release/images.json`` and points
+the setting at it. A missing file is an empty manifest; an unreadable or corrupt one is logged as
+an error and also treated as empty, so ``/version`` and the examination list never fail on it.
 """
 import json
 import logging
@@ -17,38 +24,77 @@ STAGE_IMAGE = {"segmentation": "nnunet", "torsion": "torsion"}
 
 
 def _parse(version: str) -> tuple[int, int, int]:
-    """Parse ``MAJOR.MINOR.PATCH`` into an int tuple (local, so the api image needs no ``versioning/``)."""
+    """Parse ``MAJOR.MINOR.PATCH`` into an int tuple (local, so the api image needs no ``versioning/``).
+
+    :param version: candidate version string.
+    :return: ``(major, minor, patch)``.
+    :raises ValueError: if ``version`` is not three dot-separated integers.
+    :raises AttributeError: if ``version`` is not a string.
+    """
     major, minor, patch = version.split(".")
     return int(major), int(minor), int(patch)
+
+
+def manifest_path() -> Path:
+    """Path the manifest is read from when no explicit path is given.
+
+    :return: the ``release_manifest`` setting (``MORPH_API_RELEASE_MANIFEST``) if set, else the
+        module-level :data:`MANIFEST_PATH` (looked up at call time, so tests can patch it).
+    """
+    from api.settings import get_settings  # local: api.settings imports this module
+
+    configured = get_settings().release_manifest
+    return MANIFEST_PATH if configured is None else configured
 
 
 def load_manifest(path: Path | None = None) -> dict[str, dict]:
     """Read the release manifest.
 
-    :param path: manifest file; defaults to the module-level ``MANIFEST_PATH`` (looked up at call time).
-    :return: version -> image-entry mapping; ``{}`` if the file does not exist.
+    :param path: manifest file; defaults to :func:`manifest_path`.
+    :return: version -> image-entry mapping; ``{}`` if the file does not exist, and ``{}`` (with an
+        error logged) if it cannot be read or is not a JSON object.
     """
-    path = MANIFEST_PATH if path is None else path
+    path = manifest_path() if path is None else Path(path)
     if not path.exists():
         return {}
-    return json.loads(path.read_text())
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.error("cannot read release manifest %s (%s); treating it as empty", path, exc)
+        return {}
+    if not isinstance(data, dict):
+        logger.error("release manifest %s is not a JSON object; treating it as empty", path)
+        return {}
+    return data
 
 
 def images_for(version: str, manifest: dict) -> tuple[str | None, dict]:
     """Find the image entry that applies to ``version``.
 
+    A pre-release / build suffix (``1.4.0-dev``, the api Dockerfile's default ``0.0.0-dev``) is
+    stripped before comparing; a version that is still not ``MAJOR.MINOR.PATCH`` matches nothing
+    (logged as a warning) instead of raising.
+
     :param version: running release version, e.g. ``"1.4.0"``.
     :param manifest: version -> entry mapping as returned by :func:`load_manifest`.
     :return: ``(images_from, entry)``: the entry for ``version`` if present, else the entry of
-        the newest version lower than it, else ``(None, {})``.
+        the newest version lower than it (unparseable manifest keys are skipped), else
+        ``(None, {})``.
     """
     if version in manifest:
         return version, manifest[version]
-    target = _parse(version)
-    lower = [v for v in manifest if _parse(v) < target]
+    base = version.split("-", 1)[0].split("+", 1)[0] if isinstance(version, str) else version
+    try:
+        target = _parse(base)
+    except (ValueError, AttributeError):
+        logger.warning("running version %r is not MAJOR.MINOR.PATCH; no release manifest entry applies", version)
+        return None, {}
+    if base in manifest:
+        return base, manifest[base]
+    lower = [v for v in sorted_versions(manifest) if _parse(v) < target]
     if not lower:
         return None, {}
-    best = max(lower, key=_parse)
+    best = lower[-1]
     return best, manifest[best]
 
 

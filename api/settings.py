@@ -13,7 +13,7 @@ from typing import Annotated
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from api import release_manifest
+from api import release_manifest as _manifest
 from api.version import get_version
 
 logger = logging.getLogger("api")
@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     nnunet_image: str | None = None
     torsion_image: str | None = None
     docker_shm_size: str = "32G"
+    #: Release manifest (``release/images.json``) to read. ``None`` = the source tree's
+    #: ``release/images.json`` (venv / dev). The api image ships no ``release/``, so production
+    #: compose bind-mounts the deploy checkout's file and sets ``MORPH_API_RELEASE_MANIFEST``.
+    release_manifest: Path | None = None
 
     #: Parent directory for per-job scratch dirs (``None`` = system temp). Created on use.
     job_tmp_dir: Path | None = None
@@ -101,12 +105,20 @@ class Settings(BaseSettings):
         """The DB URL, defaulting to a SQLite file inside ``storage_dir``."""
         return self.database_url or f"sqlite:///{self.storage_dir / 'api.db'}"
 
+    @property
+    def manifest_file(self) -> Path:
+        """The release manifest this instance reads.
+
+        :return: ``release_manifest`` if set, else ``api.release_manifest.MANIFEST_PATH``.
+        """
+        return _manifest.MANIFEST_PATH if self.release_manifest is None else self.release_manifest
+
     def _resolve_image(self, key: str, override: str | None) -> str:
         """Env override, else manifest entry for the running version, else ``:latest`` (warns once)."""
         global _warned_latest
         if override:
             return override
-        _, entry = release_manifest.images_for(get_version(), release_manifest.load_manifest())
+        _, entry = _manifest.images_for(get_version(), _manifest.load_manifest(self.manifest_file))
         if entry.get(key):
             return entry[key]
         repo = {"nnunet": "swestfechtel/nnunet_torsion", "torsion": "swestfechtel/torsion"}[key]
