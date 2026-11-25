@@ -77,7 +77,7 @@ def _segment(examination_id: str) -> None:
         source_paths = dict(ex.source_paths)
 
     masks: dict[str, Segmentation] = {}
-    with tempfile.TemporaryDirectory() as tempdir:
+    with tempfile.TemporaryDirectory(dir=settings.job_tempdir_parent()) as tempdir:
         for region in ("hip", "knee", "ankle"):
             (Path(tempdir) / region / "input").mkdir(parents=True)
             (Path(tempdir) / region / "output").mkdir(parents=True)
@@ -118,7 +118,7 @@ def _align(examination_id: str) -> None:
         ex = repository.get_examination(session, examination_id)
         mask_paths = dict(ex.mask_paths or {})
 
-    with tempfile.TemporaryDirectory() as tempdir:
+    with tempfile.TemporaryDirectory(dir=settings.job_tempdir_parent()) as tempdir:
         for region in ("hip", "knee", "ankle"):
             store.load_segmentation(mask_paths[region]).save_image(f"{tempdir}/{region}_segmentation.nii.gz")
 
