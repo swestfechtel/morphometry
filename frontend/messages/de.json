@@ -131,7 +131,16 @@
     "title": "Untersuchungen",
     "detailsTitle": "Untersuchungsdetails",
     "filterTorsionMr": "MRT-Torsion",
-    "filterClear": "Filter zurücksetzen"
+    "filterClear": "Filter zurücksetzen",
+    "filterVersion": "Release-Version",
+    "filterStage": "Stufe",
+    "versionAll": "Alle Versionen",
+    "versionUnreleased": "Nicht veröffentlichte Builds",
+    "versionNone": "Vor der Versionierung",
+    "stageAny": "Beliebige Stufe",
+    "stageTorsion": "Torsion",
+    "stageSegmentation": "Segmentierung",
+    "versionError": "Filtern nach Version nicht möglich: {message}"
   },
   "list": {
     "intro": "Nachfolgend finden Sie eine Liste aller <u>{description}</u> Untersuchungen, die zuvor an das System gesendet wurden.",
@@ -142,6 +151,7 @@
       "examinationDate": "Untersuchungsdatum",
       "examinationTime": "Untersuchungszeit",
       "status": "Status",
+      "versions": "Versionen",
       "actions": "Aktionen"
     },
     "filters": {
@@ -152,6 +162,7 @@
       "time": "Nach Zeit filtern",
       "status": "Nach Status filtern"
     },
+    "versionStage": {"torsion": "Torsion", "segmentation": "Segmentierung"},
     "actions": {
       "view": "Untersuchung anzeigen",
       "selectSeries": "Serie auswählen",
