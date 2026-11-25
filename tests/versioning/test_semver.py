@@ -11,7 +11,7 @@ def test_parse_version_ok():
     assert str(parse_version("1.2.3")) == "1.2.3"
 
 
-@pytest.mark.parametrize("text", ["1.2", "v1.2.0", "1.2.0-rc1", ""])
+@pytest.mark.parametrize("text", ["1.2", "v1.2.0", "1.2.0-rc1", "", "1.2.3\n", "١.٢.٣"])
 def test_parse_version_rejects(text):
     with pytest.raises(ValueError, match="invalid version"):
         parse_version(text)
