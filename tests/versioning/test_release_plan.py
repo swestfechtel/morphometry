@@ -120,6 +120,45 @@ def test_plan_retags_unchanged_nnunet(second):
     assert by_key["nnunet"].from_ref == MANIFEST_100["1.0.0"]["nnunet"]
     assert by_key["frontend"].from_ref == MANIFEST_100["1.0.0"]["frontend"]
     assert "morphometry/shared.py" in by_key["torsion"].reason
+    # api imports shared.py too, so it is built because it changed (not merely "always built").
+    assert by_key["api"].from_ref is None
+    assert "morphometry/shared.py" in by_key["api"].reason
+
+
+def test_plan_torsion_only_change_rebuilds_api(initial):
+    """A change only the torsion image sees still rebuilds api, which bakes the model-image refs.
+
+    ``morphometry/femur.py`` is in the torsion closure but not in api's (api imports only
+    ``morphometry.shared``); retagging the 1.0.0 api image would keep launching 1.0.0's torsion
+    image and report version 1.0.0.
+    """
+    from versioning.images import IMAGES
+
+    assert "morphometry/femur.py" in IMAGES["torsion"].gated(initial)
+    assert "morphometry/femur.py" not in IMAGES["api"].gated(initial)
+    run_git(initial, "tag", "-a", "v1.0.0", "-m", "1.0.0")
+    _write_all(initial, {"morphometry/femur.py": "from morphometry import shared\n\ndef f():\n    return 2\n",
+                         "VERSION": "1.0.1\n", "CHANGELOG.md": CHANGELOG_101})
+    plan = plan_release(initial, "1.0.1", _head(initial), _remote(), MANIFEST_100)
+    assert _actions(plan) == {"nnunet": "retag", "torsion": "build", "api": "build", "frontend": "retag"}
+    by_key = {a.key: a for a in plan}
+    assert by_key["api"].from_ref is None
+    assert "always built" in by_key["api"].reason
+    assert by_key["torsion"].reason == "changed: morphometry/femur.py"
+
+
+def test_plan_api_resume_skips_own_build(initial):
+    """The resume ``skip`` still applies to the always-built api image."""
+    run_git(initial, "tag", "-a", "v1.0.0", "-m", "1.0.0")
+    _write_all(initial, {"morphometry/femur.py": "def f():\n    return 3\n", "VERSION": "1.0.1\n", "CHANGELOG.md": CHANGELOG_101})
+    head = _head(initial)
+    remote = _remote(existing_tags={"nnunet": None, "torsion": None, "api": head, "frontend": None})
+    assert _actions(plan_release(initial, "1.0.1", head, remote, MANIFEST_100))["api"] == "skip"
+    remote = _remote(existing_tags={"nnunet": None, "torsion": None, "api": "0" * 40, "frontend": None},
+                     existing_digests={"api": _digest("c")})
+    with pytest.raises(ReleaseRefused) as info:  # a retag-shaped resume never applies to api
+        plan_release(initial, "1.0.1", head, remote, MANIFEST_100)
+    assert any(m.startswith("api:") for m in info.value.messages)
 
 
 def test_plan_retag_without_manifest_entry_refused(second):

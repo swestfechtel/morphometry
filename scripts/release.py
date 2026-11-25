@@ -23,7 +23,7 @@ gathers the state it needs and executes the plan:
    absence again, ``docker push``) or ``retag`` (``docker buildx imagetools create``:
    registry-side, nothing downloaded); ``skip`` reuses the existing tag. Read back the pushed
    digest. The api image is built with the nnunet/torsion digests of this release, which is why
-   those two come first.
+   those two come first; it is therefore built on every release, never retagged.
 5. Write ``release/images.json[<version>]``, commit ``release: v<version>``, create the
    annotated tag ``v<version>`` (message: the changelog section, kept verbatim), push ``main``
    and the tag.

@@ -13,8 +13,12 @@ Per image the action is:
   ``retag`` would have used, or (initial release only, with ``adopt``) it was pushed by hand
   before versioning existed and carries no revision label.
 - ``build`` — the image's gated files changed since the last release tag (or there is none).
+  The **api image is always built**: it bakes this release's version and the nnunet/torsion
+  image references in at build time (``api/Dockerfile`` build args), so retagging the previous
+  api image would make release N+1's stack launch release N's model images and report N's
+  version. Only the resume ``skip`` below applies to it.
 - ``retag`` — unchanged: add ``:<version>`` to the previous release's digest, read from
-  ``release/images.json`` (no rebuild, no upload).
+  ``release/images.json`` (no rebuild, no upload). Never for ``api``.
 
 The anti-goal is a ``:<version>`` tag whose digest changes, so any other existing tag refuses.
 """
@@ -156,6 +160,9 @@ def plan_release(
 ) -> list[ImageAction]:
     """Decide, per image, whether the release builds, retags or skips it.
 
+    The api image is always built (never retagged), because it bakes this release's version and
+    model-image references; see the module docstring.
+
     :param repo: path of the git repository.
     :param version: version being released (must equal the committed ``VERSION``).
     :param head_sha: full sha of the commit being released.
@@ -190,6 +197,10 @@ def plan_release(
         # 1. What the release would do if Hub had no :<version> yet.
         if key in changed:
             action = ImageAction(key, "build", None, f"changed: {', '.join(changed[key])}")
+        elif key == "api":
+            # Never retagged: the image bakes this release's version and model-image refs.
+            action = ImageAction(key, "build", None, "always built: bakes this release's version and "
+                                 "nnunet/torsion image references")
         else:
             from_ref = previous.get(key)
             parsed = parse_digest_ref(from_ref) if from_ref else None
