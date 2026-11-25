@@ -41,6 +41,24 @@ The API base URL is read from `NEXT_PUBLIC_MODEL_API` (default
 `http://localhost:8000`). Copy `.env.example` to `.env.local` to override.
 `NEXT_PUBLIC_*` values are inlined at build time, so rebuild after changing it.
 
+`MODEL_API_INTERNAL` (e.g. `http://api:8000`) is a **runtime** variable, not
+inlined at build time: server-side rendering uses it to reach the API from inside
+the frontend container, where `localhost:8000` is the container itself. It never
+affects the browser, which derives `<page hostname>:<NEXT_PUBLIC_MODEL_API_PORT>`
+(default 8000); building the production image with a different API port therefore
+needs `NEXT_PUBLIC_MODEL_API_PORT` set at build time. The production image
+(`frontend/Dockerfile`, Next.js `output: "standalone"`) is built and released only
+by `scripts/release.py`; see [`../docs/releasing.md`](../docs/releasing.md) and
+[`../deploy/README.md`](../deploy/README.md).
+
+## Version filter
+
+The examinations list has a version dropdown (released versions from `GET /releases`, plus "unreleased" and
+"before versioning") and a stage selector (any / segmentation / torsion). Both are URL query parameters
+(`?version=…&stage=…`), so a filtered view is linkable; each row shows the release versions of its torsion and
+segmentation images. Results are matched by the recorded image digest, so a result from another version that ran
+the identical image also matches. The strings exist in German and English.
+
 When running against a local API, set the API's CORS to allow this origin:
 `MORPH_API_CORS_ALLOW_ORIGINS=http://localhost:3000`. Users sign in at `/login`
 (username/password); create accounts with `python -m api.users`. Auth is only

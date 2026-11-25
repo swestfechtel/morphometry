@@ -6,6 +6,11 @@ whole-leg CT, plus a FastAPI service and batch-processing scripts.
 
 ## Layout
 
+- **Versioning and deployment** — `VERSION` / `CHANGELOG.md` (one semver for
+  the four docker images), `versioning/` (the check and release logic),
+  `scripts/release.py` (the only build/push path), `scripts/check_version.py`,
+  `release/images.json` (digests per release) and `deploy/` (production compose
+  stack). See [`docs/releasing.md`](docs/releasing.md).
 - **`morphometry/`** — the analysis library.
   - **`morphometry/measurements/`** — all public `calculate_*` measurement
     functions, one submodule per region (`hip`, `femur`, `knee`, `tibia`,
@@ -129,6 +134,18 @@ Tests skip cleanly when sample data is absent. Data paths can be overridden via
 `needs_dfg_knees`), `MORPH_DFG_KNEES_CURRENT_DIR` (the current label set, for the
 cartilage deformation characterization). The data-requiring markers are `needs_augsburg`,
 `needs_augsburg_reader_study`, `needs_nako`, `needs_ct` and `needs_dfg_knees`.
+
+## Versions, releases and production
+
+The web app ships as four docker images (`nnunet_torsion`, `torsion`,
+`morphometry_api`, `morphometry_frontend`) sharing one semantic version
+(`VERSION`). Every examination records which image ran each stage, and results
+can be found by version (`GET /examinations?version=`, the UI's version filter).
+Releases are made only by `scripts/release.py`; the rules, the changelog format
+and the 1.0.0 bootstrap are in [`docs/releasing.md`](docs/releasing.md).
+Production runs from `deploy/compose.yml` (`MORPH_VERSION` selects the release;
+see [`deploy/README.md`](deploy/README.md)); the sections below describe the
+development setup.
 
 ## Running the stack
 

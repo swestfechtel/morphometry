@@ -22,7 +22,8 @@ curl localhost:8000/version             # the running release and its model imag
 ```
 
 `DOCKER_GID` is `getent group docker | cut -d: -f3`. The UI is on port 3000, the API on 8000
-(`MORPH_API_PORT` / `MORPH_FRONTEND_PORT` change the host ports). Create a user with
+(`MORPH_API_PORT` / `MORPH_FRONTEND_PORT` change the host ports).
+**Leave `MORPH_API_PORT` alone**: the browser calls the API at `<same host>:8000` unless the frontend image was built with `NEXT_PUBLIC_MODEL_API_PORT`, so a different published port breaks the UI. Create a user with
 `docker compose -f deploy/compose.yml --env-file deploy/.env exec api python -m api.users create <name>`.
 
 ## Upgrade and roll back

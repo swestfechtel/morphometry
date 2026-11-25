@@ -420,8 +420,8 @@ compose, GitHub Actions, Next.js 15 standalone output, Node 22.
     `existing_tags[k]` not in `(None, head_sha)`. An image whose `:<version>` exists with revision ==
     `head_sha` → `skip` (resume). Else changed since last tag (or no last tag) → `build`; else `retag`.
     `retag` with no previous manifest entry for that image → refusal.
-  - `scripts/release.py` — `main(argv) -> int`; flags `--dry-run`, `--checkpoints-dir`
-    (default `api/docker/nnunet_torsion/checkpoints`). Gathers `RemoteState` (`docker manifest inspect -v`
+  - `scripts/release.py` — `main(argv) -> int`; flags `--dry-run`, `--adopt`. Checkpoint
+    verification always uses `api/docker/nnunet_torsion/checkpoints` (the files `docker build` bakes in; no option). Gathers `RemoteState` (`docker manifest inspect -v`
     + `docker buildx imagetools inspect --format '{{json .Image.Config.Labels}}'` for labels; `git
     ls-remote --tags origin`), prints the plan, and unless `--dry-run`: verifies checkpoints if nnUNet is
     `build`; for each action in `IMAGES` order: `build` → `docker build` with the labels and build args
@@ -458,6 +458,11 @@ compose, GitHub Actions, Next.js 15 standalone output, Node 22.
 
 This task is a checklist the implementer **prepares and hands to the user**; it is not executed by an agent.
 
+- **Note (decided during review):** only **nnunet** is adopted for 1.0.0 (`--adopt nnunet`). **torsion must be
+  BUILT**: its closure changed since the `2d1fc91` image (lazy cartilage re-exports and the head-line
+  antetorsion commits). `checkpoints.sha256` must be committed **BEFORE** the `v1.0.0` tag: it is a gated
+  nnunet path, so committing it later would force a 79.5 GB nnunet rebuild for 1.0.1.
+  Verification always uses `api/docker/nnunet_torsion/checkpoints` (`--checkpoints-dir` was removed).
 - [ ] **Step 1:** Generate `api/docker/nnunet_torsion/checkpoints.sha256` with `write_manifest`
   (~32 GB hashed); commit it (`chore: checkpoint manifest`).
 - [ ] **Step 2: Decide torsion 1.0.0 = rebuild or reuse.** Hash `/app/morphometry` in the local

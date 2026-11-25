@@ -196,6 +196,13 @@ cd frontend && npm install && cd ..
 
 ### 2. Build (or pull) the two model images
 
+For development only. Released images are built and pushed solely by
+`scripts/release.py` ([`docs/releasing.md`](docs/releasing.md)); without
+`MORPH_API_NNUNET_IMAGE` / `MORPH_API_TORSION_IMAGE` the worker runs the
+digest-pinned images of the current release from `release/images.json`
+(falling back to `:latest` with a warning if there is no entry). A locally
+built image is run and recorded as `released: false`.
+
 ```bash
 # GPU segmentation image; checkpoints must exist under
 # api/docker/nnunet_torsion/checkpoints/{hip,knee,ankle}/ before building
@@ -205,9 +212,10 @@ cd api/docker/nnunet_torsion && docker build -t swestfechtel/nnunet_torsion:late
 cd morphometry && docker build -t swestfechtel/torsion:latest . && cd -
 ```
 
-The tags are configurable (`MORPH_API_NNUNET_IMAGE`, `MORPH_API_TORSION_IMAGE`).
-Rebuild the torsion image whenever the measurement code in `morphometry/`
-changes — the worker runs whatever is in the image, not the checkout.
+The refs are configurable (`MORPH_API_NNUNET_IMAGE`, `MORPH_API_TORSION_IMAGE`).
+Rebuild a locally built torsion image whenever the measurement code in
+`morphometry/` changes — the worker runs whatever is in the image, not the
+checkout. For a release, bump `VERSION` and the changelog instead.
 
 ### 3. Configure
 
@@ -258,6 +266,27 @@ python -m api.users delete alice
 
 The CLI uses the same `MORPH_API_*` settings, hence the same database, as the API.
 
+### Production deployment (compose)
+
+`deploy/compose.yml` runs redis, the `api`, the `worker` and the `frontend`
+from the released images of one version:
+
+```bash
+cp deploy/.env.example deploy/.env      # MORPH_VERSION, MORPH_DATA_DIR, DOCKER_GID, secrets
+docker compose -f deploy/compose.yml --env-file deploy/.env up -d
+curl localhost:8000/version
+```
+
+`MORPH_DATA_DIR` is bind-mounted at the **same absolute path** in the
+containers, and the worker's job scratch dirs live under it
+(`MORPH_API_JOB_TMP_DIR`), because the worker starts the model containers
+through the host's docker socket and the host daemon resolves their `-v` paths.
+Upgrade or roll back by changing `MORPH_VERSION` and re-running `up -d`. Do not
+change `MORPH_API_PORT` without building the frontend image with a matching
+`NEXT_PUBLIC_MODEL_API_PORT` (the browser derives the API URL as
+`<same host>:8000`). Details: [`deploy/README.md`](deploy/README.md),
+[`docs/releasing.md`](docs/releasing.md).
+
 ### Production notes
 
 - Set `MORPH_API_AUTH_REQUIRED=true`, an explicit `MORPH_API_SECRET_KEY`
@@ -285,8 +314,10 @@ The CLI uses the same `MORPH_API_*` settings, hence the same database, as the AP
 | `MORPH_API_GPU_QUEUE_NAME` | `gpu` | RQ queue name |
 | `MORPH_API_JOB_TIMEOUT` | `3600` | Seconds, per RQ job and per `docker run` |
 | `MORPH_API_ORTHANC_DEBOUNCE_SECONDS` | `10` | Quiet period before an Orthanc series is finalised |
-| `MORPH_API_NNUNET_IMAGE` | `swestfechtel/nnunet_torsion:latest` | Segmentation image |
-| `MORPH_API_TORSION_IMAGE` | `swestfechtel/torsion:latest` | Torsion image |
+| `MORPH_API_NNUNET_IMAGE` | digest from `release/images.json` | Segmentation image. Unset = the manifest entry of the running `VERSION` (or the newest released one); `:latest` with a warning if there is none. Env wins. |
+| `MORPH_API_TORSION_IMAGE` | digest from `release/images.json` | Torsion image, same resolution |
+| `MORPH_API_JOB_TMP_DIR` | system temp | Parent of per-job scratch dirs; created on use. Must be a path the host docker daemon sees identically (compose sets `<MORPH_DATA_DIR>/_jobs`) |
+| `MORPH_API_SELF_IMAGE` | unset | Ref of the api image itself, recorded as `api_image` in provenance (compose sets it; unset on the venv) |
 | `MORPH_API_DOCKER_SHM_SIZE` | `32G` | `--shm-size` for both containers |
 | `MORPH_API_ENCODE_POOL_SIZE` | OS default | Worker pool for legacy PNG slice rendering |
 | `MORPH_API_API_KEYS` | empty | Comma-separated machine keys (`X-API-Key`) |
@@ -308,6 +339,7 @@ Orthanc plugin (environment of the Orthanc process): `MORPH_API_UPLOAD_URL`,
 | `NEXT_PUBLIC_MODEL_API` | unset | Explicit API base URL. Set **only** when the API is on a different host than the UI. |
 | `NEXT_PUBLIC_MODEL_API_PORT` | `8000` | Port used when the API URL is derived from the page's hostname |
 | `NEXT_PUBLIC_API_KEY` | unset | Optional machine key sent alongside the user token (normally unset) |
+| `MODEL_API_INTERNAL` | unset | **Runtime** (not inlined) API base URL for server-side rendering, e.g. `http://api:8000` in compose. Never affects the browser |
 
 API URL resolution (`frontend/app/server_config.ts`): explicit
 `NEXT_PUBLIC_MODEL_API` → in the browser, *same hostname as the page* on the API
@@ -342,9 +374,11 @@ the Cornerstone NIfTI loader cannot always set headers.
 | Method & path | Auth | Purpose | Response |
 |---|---|---|---|
 | `GET /health` | open | Liveness | `{"status":"ok"}` |
+| `GET /version` | open | Running version and the model images the worker will use | `{version, images_from, git_commit, dirty, images:{nnunet, torsion}}`; `version` is `X.Y.Z-dev` when `VERSION` is ahead of the manifest |
+| `GET /releases` | open | Released versions, newest first (feeds the UI's version filter) | `{"releases": [{version, date, images:{nnunet, torsion, api, frontend}}]}` |
 | `POST /auth/login` | open | Body `{username, password}` | `{access_token, username, expires_in, …}` |
 | `GET /auth/me` | user token | Current user | `{username, is_active}` |
-| `GET /examinations/` | ✓ | List all examinations | `{"examinations": [Summary…]}` |
+| `GET /examinations/` | ✓ | List examinations; optional `?version=<X>&stage=any\|torsion\|segmentation`. `version` is a release (matched by the image digest recorded per stage), `unreleased` (local/unknown image) or `none` (no provenance); unknown version → 404 | `{"examinations": [Summary…]}` |
 | `GET /examinations/{id}` | ✓ | Detail (discriminated by `type`) | `TorsionDetail` or `PendingDetail` |
 | `PATCH /examinations/{id}` | ✓ | Body `{landmarks?, status?}` | `{"status":"updated"}` |
 | `DELETE /examinations/{id}` | ✓ | Delete row + files | 205, empty body |
@@ -375,7 +409,9 @@ Cornerstone loader decides whether to gunzip from the URL suffix alone.
 // ExaminationSummary (list entries; also the base of both detail types)
 { "accession_number": "0003420100", "patient_name": "Anonymised",
   "study_date": "…", "study_time": "…", "study_description": "…",
-  "status": "processed", "active_job_id": null }
+  "status": "processed", "active_job_id": null,
+  // release versions whose image equals the one each stage ran ([] if unreleased / none)
+  "image_versions": { "segmentation": ["1.0.0"], "torsion": ["1.0.0", "1.1.0"] } }
 
 // PendingDetail
 { …summary, "type": "pending",
@@ -389,9 +425,16 @@ Cornerstone loader decides whether to gunzip from the URL suffix alone.
                "femoral_torsion_left_murphy": 0, "femoral_torsion_right_murphy": 0,
                "tibial_torsion_left": 0, "tibial_torsion_right": 0 },
   "landmarks": { … see Results & landmark format … },
-  "image": [], "segmentation": [] }   // legacy base64 PNG slices
+  "image": [], "segmentation": [],    // legacy base64 PNG slices
+  // per stage, written by that stage's task only (null before versioning / never run)
+  "provenance": { "torsion": { "api_version": "1.0.0", "image": "swestfechtel/torsion@sha256:…",
+                               "digest": "sha256:…", "released": true, "api_image": null,
+                               "git_commit": "…", "dirty": false, "ran_at": "…" } } }
 ```
 
+Re-running a stage overwrites only its own provenance entry; a torsion entry
+older than its segmentation entry is visible, not marked stale. See
+[`docs/releasing.md`](docs/releasing.md) for finding results by version.
 Enumerations (`api/schemas/enums.py`):
 
 - examination `status`: `pending_selection`, `unprocessed`, `running`,
@@ -650,8 +693,10 @@ npm run lint
   z-spacing and must be re-ingested from the original DICOM.
 - **Legacy data**: `python scripts/migrate_pickles.py` imports old
   `api/data/*.pkl` exams.
-- **Model updates**: rebuild and re-tag the docker image. The worker picks up
-  the new image on its next job, but existing results are not recomputed.
+- **Model updates**: ship a new release (`docs/releasing.md`), or for a local
+  image rebuild it. The worker picks up the new image on its next job, but
+  existing results are not recomputed; their `provenance` keeps naming the image
+  that produced them.
 
 ---
 
