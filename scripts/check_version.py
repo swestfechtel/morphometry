@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from versioning.check import check  # noqa: E402
+from versioning.check import check, head_version  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
         print(problem)
     if problems:
         return 1
-    print(f"version check ok ({(args.repo / 'VERSION').read_text().strip()})")
+    print(f"version check ok ({head_version(args.repo)})")
     return 0
 
 

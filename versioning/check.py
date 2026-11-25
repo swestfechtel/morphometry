@@ -92,7 +92,7 @@ def _pin_violations(repo: Path, head_ref: str) -> list[str]:
 
     :param repo: path of the git repository.
     :param head_ref: commit to read the files from.
-    :return: one message per package whose pin differs from the root pin.
+    :return: one message per package that is missing from the root file or pinned differently.
     """
     root_text = _show(repo, head_ref, "requirements.txt")
     if root_text is None:
@@ -104,12 +104,23 @@ def _pin_violations(repo: Path, head_ref: str) -> list[str]:
         if text is None:
             continue
         for name, version in sorted(parse_pins(text).items()):
-            # Packages the root file does not list (the API's own dependencies) are unconstrained.
-            if name in root and root[name] != version:
+            if name not in root:
+                problems.append(f"{rel} pins {name}=={version}, which is not pinned in requirements.txt")
+            elif root[name] != version:
                 problems.append(
                     f"{rel} pins {name}=={version} but requirements.txt pins {name}=={root[name]}"
                 )
     return problems
+
+
+def head_version(repo: Path, head_ref: str = "HEAD") -> str:
+    """Read ``VERSION`` as committed at a ref.
+
+    :param repo: path of the git repository.
+    :param head_ref: commit to read from, default ``HEAD``.
+    :return: the stripped file content, or ``""`` if the file is absent.
+    """
+    return (_show(repo, head_ref, "VERSION") or "").strip()
 
 
 def check(repo: Path, head_ref: str = "HEAD") -> list[str]:
@@ -135,7 +146,7 @@ def check(repo: Path, head_ref: str = "HEAD") -> list[str]:
         return problems
 
     try:
-        tag = last_release_tag(repo)
+        tag = last_release_tag(repo, head_ref)
     except RuntimeError as exc:
         return problems + [str(exc)]
     last = parse_version(tag[1:]) if tag else None

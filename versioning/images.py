@@ -21,12 +21,12 @@ Every gated set is filtered to the files tracked at the ref examined, so a file 
 has not created yet (e.g. ``api/Dockerfile``) is simply absent.
 """
 import os
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from versioning._git import env_without_git_overrides as _env_without_git_overrides, git
 from versioning.closure import import_closure
 
 #: Entry point of the torsion image; its import closure is the image's gated code.
@@ -41,27 +41,12 @@ def _git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
 
     :param repo: working directory of the repository.
     :param args: git sub-command and arguments.
-    :param env: full environment for the subprocess, or ``None`` to inherit the current one.
+    :param env: full environment for the subprocess; default: the current one without the
+        variables that redirect git (see :mod:`versioning._git`).
     :return: standard output, unstripped (``-z`` output keeps its NUL separators).
     :raises subprocess.CalledProcessError: if git exits non-zero.
     """
-    return subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True, env=env
-    ).stdout
-
-
-def _env_without_git_overrides() -> dict[str, str]:
-    """The current environment minus variables that redirect git to another repository.
-
-    Git exports an absolute ``GIT_DIR`` (and possibly ``GIT_WORK_TREE`` / ``GIT_INDEX_FILE``)
-    to hooks; left in place they would make ``git`` run in ``root`` answer for the hook's
-    repository instead of the directory asked about.
-
-    :return: a copy of ``os.environ`` without ``GIT_DIR``, ``GIT_WORK_TREE``,
-        ``GIT_INDEX_FILE``, ``GIT_COMMON_DIR`` and ``GIT_PREFIX``.
-    """
-    overrides = {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX"}
-    return {k: v for k, v in os.environ.items() if k not in overrides}
+    return git(repo, *args, env=env).stdout
 
 
 def tracked_files(root: Path) -> set[str]:
@@ -79,9 +64,7 @@ def tracked_files(root: Path) -> set[str]:
     """
     root = Path(root).resolve()
     env = _env_without_git_overrides()
-    top = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"], cwd=root, capture_output=True, text=True, env=env
-    )
+    top = git(root, "rev-parse", "--show-toplevel", env=env, check=False)
     if top.returncode == 0 and Path(top.stdout.strip()).resolve() == root:
         return {p for p in _git(root, "ls-files", "-z", env=env).split("\0") if p}
     files = set()
@@ -118,7 +101,7 @@ def export_ref(repo: Path, ref: str, dest: Path) -> None:
     dest = Path(dest).resolve()
     dest.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
-        env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
+        env = {**_env_without_git_overrides(), "GIT_INDEX_FILE": str(Path(tmp) / "index")}
         _git(repo, "read-tree", f"{ref}^{{tree}}", env=env)
         _git(repo, "checkout-index", "--all", f"--prefix={dest}/", env=env)
 

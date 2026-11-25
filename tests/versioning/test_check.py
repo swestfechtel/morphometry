@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from tests.versioning.conftest import run_git
 from versioning.check import GOLDEN_ALLOWLIST, check
+from versioning.semver import last_release_tag
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "check_version.py"
 _spec = importlib.util.spec_from_file_location("check_version", _SCRIPT)
@@ -153,12 +154,13 @@ def test_malformed_version(released, text):
 
 
 def test_shallow_unreachable_tags(git_repo):
+    main_branch = run_git(git_repo, "symbolic-ref", "--short", "HEAD")
     run_git(git_repo, "checkout", "-q", "--orphan", "other")
     _write(git_repo, "VERSION", "1.0.0\n")
     run_git(git_repo, "add", "-A")
     run_git(git_repo, "commit", "-q", "-m", "orphan")
     run_git(git_repo, "tag", "v1.0.0")
-    run_git(git_repo, "checkout", "-q", "-f", "master" if "master" in run_git(git_repo, "branch", "--list", "master") else "main")
+    run_git(git_repo, "checkout", "-q", "-f", main_branch)
     _write(git_repo, "VERSION", "1.0.0\n")
     _write(git_repo, "CHANGELOG.md", CHANGELOG_100)
     run_git(git_repo, "add", "-A")
@@ -173,3 +175,31 @@ def test_cli_exit_codes(released, capsys):
     _commit(released, **{"frontend|app|x.ts": "export const x = 2;\n"})
     assert main(["--repo", str(released)]) == 1
     assert "must be greater" in capsys.readouterr().out
+
+
+def test_tag_reachable_from_head_ref_not_head(released):
+    """``head_ref`` selects the tag search: a tag only reachable from it is found (and used)."""
+    run_git(released, "checkout", "-q", "-b", "feature")
+    _commit(released, **{"frontend|app|x.ts": "export const x = 2;\n", "VERSION": "1.0.1\n",
+                         "CHANGELOG.md": "## [1.0.1] - 2026-11-26\n\n- frontend: x.\n\n" + CHANGELOG_100})
+    run_git(released, "tag", "v1.0.1")
+    run_git(released, "checkout", "-q", "-")
+    # HEAD (the released commit) reaches only v1.0.0; the feature tip reaches v1.0.1.
+    assert last_release_tag(released) == "v1.0.0"
+    assert last_release_tag(released, "feature") == "v1.0.1"
+    assert check(released, "feature") == []
+
+
+def test_pin_missing_from_root(released):
+    _commit(released, **{"api|requirements.txt": "NumPy==1.26.4\nfastapi==0.1.0\n"})
+    problems = check(released)
+    assert any("api/requirements.txt" in p and "fastapi" in p and "not pinned" in p for p in problems)
+
+
+def test_every_torsion_golden_is_allow_listed():
+    """A new torsion/knee-rotation golden must not escape the MINOR-bump rule."""
+    golden_dir = Path(__file__).resolve().parents[1] / "golden"
+    found = {f"tests/golden/{p.name}" for pattern in ("*torsion*.json", "knee_rotation*.json")
+             for p in golden_dir.glob(pattern)}
+    assert found and found <= set(GOLDEN_ALLOWLIST)
+    assert all((golden_dir.parent.parent / rel).is_file() for rel in GOLDEN_ALLOWLIST)
