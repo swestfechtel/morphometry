@@ -143,20 +143,19 @@ def test_closure_ignores_dynamic_import_of_other_packages(tmp_path):
 
 
 def test_real_torsion_closure():
-    """The real torsion entry point reaches the measurement code but not the deformation research code.
+    """The real torsion entry point reaches the measurement code but neither cartilage nor deformation code.
 
-    ``morphometry/cartilage/thickness.py`` *is* in the closure, and correctly so: importing
-    ``morphometry.measurements.femur`` runs ``morphometry/measurements/__init__.py``, which
-    imports ``measurements.cartilage`` → ``cartilage.thickness``. (Cross-checked against
-    ``sys.modules`` after running compute_torsion.py's imports: identical module sets.)
-    The cartilage deformation-map modules are imported by nothing on that path.
+    ``morphometry/measurements/__init__.py`` re-exports the cartilage measurements *lazily*, so
+    importing ``morphometry.measurements.femur`` no longer pulls ``measurements.cartilage`` →
+    ``cartilage.thickness`` into the torsion image's versioned closure.
     """
     closure = import_closure([REPO_ROOT / "morphometry/docker/compute_torsion.py"], REPO_ROOT)
 
     assert Path("morphometry/measurements/femur.py") in closure
     assert Path("morphometry/image_io.py") in closure
     assert Path("morphometry/__init__.py") in closure
-    assert Path("morphometry/cartilage/thickness.py") in closure
+    assert Path("morphometry/cartilage/thickness.py") not in closure
+    assert Path("morphometry/measurements/cartilage.py") not in closure
     assert Path("morphometry/cartilage/deformation.py") not in closure
     assert Path("morphometry/cartilage/registration.py") not in closure
     assert Path("morphometry/docker/test.py") not in closure
