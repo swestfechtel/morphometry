@@ -131,7 +131,16 @@
     "title": "Examinations",
     "detailsTitle": "Examination Details",
     "filterTorsionMr": "MR torsion",
-    "filterClear": "Clear Filter"
+    "filterClear": "Clear Filter",
+    "filterVersion": "Release version",
+    "filterStage": "Stage",
+    "versionAll": "All versions",
+    "versionUnreleased": "Unreleased builds",
+    "versionNone": "Before versioning",
+    "stageAny": "Any stage",
+    "stageTorsion": "Torsion",
+    "stageSegmentation": "Segmentation",
+    "versionError": "Could not filter by version: {message}"
   },
   "list": {
     "intro": "Below is a list of all <u>{description}</u> examinations previously sent to the system.",
@@ -142,6 +151,7 @@
       "examinationDate": "Examination Date",
       "examinationTime": "Examination Time",
       "status": "Status",
+      "versions": "Versions",
       "actions": "Actions"
     },
     "filters": {
@@ -152,6 +162,7 @@
       "time": "Filter by Time",
       "status": "Filter by Status"
     },
+    "versionStage": {"torsion": "torsion", "segmentation": "segmentation"},
     "actions": {
       "view": "View Examination",
       "selectSeries": "Select series",
