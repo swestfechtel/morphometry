@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 from typing import NamedTuple
 
-_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+_VERSION_RE = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)")
 
 
 class Version(NamedTuple):
@@ -25,7 +25,7 @@ def parse_version(text: str) -> Version:
     :return: the parsed, orderable :class:`Version`.
     :raises ValueError: if ``text`` is not of the form ``<int>.<int>.<int>``.
     """
-    match = _VERSION_RE.match(text)
+    match = _VERSION_RE.fullmatch(text)
     if match is None:
         raise ValueError(f"invalid version {text!r} (expected MAJOR.MINOR.PATCH)")
     return Version(*(int(g) for g in match.groups()))
