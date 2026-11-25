@@ -1,0 +1,75 @@
+# Production stack: redis + FastAPI api + RQ worker + Next.js frontend.
+#
+#   cp deploy/.env.example deploy/.env   # then edit
+#   docker compose -f deploy/compose.yml --env-file deploy/.env up -d
+#
+# Everything is versioned by MORPH_VERSION (the four images share one release number); upgrade or
+# roll back by changing it and re-running `up -d`. The api/worker image names are parameterisable
+# (MORPH_API_IMAGE / MORPH_FRONTEND_IMAGE, default the Docker Hub repos) so a locally built dev
+# image can be smoke-tested; leave them unset in production.
+#
+# The worker launches the model containers with `docker run` through the HOST docker socket, so
+# the job directories it passes to `-v` are resolved by the host daemon. MORPH_DATA_DIR is
+# therefore bind-mounted at the SAME absolute path inside the containers as on the host.
+
+name: morphometry
+
+x-api-common: &api-common
+  image: ${MORPH_API_IMAGE:-swestfechtel/morphometry_api}:${MORPH_VERSION:?set MORPH_VERSION in .env}
+  # deploy/.env also carries MORPH_API_* settings (secret key, auth, CORS ...). Optional so that
+  # `config` validates from .env.example alone.
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    MORPH_API_STORAGE_DIR: ${MORPH_DATA_DIR:?set MORPH_DATA_DIR (absolute path) in .env}
+    MORPH_API_REDIS_URL: redis://redis:6379/0
+    # Provenance: the image this release was deployed as (read by api/provenance).
+    MORPH_API_SELF_IMAGE: ${MORPH_API_IMAGE:-swestfechtel/morphometry_api}:${MORPH_VERSION}
+  volumes:
+    - ${MORPH_DATA_DIR}:${MORPH_DATA_DIR}
+  depends_on:
+    - redis
+  restart: unless-stopped
+
+services:
+  redis:
+    # redis 7.4.1 (bookworm), pinned by the multi-arch index digest.
+    image: redis:7.4.1-bookworm@sha256:bb142a9c18ac18a16713c1491d779697b4e107c22a97266616099d288237ef47
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+  api:
+    <<: *api-common
+    ports:
+      - "${MORPH_API_PORT:-8000}:8000"
+
+  worker:
+    <<: *api-common
+    command: ["python", "-m", "api.tasks.worker"]
+    environment:
+      MORPH_API_STORAGE_DIR: ${MORPH_DATA_DIR}
+      MORPH_API_REDIS_URL: redis://redis:6379/0
+      MORPH_API_SELF_IMAGE: ${MORPH_API_IMAGE:-swestfechtel/morphometry_api}:${MORPH_VERSION}
+      # Job dirs are handed to `docker run -v`; they must live under the same-path bind mount.
+      MORPH_API_JOB_TMP_DIR: ${MORPH_DATA_DIR}/_jobs
+    volumes:
+      - ${MORPH_DATA_DIR}:${MORPH_DATA_DIR}
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:?set DOCKER_GID in .env (getent group docker | cut -d: -f3)}"
+
+  frontend:
+    image: ${MORPH_FRONTEND_IMAGE:-swestfechtel/morphometry_frontend}:${MORPH_VERSION}
+    environment:
+      # Server-side rendering reaches the api over the compose network.
+      MODEL_API_INTERNAL: http://api:8000
+    ports:
+      - "${MORPH_FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  redis-data:
