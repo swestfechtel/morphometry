@@ -111,6 +111,19 @@ def test_gated_sets_ignore_untracked_files(mini_repo):
     }
 
 
+def test_markdown_not_gated_except_frontend_public(mini_repo):
+    """Documentation (``*.md``) gates neither api nor frontend, except under the served ``frontend/public/``."""
+    base = run_git(mini_repo, "rev-parse", "HEAD")
+    for rel in ("api/README.md", "frontend/README.md", "frontend/CLAUDE.md", "frontend/app/notes.md",
+                "frontend/public/terms.md"):
+        _commit_edit(mini_repo, rel)
+
+    assert "api/README.md" not in IMAGES["api"].gated(mini_repo)
+    assert "frontend/README.md" not in IMAGES["frontend"].gated(mini_repo)
+    assert "frontend/public/terms.md" in IMAGES["frontend"].gated(mini_repo)
+    assert changed_images(mini_repo, base) == {"frontend": ["frontend/public/terms.md"]}
+
+
 def test_changed_images_unused_module(mini_repo):
     """Research code outside every closure changes no image."""
     base = run_git(mini_repo, "rev-parse", "HEAD")

@@ -12,10 +12,12 @@ Gated sets ("what affects an image", see ``docs/superpowers/specs/2026-11-25-api
   plus that entry point, ``morphometry/Dockerfile``, ``morphometry/.dockerignore`` and
   ``morphometry/requirements.txt``.
 - **api**: tracked files under ``api/`` except ``api/docker/``, ``api/tests/``, ``api/data/``,
-  ``api/logs/``, ``*.ipynb`` and ``api/tests.py``; plus the ``morphometry`` import closure of
-  every ``.py`` among them; plus ``api/Dockerfile``, ``api/requirements.txt``, ``.dockerignore``.
+  ``api/logs/``, ``*.ipynb``, ``*.md`` (documentation; changes nothing the image runs) and
+  ``api/tests.py``; plus the ``morphometry`` import closure of every ``.py`` among them; plus
+  ``api/Dockerfile``, ``api/requirements.txt``, ``.dockerignore``.
 - **frontend**: tracked files under ``frontend/`` except ``node_modules/``, ``.next/``,
-  ``*.tsbuildinfo`` and ``.env*``.
+  ``*.tsbuildinfo``, ``.env*`` and ``*.md`` — but Markdown under ``frontend/public/`` stays
+  gated, because ``public/`` is served as-is.
 
 Every gated set is filtered to the files tracked at the ref examined, so a file a later task
 has not created yet (e.g. ``api/Dockerfile``) is simply absent.
@@ -159,7 +161,7 @@ def _api_gated(root: Path, tracked: set[str] | None = None) -> set[str]:
 
     :param root: source tree (work tree or export of one ref).
     :param tracked: files tracked at the ref examined; ``None`` → :func:`tracked_files` of ``root``.
-    :return: the api's own sources (see module docstring for the exclusions), the
+    :return: the api's own sources (see module docstring for the exclusions, incl. ``*.md``), the
         ``morphometry`` import closure of its ``.py`` files, and ``api/Dockerfile``,
         ``api/requirements.txt``, ``.dockerignore``; filtered to tracked files.
     :raises versioning.closure.UnresolvedImport: if the closure walker cannot resolve an import.
@@ -169,7 +171,7 @@ def _api_gated(root: Path, tracked: set[str] | None = None) -> set[str]:
         f for f in tracked
         if f.startswith("api/")
         and not f.startswith(_API_EXCLUDED_PREFIXES)
-        and not f.endswith(".ipynb")
+        and not f.endswith((".ipynb", ".md"))
         and f != "api/tests.py"
     }
     entries = [Path(root) / f for f in sorted(own) if f.endswith(".py")]
@@ -183,7 +185,7 @@ def _frontend_gated(root: Path, tracked: set[str] | None = None) -> set[str]:
     :param root: source tree (work tree or export of one ref).
     :param tracked: files tracked at the ref examined; ``None`` → :func:`tracked_files` of ``root``.
     :return: tracked files under ``frontend/`` except ``node_modules/``, ``.next/``,
-        ``*.tsbuildinfo`` and ``.env*``.
+        ``*.tsbuildinfo``, ``.env*`` and ``*.md`` outside ``frontend/public/`` (served, so gated).
     """
     gated = set()
     for f in tracked_files(root) if tracked is None else tracked:
@@ -194,6 +196,8 @@ def _frontend_gated(root: Path, tracked: set[str] | None = None) -> set[str]:
             continue
         if parts[-1].endswith(".tsbuildinfo") or parts[-1].startswith(".env"):
             continue
+        if parts[-1].endswith(".md") and not f.startswith("frontend/public/"):
+            continue  # documentation (README.md, CLAUDE.md); public/ is served, so it counts
         gated.add(f)
     return gated
 
