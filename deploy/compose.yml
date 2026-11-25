@@ -35,11 +35,13 @@ x-api-common: &api-common
     MORPH_API_RELEASE_MANIFEST: /etc/morphometry/images.json
   volumes:
     - ${MORPH_DATA_DIR}:${MORPH_DATA_DIR}
-    # Long syntax: a missing source fails `up` instead of silently creating a directory.
+    # Long syntax + create_host_path: false: a missing source fails `up` instead of creating a directory.
     - type: bind
       source: ${MORPH_RELEASE_MANIFEST:-../release/images.json}
       target: /etc/morphometry/images.json
       read_only: true
+      bind:
+        create_host_path: false
   depends_on:
     - redis
   restart: unless-stopped
@@ -73,6 +75,8 @@ services:
         source: ${MORPH_RELEASE_MANIFEST:-../release/images.json}
         target: /etc/morphometry/images.json
         read_only: true
+        bind:
+          create_host_path: false
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "${DOCKER_GID:?set DOCKER_GID in .env (getent group docker | cut -d: -f3)}"
