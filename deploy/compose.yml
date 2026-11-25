@@ -8,6 +8,10 @@
 # (MORPH_API_IMAGE / MORPH_FRONTEND_IMAGE, default the Docker Hub repos) so a locally built dev
 # image can be smoke-tested; leave them unset in production.
 #
+# release/images.json of THIS checkout is bind-mounted read-only into api and worker (the image ships
+# none), so the checkout must be at or after the `release: v<MORPH_VERSION>` commit: `git pull` before
+# changing MORPH_VERSION. MORPH_RELEASE_MANIFEST overrides the host path (smoke tests only).
+#
 # The worker launches the model containers with `docker run` through the HOST docker socket, so
 # the job directories it passes to `-v` are resolved by the host daemon. MORPH_DATA_DIR is
 # therefore bind-mounted at the SAME absolute path inside the containers as on the host.
@@ -26,8 +30,16 @@ x-api-common: &api-common
     MORPH_API_REDIS_URL: redis://redis:6379/0
     # Provenance: the image this release was deployed as (read by api/provenance).
     MORPH_API_SELF_IMAGE: ${MORPH_API_IMAGE:-swestfechtel/morphometry_api}:${MORPH_VERSION}
+    # The image ships no release manifest (an image cannot contain its own entry); read the deploy
+    # checkout's, mounted below. The checkout must be at or after the `release: vX` commit.
+    MORPH_API_RELEASE_MANIFEST: /etc/morphometry/images.json
   volumes:
     - ${MORPH_DATA_DIR}:${MORPH_DATA_DIR}
+    # Long syntax: a missing source fails `up` instead of silently creating a directory.
+    - type: bind
+      source: ${MORPH_RELEASE_MANIFEST:-../release/images.json}
+      target: /etc/morphometry/images.json
+      read_only: true
   depends_on:
     - redis
   restart: unless-stopped
@@ -52,10 +64,15 @@ services:
       MORPH_API_STORAGE_DIR: ${MORPH_DATA_DIR}
       MORPH_API_REDIS_URL: redis://redis:6379/0
       MORPH_API_SELF_IMAGE: ${MORPH_API_IMAGE:-swestfechtel/morphometry_api}:${MORPH_VERSION}
+      MORPH_API_RELEASE_MANIFEST: /etc/morphometry/images.json
       # Job dirs are handed to `docker run -v`; they must live under the same-path bind mount.
       MORPH_API_JOB_TMP_DIR: ${MORPH_DATA_DIR}/_jobs
     volumes:
       - ${MORPH_DATA_DIR}:${MORPH_DATA_DIR}
+      - type: bind
+        source: ${MORPH_RELEASE_MANIFEST:-../release/images.json}
+        target: /etc/morphometry/images.json
+        read_only: true
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "${DOCKER_GID:?set DOCKER_GID in .env (getent group docker | cut -d: -f3)}"

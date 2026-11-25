@@ -2,7 +2,15 @@
 
 One compose file runs the whole stack: `redis`, the FastAPI `api`, the RQ `worker` and the Next.js
 `frontend`. All four are versioned together by `MORPH_VERSION`; the api image also pins the exact
-nnUNet / torsion model images of its release (`release/images.json`, baked in at build time).
+nnUNet / torsion model images of its release (baked in at build time).
+
+The api image does **not** contain `release/images.json` (an image can never carry its own manifest
+entry: the entry is written after the image is pushed). Compose bind-mounts this checkout's
+`release/images.json` read-only into the api and worker (`MORPH_API_RELEASE_MANIFEST`); it drives
+`GET /version`'s `images_from`, `GET /releases` and the version search. **The deploy checkout must be at
+or after the `release: v<MORPH_VERSION>` commit**, so `git pull` before switching `MORPH_VERSION`. A
+missing file makes `up` fail; an outdated one only makes `/version` report `<version>-dev` and leaves the
+new version out of `/releases` and the search.
 
 ## Prerequisites
 
@@ -15,6 +23,7 @@ nnUNet / torsion model images of its release (`release/images.json`, baked in at
 ## Start
 
 ```bash
+git pull                                # release/images.json must contain MORPH_VERSION
 cp deploy/.env.example deploy/.env      # set MORPH_VERSION, MORPH_DATA_DIR, DOCKER_GID, secrets
 mkdir -p "$MORPH_DATA_DIR"
 docker compose -f deploy/compose.yml --env-file deploy/.env up -d
@@ -28,7 +37,8 @@ curl localhost:8000/version             # the running release and its model imag
 
 ## Upgrade and roll back
 
-Both are the same operation: change `MORPH_VERSION` in `deploy/.env` and re-run
+Both are the same operation: `git pull` this checkout (for the new `release/images.json`), change
+`MORPH_VERSION` in `deploy/.env` and re-run
 
 ```bash
 docker compose -f deploy/compose.yml --env-file deploy/.env up -d
