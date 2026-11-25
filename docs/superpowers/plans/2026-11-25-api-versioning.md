@@ -492,3 +492,74 @@ This task is a checklist the implementer **prepares and hands to the user**; it 
 - [ ] **Step 2: Verify** `pytest -m "not needs_ct" -q` and `pytest api/tests tests/versioning -q` green;
   `python scripts/check_version.py` ok.
 - [ ] **Step 3: Commit** `docs: versioning, releases and compose deployment`.
+
+---
+
+## Addendum: finding results by version (spec Addendum)
+
+### Task 13: Version search API
+
+**Files:**
+- Modify: `api/release_manifest.py`, `api/db/repository.py` (`list_examinations`), `api/routers/examinations.py`,
+  `api/routers/version.py` (add `/releases`), `api/schemas/examination.py`, `api/serializers.py`
+- Test: `api/tests/test_version_search.py`
+
+**Interfaces:**
+- Consumes: Task 5 provenance shape (`provenance[stage]["digest"]`, `["released"]`); Task 6 `load_manifest`, `_parse`/version ordering.
+- Produces:
+  - `api.release_manifest.STAGE_IMAGE = {"segmentation": "nnunet", "torsion": "torsion"}`.
+  - `api.release_manifest.stage_digests(version: str, manifest: dict) -> dict[str, str]` — stage → image ref of
+    that release; raises `KeyError(version)` when the version is not in the manifest.
+  - `api.release_manifest.versions_for_digest(stage: str, digest: str | None, manifest: dict) -> list[str]` —
+    ascending release versions whose image for that stage equals `digest`; `[]` for `None`.
+  - `api.db.repository.list_examinations(session, *, version_filter: VersionFilter | None = None) -> list[Examination]`
+    where `VersionFilter` (dataclass in `api/db/repository.py`): `stages: tuple[str, ...]` (one or both stage
+    keys, OR-combined), `mode: Literal["digest", "unreleased", "none"]`, `digests: dict[str, str]` (mode
+    `digest` only). Implemented in SQL with `func.json_extract(Examination.provenance, "$.<stage>.digest")`
+    / `"$.<stage>.released"` — not by loading every row into Python.
+  - `GET /examinations?version=&stage=` — `stage: Literal["any", "torsion", "segmentation"] = "any"`;
+    `version` omitted → unfiltered (current behaviour); unknown version → `NotFoundError` (404) whose message
+    lists the known versions.
+  - `GET /releases` → `{"releases": [{"version": str, "date": str | None, "images": {"nnunet", "torsion",
+    "api", "frontend"}}]}`, newest first, no auth.
+  - `ExaminationSummary.image_versions: dict[str, list[str]] = {}`.
+
+- [ ] **Step 1: Write failing tests** (seed 5 examinations with provenance records and a 2-release manifest
+  where nnunet is identical in 1.0.0 and 1.1.0 and torsion differs; patch `MANIFEST_PATH`):
+  - `test_filter_torsion_by_version`: `?version=1.1.0&stage=torsion` → only exams whose torsion digest is 1.1.0's.
+  - `test_filter_shared_nnunet_digest`: `?version=1.0.0&stage=segmentation` also returns exams recorded under 1.1.0 (same digest).
+  - `test_filter_any_stage` is the OR of both.
+  - `test_filter_unreleased` and `test_filter_none` (null provenance and missing stage key both count as none).
+  - `test_unknown_version_404` (message contains `1.0.0` and `1.1.0`); `test_bad_stage_422`.
+  - `test_no_filter_unchanged` (all rows, same envelope).
+  - `test_image_versions_in_summary`: an exam on the shared nnunet digest → `image_versions["segmentation"] == ["1.0.0", "1.1.0"]`.
+  - `test_releases_endpoint` newest first, no auth header with `auth_required=True`.
+- [ ] **Step 2: Run** `./venv/bin/python -m pytest api/tests/test_version_search.py -v` — FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** `./venv/bin/python -m pytest api/tests -q` — PASS.
+- [ ] **Step 5: Commit** `feat(api): find examinations by release version`.
+
+### Task 14: Version search UI
+
+**Files:**
+- Modify: `frontend/app/examinations/page.tsx`, `frontend/app/components/list-component.tsx` (row shows versions),
+  `frontend/app/types.ts`, `frontend/messages/en.json`, `frontend/messages/de.json`
+- Create: `frontend/app/components/version-filter.tsx` (client component)
+
+**Interfaces:**
+- Consumes: Task 13 `GET /releases`, `GET /examinations?version=&stage=`, `image_versions` on each summary.
+- Produces: the examinations page reads `searchParams.version` / `searchParams.stage` and forwards them to the
+  API; `VersionFilter` renders a version `<select>` (options: all; each release newest first; `unreleased`;
+  `none` labelled "before versioning") and a stage `<select>` (any/torsion/segmentation), and on change
+  navigates with `router.push` to `/examinations?version=…&stage=…` (dropping empty params). Each list row
+  shows `torsion: <versions>` / `segmentation: <versions>` compactly (a range `1.0.0–1.1.0` when more than
+  one, `–` when empty). An unknown-version 404 from the API shows the API's message instead of crashing.
+  Follow the existing Flowbite/Tailwind styling of `filter-component.tsx` and the i18n pattern
+  (`useTranslations("examinations")`).
+
+- [ ] **Step 1:** Implement; add the German and English strings.
+- [ ] **Step 2: Verify** `cd frontend && npm run lint && npm run build` pass; run the dev server against an API
+  (or a stub serving `/releases` and `/examinations`) and check: the dropdown lists releases, selecting one
+  changes the URL and the list, a reload keeps the filter, the version column renders, unknown version shows
+  the message. Record what was checked.
+- [ ] **Step 3: Commit** `feat(frontend): filter examinations by release version`.

@@ -252,3 +252,24 @@ Exact CLI flags; finding the last release tag (`git describe --tags --match 'v*'
 parsing; hook mechanics; image names on Hub for api/frontend (proposed above); the Node
 version pin source; test layout (unit tests for `check_version.py`, the closure walker and the
 release script's decision logic with git/docker mocked).
+
+## Addendum (2026-11-25): finding results by version
+
+Decided by the user: results are found **by the image actually used**, and the search is in the
+**UI now** as well as the API.
+
+- A version's images are its digests in `release/images.json`. An examination "was produced by
+  version X" for a stage when that stage's recorded `digest` equals version X's image for that stage
+  (`segmentation` ↔ `nnunet`, `torsion` ↔ `torsion`). Because unchanged images are re-tagged, one
+  digest can belong to several versions; a search for X therefore also returns results from other
+  versions that ran the identical image — intended ("which numbers came from this code").
+- `GET /examinations?version=<X>&stage=any|torsion|segmentation` (default `any` = either stage
+  matches). Special values: `version=unreleased` (a stage record with `released: false`),
+  `version=none` (no provenance for that stage — pre-versioning or never run). An unknown `X` → 404.
+- `GET /releases` (unauthenticated, like `/version`): released versions, newest first, with date and
+  image refs — feeds the UI dropdown.
+- Each list item carries `image_versions: {"segmentation": [...], "torsion": [...]}` — the release
+  versions whose image equals that stage's digest (empty for unreleased/none).
+- UI: the examinations list gets a version dropdown (releases + "unreleased" + "before versioning")
+  and a stage selector, driven by URL query parameters so a filtered view is linkable; each row shows
+  its torsion/segmentation versions. German and English strings.
