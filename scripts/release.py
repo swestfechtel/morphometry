@@ -14,16 +14,20 @@ gathers the state it needs and executes the plan:
    locally and on ``origin`` (``git ls-remote``), work-tree cleanliness, branch, and whether
    ``HEAD`` equals ``origin``'s ``main``. Read-only.
 2. Print the plan. Stop here with ``--dry-run``.
-3. If nnUNet is rebuilt, verify the local checkpoints against
-   ``api/docker/nnunet_torsion/checkpoints.sha256``.
+3. If nnUNet is rebuilt, verify the checkpoints in its build context
+   (``api/docker/nnunet_torsion/checkpoints/``, the files ``docker build`` bakes in) against
+   ``api/docker/nnunet_torsion/checkpoints.sha256``. There is deliberately no option to verify
+   another directory.
 4. Per image in ``IMAGES`` order (nnunet, torsion, api, frontend): re-check that
-   ``:<version>`` is still absent, then ``build`` (``docker build`` with OCI labels, ``docker
-   push``) or ``retag`` (``docker buildx imagetools create``: registry-side, nothing downloaded);
-   ``skip`` reuses the existing tag. Read back the pushed digest. The api image is built with
-   the nnunet/torsion digests of this release, which is why those two come first.
-5. Move ``:latest`` of each image to its release digest.
-6. Write ``release/images.json[<version>]``, commit ``release: v<version>``, create the
-   annotated tag ``v<version>`` (message: the changelog section), push ``main`` and the tag.
+   ``:<version>`` is still absent, then ``build`` (``docker build`` with OCI labels, re-check
+   absence again, ``docker push``) or ``retag`` (``docker buildx imagetools create``:
+   registry-side, nothing downloaded); ``skip`` reuses the existing tag. Read back the pushed
+   digest. The api image is built with the nnunet/torsion digests of this release, which is why
+   those two come first.
+5. Write ``release/images.json[<version>]``, commit ``release: v<version>``, create the
+   annotated tag ``v<version>`` (message: the changelog section, kept verbatim), push ``main``
+   and the tag.
+6. Move ``:latest`` of each image to its release digest (convenience only, last).
 
 Standard library only. Exit status: 0 success, 1 refused or failed.
 """
@@ -50,6 +54,8 @@ from versioning.release_plan import (  # noqa: E402
 REPO = Path(__file__).resolve().parents[1]
 MANIFEST = Path("release/images.json")
 CHECKPOINT_MANIFEST = Path("api/docker/nnunet_torsion/checkpoints.sha256")
+#: The checkpoints the nnUNet ``docker build`` bakes in (its build context); the only directory verified.
+CHECKPOINT_DIR = Path("api/docker/nnunet_torsion/checkpoints")
 REVISION_LABEL = "org.opencontainers.image.revision"
 
 #: ``run(cmd, cwd, capture)`` executes one command and returns the completed process (never
@@ -120,7 +126,7 @@ def hub_tag_state(run: Runner, ref: str, cwd: Path) -> tuple[str | None, str | N
     result = run(["docker", "manifest", "inspect", "-v", ref], cwd=cwd, capture=True)
     if result.returncode != 0:
         err = (result.stderr or "") + (result.stdout or "")
-        if re.search(r"no such manifest|manifest unknown|not found", err, re.IGNORECASE):
+        if re.search(r"no such manifest|manifest unknown|manifest for \S+ not found", err, re.IGNORECASE):
             return None, None
         raise RuntimeError(f"cannot tell whether {ref} exists: {err.strip()}")
     labels_out = _checked(
@@ -209,16 +215,27 @@ def build_command(spec: ImageSpec, version: str, head_sha: str, created: str, ch
     return cmd + [spec.context]
 
 
+def _ensure_absent(run: Runner, tag: str, repo: Path) -> None:
+    """Refuse to publish ``tag`` if it exists on the registry (never overwrite a ``:<version>``).
+
+    :param run: the runner.
+    :param tag: ``repo:<version>``.
+    :param repo: working directory.
+    :raises RuntimeError: if the tag exists or its existence cannot be established.
+    """
+    if hub_tag_state(run, tag, repo) != (None, None):
+        raise RuntimeError(f"{tag} appeared on Docker Hub since planning; refusing to overwrite it")
+
+
 def execute(repo: Path, version: str, head_sha: str, plan: list[ImageAction], run: Runner,
-            checkpoints_dir: Path, today: str | None = None, created: str | None = None) -> dict:
-    """Carry out a plan: build/retag/skip, move ``:latest``, record, commit, tag and push.
+            today: str | None = None, created: str | None = None) -> dict:
+    """Carry out a plan: build/retag/skip, record, commit, tag, push, then move ``:latest``.
 
     :param repo: repository root.
     :param version: version being released.
     :param head_sha: full sha of the commit being released.
     :param plan: the planner's actions, in ``IMAGES`` order.
     :param run: the runner.
-    :param checkpoints_dir: local nnUNet checkpoints (verified only if nnunet is built).
     :param today: release date ``YYYY-MM-DD``; default today (UTC).
     :param created: RFC 3339 build time for the labels; default now (UTC).
     :return: the ``release/images.json`` entry written.
@@ -233,8 +250,9 @@ def execute(repo: Path, version: str, head_sha: str, plan: list[ImageAction], ru
         manifest = repo / CHECKPOINT_MANIFEST
         if not manifest.exists():
             raise ReleaseRefused([f"{CHECKPOINT_MANIFEST} is missing; nnunet cannot be rebuilt reproducibly"])
-        print(f"verifying checkpoints in {checkpoints_dir} …", flush=True)
-        problems = verify_manifest(checkpoints_dir, manifest)
+        # Always the build context: that is what `docker build` copies into the image.
+        print(f"verifying checkpoints in {CHECKPOINT_DIR} …", flush=True)
+        problems = verify_manifest(repo / CHECKPOINT_DIR, manifest)
         if problems:
             raise ReleaseRefused([f"checkpoints: {p}" for p in problems])
     changelog = section(_show(repo, head_sha, "CHANGELOG.md") or "", version) or ""
@@ -244,23 +262,21 @@ def execute(repo: Path, version: str, head_sha: str, plan: list[ImageAction], ru
         action = actions[key]
         tag = f"{spec.repo}:{version}"
         if action.action != "skip":
-            # Re-check right before publishing: never overwrite a :<version> (the anti-goal).
-            if hub_tag_state(run, tag, repo) != (None, None):
-                raise RuntimeError(f"{tag} appeared on Docker Hub since planning; refusing to overwrite it")
+            # Never overwrite a :<version> (the anti-goal): check before the (hours-long) build
+            # and again immediately before each publishing command.
+            _ensure_absent(run, tag, repo)
             if action.action == "build":
                 print(f"building {tag} …", flush=True)
                 _checked(run, build_command(spec, version, head_sha, created, changelog, refs), repo, capture=False)
+                _ensure_absent(run, tag, repo)
                 _checked(run, ["docker", "push", tag], repo, capture=False)
             else:
                 print(f"tagging {action.from_ref} as {tag} …", flush=True)
                 _checked(run, ["docker", "buildx", "imagetools", "create", "-t", tag, action.from_ref], repo)
         refs[key] = f"{spec.repo}@{hub_digest(run, tag, repo)}"
-        if action.action == "retag" and refs[key].split("@")[1] != action.from_ref.split("@")[1]:
+        if action.action == "retag" and parse_digest_ref(refs[key])[1] != parse_digest_ref(action.from_ref)[1]:
             print(f"warning: {tag} resolved to {refs[key]}, not {action.from_ref}", flush=True)
         print(f"{key}: {refs[key]}", flush=True)
-
-    for key, spec in IMAGES.items():
-        _checked(run, ["docker", "buildx", "imagetools", "create", "-t", f"{spec.repo}:latest", refs[key]], repo)
 
     entry = {**refs, "git_commit": head_sha, "date": today}
     path = repo / MANIFEST
@@ -272,8 +288,14 @@ def execute(repo: Path, version: str, head_sha: str, plan: list[ImageAction], ru
     tag = f"v{version}"
     _checked(run, ["git", "add", str(MANIFEST)], repo)
     _checked(run, ["git", "commit", "-m", f"release: {tag}"], repo)
-    _checked(run, ["git", "tag", "-a", tag, "-m", changelog or tag], repo)
+    # verbatim: the changelog section has "### …" lines, which the default cleanup strips as comments.
+    _checked(run, ["git", "tag", "-a", "--cleanup=verbatim", tag, "-m", changelog or tag], repo)
     _checked(run, ["git", "push", "origin", "main", tag], repo)
+
+    # Convenience only, after the release is recorded and pushed (a failure here leaves no
+    # :latest pointing at an unrecorded release; re-run these commands by hand).
+    for key, spec in IMAGES.items():
+        _checked(run, ["docker", "buildx", "imagetools", "create", "-t", f"{spec.repo}:latest", refs[key]], repo)
     return entry
 
 
@@ -295,7 +317,6 @@ def main(argv: list[str] | None = None, run: Runner = default_runner) -> int:
     """Plan and (unless ``--dry-run``) execute a release.
 
     :param argv: command-line arguments (default ``sys.argv[1:]``): ``--dry-run``,
-        ``--checkpoints-dir DIR`` (default ``api/docker/nnunet_torsion/checkpoints``),
         ``--adopt KEY`` (repeatable; initial release only: take over an existing unlabelled
         ``:<version>``), ``--repo PATH`` (default: the repository containing this script).
     :param run: command runner (tests inject a recorder).
@@ -303,14 +324,11 @@ def main(argv: list[str] | None = None, run: Runner = default_runner) -> int:
     """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="print the plan; build and push nothing")
-    parser.add_argument("--checkpoints-dir", type=Path, default=None,
-                        help="nnUNet checkpoints (default api/docker/nnunet_torsion/checkpoints)")
     parser.add_argument("--adopt", action="append", default=[], choices=list(IMAGES),
                         help="initial release only: adopt an existing unlabelled :<version> of this image")
     parser.add_argument("--repo", type=Path, default=REPO)
     args = parser.parse_args(argv)
     repo = args.repo.resolve()
-    checkpoints_dir = args.checkpoints_dir or repo / "api/docker/nnunet_torsion/checkpoints"
 
     try:
         head_sha = _checked(run, ["git", "rev-parse", "HEAD"], repo).stdout.strip()
@@ -329,18 +347,19 @@ def main(argv: list[str] | None = None, run: Runner = default_runner) -> int:
     print(format_plan(version, plan))
     if args.dry_run:
         if any(a.key == "nnunet" and a.action == "build" for a in plan):
-            print(f"(dry run: checkpoints in {checkpoints_dir} would be verified before building nnunet)")
+            print(f"(dry run: checkpoints in {CHECKPOINT_DIR} would be verified before building nnunet)")
         print("dry run: nothing built, tagged or pushed")
         return 0
     try:
-        entry = execute(repo, version, head_sha, plan, run, checkpoints_dir)
+        entry = execute(repo, version, head_sha, plan, run)
     except ReleaseRefused as exc:
         print(exc)
         return 1
     except (RuntimeError, ValueError) as exc:
         print(f"release failed: {exc}\n"
               "A re-run skips the images already pushed from this commit. If the failure was in the final "
-              "git commit/tag/push, finish those steps by hand instead (a re-run refuses once v<version> exists).")
+              "git commit/tag/push or the :latest moves, finish those steps by hand instead (a re-run refuses "
+              "once v<version> exists).")
         return 1
     print(json.dumps({version: entry}, indent=2))
     print(f"released v{version}")

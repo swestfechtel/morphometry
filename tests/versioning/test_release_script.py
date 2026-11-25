@@ -91,11 +91,11 @@ def initial(git_repo: Path) -> Path:
     :return: path of the repository root.
     """
     _write_all(git_repo, RELEASE_FILES)
-    ckpt = git_repo / "ckpt"
-    ckpt.mkdir()
+    ckpt = git_repo / release.CHECKPOINT_DIR  # the nnUNet build context, gitignored as in the real repo
+    ckpt.mkdir(parents=True)
     (ckpt / "hip.pth").write_bytes(b"weights")
     write_manifest(ckpt, git_repo / release.CHECKPOINT_MANIFEST)  # replaces MINI_FILES' placeholder
-    _write_all(git_repo, {".gitignore": "ckpt/\n"})
+    _write_all(git_repo, {".gitignore": "api/docker/nnunet_torsion/checkpoints/\n"})
     return git_repo
 
 
@@ -158,7 +158,7 @@ def test_dry_run_refusal_is_reported(initial, capsys):
 def test_execute_initial_release(initial):
     head = _sha(initial)
     runner = FakeRunner(head)
-    assert release.main(["--repo", str(initial), "--checkpoints-dir", str(initial / "ckpt")], run=runner) == 0
+    assert release.main(["--repo", str(initial)], run=runner) == 0
     mutating = runner.mutating()
     builds = [c for c in mutating if c[:2] == ["docker", "build"]]
     assert [c[5] for c in builds] == [f"{IMAGES[k].repo}:1.0.0" for k in IMAGES]
@@ -171,17 +171,25 @@ def test_execute_initial_release(initial):
     assert [c[5] for c in latest] == [f"{IMAGES[k].repo}:latest" for k in IMAGES]
     git_calls = [c for c in mutating if c[0] == "git"]
     assert git_calls[1] == ["git", "commit", "-m", "release: v1.0.0"]
-    assert git_calls[2][:3] == ["git", "tag", "-a"] and "torsion: first." in git_calls[2][-1]
+    assert git_calls[2][:4] == ["git", "tag", "-a", "--cleanup=verbatim"] and "torsion: first." in git_calls[2][-1]
     assert git_calls[3] == ["git", "push", "origin", "main", "v1.0.0"]
+    # :latest moves only after the release is recorded and pushed.
+    assert mutating.index(latest[0]) > mutating.index(git_calls[3])
     entry = json.loads((initial / "release/images.json").read_text())["1.0.0"]
     assert entry["api"] == "swestfechtel/morphometry_api@sha256:" + "3" * 64
     assert entry["git_commit"] == head and set(entry) == {*IMAGES, "git_commit", "date"}
 
 
-def test_execute_refuses_bad_checkpoints(initial, capsys):
-    (initial / "ckpt" / "hip.pth").write_bytes(b"other")
+def test_execute_refuses_bad_checkpoints(initial, tmp_path, capsys):
+    """A mismatch in the build-context checkpoints refuses, even if an intact copy exists elsewhere."""
+    intact = tmp_path / "intact"
+    intact.mkdir()
+    (intact / "hip.pth").write_bytes(b"weights")
+    (initial / release.CHECKPOINT_DIR / "hip.pth").write_bytes(b"other")
     runner = FakeRunner(_sha(initial))
-    assert release.main(["--repo", str(initial), "--checkpoints-dir", str(initial / "ckpt")], run=runner) == 1
+    with pytest.raises(SystemExit):  # no way to point verification at another directory
+        release.main(["--repo", str(initial), "--checkpoints-dir", str(intact)], run=runner)
+    assert release.main(["--repo", str(initial)], run=runner) == 1
     assert "mismatch" in capsys.readouterr().out
     assert runner.mutating() == []
 
@@ -193,7 +201,7 @@ def test_execute_refuses_tag_that_appeared(initial):
     plan = [release.ImageAction(k, "build", None, "x") for k in IMAGES]
     runner.existing.add("swestfechtel/torsion:1.0.0")
     with pytest.raises(RuntimeError, match="torsion:1.0.0 appeared"):
-        release.execute(initial, "1.0.0", head, plan, runner, initial / "ckpt")
+        release.execute(initial, "1.0.0", head, plan, runner)
     pushes = [c for c in runner.mutating() if c[:2] == ["docker", "push"]]
     assert pushes == [["docker", "push", "swestfechtel/nnunet_torsion:1.0.0"]]
 
@@ -204,7 +212,7 @@ def test_execute_retag_is_registry_side(initial):
     src = "swestfechtel/nnunet_torsion@sha256:" + "1" * 64
     plan = [release.ImageAction("nnunet", "retag", src, "unchanged"),
             *(release.ImageAction(k, "skip", None, "x") for k in ("torsion", "api", "frontend"))]
-    release.execute(initial, "1.0.0", head, plan, runner, initial / "ckpt")
+    release.execute(initial, "1.0.0", head, plan, runner)
     mutating = runner.mutating()
     assert mutating[0] == ["docker", "buildx", "imagetools", "create", "-t", "swestfechtel/nnunet_torsion:1.0.0", src]
     assert not any(c[:2] in (["docker", "build"], ["docker", "push"]) for c in mutating)
@@ -228,3 +236,30 @@ def test_hub_tag_state_unlabelled_and_labelled():
             return subprocess.CompletedProcess(cmd, 0, json.dumps({release.REVISION_LABEL: "abc"}), "")
         return runner(cmd, cwd, capture)
     assert release.hub_tag_state(labelled, "swestfechtel/torsion:1.0.0", Path("."))[0] == "abc"
+
+
+def test_execute_rechecks_tag_between_build_and_push(initial):
+    """A :<version> pushed by someone else during the (hours-long) build is not overwritten."""
+    head = _sha(initial)
+    plan = [release.ImageAction(k, "build", None, "x") for k in IMAGES]
+
+    class AppearsDuringBuild(FakeRunner):
+        def __call__(self, cmd, cwd, capture=True):
+            if cmd[:2] == ["docker", "build"] and cmd[5] == "swestfechtel/nnunet_torsion:1.0.0":
+                self.existing.add(cmd[5])
+            return super().__call__(cmd, cwd, capture)
+
+    runner = AppearsDuringBuild(head)
+    with pytest.raises(RuntimeError, match="nnunet_torsion:1.0.0 appeared"):
+        release.execute(initial, "1.0.0", head, plan, runner)
+    assert not any(c[:2] == ["docker", "push"] for c in runner.calls)
+
+
+def test_hub_tag_state_credential_helper_error_is_not_absent():
+    """"executable file not found" (a missing credential helper) must not read as an absent tag."""
+    def run(cmd, cwd, capture=True):
+        return subprocess.CompletedProcess(
+            cmd, 1, "", 'error getting credentials - err: exec: "docker-credential-desktop": '
+                        "executable file not found in $PATH")
+    with pytest.raises(RuntimeError, match="cannot tell"):
+        release.hub_tag_state(run, "swestfechtel/torsion:1.0.0", Path("."))
