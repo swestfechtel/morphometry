@@ -1,0 +1,8 @@
+# Keep the build context to what inference loads: per model dataset.json, plans.json,
+# dataset_fingerprint.json and fold_*/checkpoint_final.pth (entrypoint.sh passes no -chk).
+**/checkpoint_best.pth
+**/training_log_*.txt
+**/progress.png
+**/debug.json
+checkpoints.sha256
+test.py
