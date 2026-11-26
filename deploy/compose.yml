@@ -33,6 +33,9 @@ x-api-common: &api-common
     # The image ships no release manifest (an image cannot contain its own entry); read the deploy
     # checkout's, mounted below. The checkout must be at or after the `release: vX` commit.
     MORPH_API_RELEASE_MANIFEST: /etc/morphometry/images.json
+    # Rotating log files under the data dir, so they survive container recreation (upgrades);
+    # the same lines also go to stdout (`docker compose logs`).
+    MORPH_API_LOG_DIR: ${MORPH_DATA_DIR}/logs
   volumes:
     - ${MORPH_DATA_DIR}:${MORPH_DATA_DIR}
     # Long syntax + create_host_path: false: a missing source fails `up` instead of creating a directory.
@@ -69,6 +72,7 @@ services:
       MORPH_API_RELEASE_MANIFEST: /etc/morphometry/images.json
       # Job dirs are handed to `docker run -v`; they must live under the same-path bind mount.
       MORPH_API_JOB_TMP_DIR: ${MORPH_DATA_DIR}/_jobs
+      MORPH_API_LOG_DIR: ${MORPH_DATA_DIR}/logs
     volumes:
       - ${MORPH_DATA_DIR}:${MORPH_DATA_DIR}
       - type: bind

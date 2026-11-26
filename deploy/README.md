@@ -25,7 +25,9 @@ new version out of `/releases` and the search.
 ```bash
 git pull                                # release/images.json must contain MORPH_VERSION
 cp deploy/.env.example deploy/.env      # set MORPH_VERSION, MORPH_DATA_DIR, DOCKER_GID, secrets
+set -a; . deploy/.env; set +a           # after editing: makes $MORPH_* available to the lines below
 mkdir -p "$MORPH_DATA_DIR"
+docker pull swestfechtel/nnunet_torsion:"$MORPH_VERSION"   # optional: 25.6 GB, otherwise pulled by the first job
 docker compose -f deploy/compose.yml --env-file deploy/.env up -d
 curl localhost:8000/version             # the running release and its model images
 ```
@@ -45,5 +47,6 @@ docker compose -f deploy/compose.yml --env-file deploy/.env up -d
 ```
 
 Compose pulls the new tags and recreates the containers; data under `MORPH_DATA_DIR` and the redis
-volume persist. Check `GET /version` afterwards. Database schema changes are applied by the api on
+volume persist. Check `GET /version` afterwards. Logs: `docker compose -f deploy/compose.yml --env-file deploy/.env logs -f worker`
+(or `api`); the rotating log files are under `$MORPH_DATA_DIR/logs/` and survive upgrades. Database schema changes are applied by the api on
 start, but a rollback does not undo them: back up `MORPH_DATA_DIR` before upgrading.

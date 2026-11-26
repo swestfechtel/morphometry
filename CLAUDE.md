@@ -122,17 +122,17 @@ The repo has four loosely-coupled parts; the three Python parts share a single v
 
 The API does not run inference in-process — the RQ worker invokes two external docker images built from this repo; their refs are configured via `api/settings.py` (`MORPH_API_NNUNET_IMAGE` / `MORPH_API_TORSION_IMAGE`, default: the release manifest), used by `api/tasks/`. The paragraphs below are the pre-versioning record, kept for its history (the `pre-<sha>` convention is **superseded** by the release flow above).
 
-- **`swestfechtel/nnunet_torsion:latest`** — built from `api/docker/nnunet_torsion/`. Runs nnUNetv2 predictions on hip/knee/ankle using the ResEncUNetXL plans (datasets 004, 006, 007) with a 5-fold ensemble. Requires CUDA (`--runtime=nvidia --gpus all`) and expects checkpoints under `api/docker/nnunet_torsion/checkpoints/{hip,knee,ankle}/` at build time. These checkpoints are gitignored; they must be present locally before `docker build`. Only `fold_*/checkpoint_final.pth` and the model-root json files enter the image (`.dockerignore`; `entrypoint.sh` passes no `-chk`), copied with `COPY --chmod`: a `RUN chown/chmod -R` over the checkpoints re-stores all of them in a new layer, which is how the pre-versioning image reached 79.5 GB (1.0.0: 25.6 GB).
-- **`swestfechtel/torsion:latest`** — built from `morphometry/Dockerfile` with entrypoint `morphometry/docker/compute_torsion.py`. Pure-Python torsion computation from masks; no GPU. **It carries a copy of the library**, so a change to its closure must ship in a new image: bump `VERSION` + changelog and let `release.py` rebuild (superseding the old "rebuild after every landmark change, keep the outgoing image as `pre-<sha>`" rule; old versions stay pullable by `:<version>`). **The recorded sha is not evidence of what an image contains — run it, or hash its `/app/morphometry` against HEAD.** Pre-versioning state (history, not current): rebuilt at `2d1fc91` (2026-11-12), all 33 `.py` files then identical to that HEAD, pushed as `swestfechtel/torsion@sha256:bb619140abec79ceb9f22a5393884ea78105c18cf0014cf7fe2d4f7b6eabe9eb`. Base pinned to `python:3.10.16-bookworm` (the venv's interpreter; pinned by tag, not digest); deps from `morphometry/requirements.txt` installed `--no-deps` + `pip check`; system libs `libgl1 libxrender1` only (needed because importing the measurements pulls in `pyvista` → `vtk` → `libGL`; nothing renders). Discriminating fixtures: PA000001 and PA001127 (the latter has non-empty Murphy flags). Rebuild records and why the pins matter numerically: [`torsion_image_rebuilds.md`](docs/evidence/torsion_image_rebuilds.md). Versioned releases are recorded in `release/images.json` (one digest per image per version), not here.
+- **`swestfechtel/nnunet_torsion`** — built from `api/docker/nnunet_torsion/`. Runs nnUNetv2 predictions on hip/knee/ankle using the ResEncUNetXL plans (datasets 004, 006, 007) with a 5-fold ensemble. Requires CUDA (`--runtime=nvidia --gpus all`) and expects checkpoints under `api/docker/nnunet_torsion/checkpoints/{hip,knee,ankle}/` at build time. These checkpoints are gitignored; they must be present locally before `docker build`. Only `fold_*/checkpoint_final.pth` and the model-root json files enter the image (`.dockerignore`; `entrypoint.sh` passes no `-chk`), copied with `COPY --chmod`: a `RUN chown/chmod -R` over the checkpoints re-stores all of them in a new layer, which is how the pre-versioning image reached 79.5 GB (1.0.0: 25.6 GB).
+- **`swestfechtel/torsion`** — built from `morphometry/Dockerfile` with entrypoint `morphometry/docker/compute_torsion.py`. Pure-Python torsion computation from masks; no GPU. **It carries a copy of the library**, so a change to its closure must ship in a new image: bump `VERSION` + changelog and let `release.py` rebuild (superseding the old "rebuild after every landmark change, keep the outgoing image as `pre-<sha>`" rule; old versions stay pullable by `:<version>`). **The recorded sha is not evidence of what an image contains — run it, or hash its `/app/morphometry` against HEAD.** Pre-versioning state (history, not current): rebuilt at `2d1fc91` (2026-11-12), all 33 `.py` files then identical to that HEAD, pushed as `swestfechtel/torsion@sha256:bb619140abec79ceb9f22a5393884ea78105c18cf0014cf7fe2d4f7b6eabe9eb`. Base pinned to `python:3.10.16-bookworm` (the venv's interpreter; pinned by tag, not digest); deps from `morphometry/requirements.txt` installed `--no-deps` + `pip check`; system libs `libgl1 libxrender1` only (needed because importing the measurements pulls in `pyvista` → `vtk` → `libGL`; nothing renders). Discriminating fixtures: PA000001 and PA001127 (the latter has non-empty Murphy flags). Rebuild records and why the pins matter numerically: [`torsion_image_rebuilds.md`](docs/evidence/torsion_image_rebuilds.md). Versioned releases are recorded in `release/images.json` (one digest per image per version), not here.
 
-Dev-only rebuild commands (local images, recorded as `released: false`; `scripts/release.py` is the release path — never push these):
+Dev-only rebuild commands (local images, recorded as `released: false`; `scripts/release.py` is the release path — never push these). Tag them `:dev`, never `:latest` or a version (releases own those), and point the worker at them with `MORPH_API_NNUNET_IMAGE` / `MORPH_API_TORSION_IMAGE` in `api/.env` — remove that line afterwards, since env beats the manifest:
 
 ```bash
 # nnUNet segmentation image
-cd api/docker/nnunet_torsion && docker build -t swestfechtel/nnunet_torsion:latest .
+cd api/docker/nnunet_torsion && docker build -t swestfechtel/nnunet_torsion:dev .
 
 # Torsion computation image (build context must be the morphometry/ package dir)
-cd morphometry && docker build -t swestfechtel/torsion:latest .
+cd morphometry && docker build -t swestfechtel/torsion:dev .
 ```
 
 ## Running the API
@@ -140,11 +140,11 @@ cd morphometry && docker build -t swestfechtel/torsion:latest .
 The API and the model worker are separate processes sharing Redis, the SQLite DB,
 and the storage dir. Copy `api/.env.example` to `api/.env` (or a repo-root `.env` —
 both are loaded, `api/.env` wins) and adjust (`MORPH_API_*`: storage dir, redis/db
-URLs, docker image tags, `API_KEYS`, `AUTH_REQUIRED`, `CORS_ALLOW_ORIGINS`).
+URLs, `API_KEYS`, `AUTH_REQUIRED`, `CORS_ALLOW_ORIGINS`; leave the docker image refs unset so the worker runs the current release's digests).
 
 ```bash
 # from repo root, with venv activated
-redis-server                                   # broker + job state
+docker start morphometry-redis                 # broker + job state (first time: docker run -d --name morphometry-redis -p 6379:6379 redis:7)
 python -m api.tasks.worker                      # RQ worker (one, on the 'gpu' queue → serializes GPU jobs)
 uvicorn api.main:app --host 0.0.0.0 --port 8000 # the web app
 ```
@@ -159,7 +159,7 @@ runs **inside an Orthanc process** and forwards stored instances to
 `MORPH_API_API_KEY` header. Migrate legacy `api/data/*.pkl` with
 `python scripts/migrate_pickles.py`.
 
-**Production (compose)**: `docker compose -f deploy/compose.yml --env-file deploy/.env up -d` runs redis, api, worker and frontend from the released images of `MORPH_VERSION` (copy `deploy/.env.example`; see `deploy/README.md`). The dev path above (venv, `uvicorn`, `npm run dev`) is unchanged.
+**Production (compose)**: `docker compose -f deploy/compose.yml --env-file deploy/.env up -d` runs redis, api, worker and frontend from the released images of `MORPH_VERSION` (copy `deploy/.env.example`; see `deploy/README.md` and the root `README.md` → "Running in production"). The api and worker share the `morphometry_api` image; the worker starts the model containers through the host docker socket, which is why `MORPH_DATA_DIR` is mounted at the same path inside (job dirs `_jobs/`, logs `logs/` live under it). Smoke-tested 2026-11-26 on 1.0.0 (`/health`, `/version`, `/releases`, frontend 200, worker on the queue, host-daemon `docker run` with a same-path mount and the GPU); a full upload → segmentation → torsion job under compose has not been run yet. The dev path above (venv, `uvicorn`, `npm run dev:webpack`) is unchanged.
 
 ## Running the UI
 
@@ -211,6 +211,10 @@ The root `requirements.txt` now also pins the API stack, and `api/requirements.t
 - Physical (mm) coordinates stay floats; only *index* coordinates are rounded, and only where an array is indexed (casting mm to `int` makes a measurement depend on scanner position). Both shaft axes (`get_femoral_shaft_axis{,_ct}`), the Murphy neck base and the CT head centre return unrounded values.
 - **The package has no image-rotating landmark transport left** (no `skimage.transform.rotate`): the condylar line, the alpha-angle reslice and the Lee neck axis all rotate coordinates or sample a plane anchored to anatomy. Keep it that way.
 - Failures inside batch scripts and `compute_torsion.py` are caught per measurement and written as `np.nan`, so one bad patient never aborts a cohort run — keep this when extending them. **The caught tuple differs per file**: `compute_torsion.py` `(RuntimeError, AssertionError, ValueError)`; `process_augsburg_*` `(ValueError, IndexError, RuntimeError)` (so `AssertionError` aborts there); `process_nako{,_large}.py` bare `except Exception`; `process_nmdid.py` wraps its QC itself. New guards should raise `ValueError` (caught everywhere). Details: [`pipeline_conventions.md`](docs/evidence/pipeline_conventions.md).
+- **Release gating is per file, so keep image code in files of its own.** `versioning/closure.py` puts every file an image imports (statically, through any import style, `__init__.py` files included) into that image's gated set, and **any** edit to such a file needs a `VERSION` bump and a release. Import style changes nothing: `from m import f`, `import m` and `from pkg import m as M` all gate the whole of `m`. Function-level tracking is deliberately not done (module-level code, constants and indirect calls make it unsound; a missed dependency would ship an unversioned image change, the one failure the system must not have). So:
+  - Code that only research scripts or another image need goes in **its own module**, not next to functions an image imports. If edits to one file keep forcing releases for code the image never runs, **split the file** (closure check: `python -c "from pathlib import Path; from versioning.closure import import_closure; print(*sorted(import_closure([Path('morphometry/docker/compute_torsion.py')], Path('.'))), sep='\n')"`).
+  - A package `__init__.py` must not eagerly import a module only some consumers need: re-export it **lazily** (PEP 562 `__getattr__` with a non-literal `importlib.import_module`, as `morphometry/measurements/__init__.py` does for cartilage). An eager re-export pulls the module into every image importing the package.
+  - Never hide a real dependency from the walker to dodge a release (a lazy import of something the image *does* call at runtime): the image would then change without a version.
 
 ### Hip
 

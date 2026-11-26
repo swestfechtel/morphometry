@@ -11,10 +11,15 @@ The end-to-end guide to the whole web app is [`../README_WEBAPP.md`](../README_W
 npm install
 npm run dev:webpack  # dev server on http://localhost:3000 (USE THIS — see below)
 npm run dev          # dev server with Turbopack (breaks the Cornerstone viewer)
-npm run build        # production build (webpack)
-npm start            # serve the production build
+npm run build        # production build (webpack), e.g. to check it builds
+npm start            # serve that build locally
 npm run lint         # ESLint
 ```
+
+**Production does not use `npm start` on a host.** It runs the released
+`swestfechtel/morphometry_frontend:<version>` image (built from `Dockerfile`, Next.js
+standalone output) as the `frontend` service of `../deploy/compose.yml`; see the root
+`README.md` → "Running in production (Docker Compose)".
 
 **Use `npm run dev:webpack`, not `npm run dev`.** The torsion viewer renders the
 NIfTI volumes with **Cornerstone3D**, which needs web workers / WASM wired up by
@@ -33,7 +38,7 @@ python -m api.tasks.worker       # RQ worker (runs the docker model images)
 MORPH_API_CORS_ALLOW_ORIGINS=http://localhost:3000 uvicorn api.main:app --port 8000
 ```
 
-See the repo root `README.md` → "Running the stack" for the full walkthrough.
+See the repo root `README.md` → "Running the stack (development)" for the full walkthrough, and "Running in production (Docker Compose)" for the released stack.
 
 ## Configuration
 
