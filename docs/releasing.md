@@ -110,7 +110,9 @@ nnunet is rebuilt (there is no option to verify another directory).
 
 **The plan.** Per image: `build` if its gated paths changed since the last release tag (or there is no
 tag), else `retag`: add `:<VERSION>` to the previous release's digest registry-side, no rebuild and
-no upload. In particular the 25.6 GB nnunet image is only rebuilt when its own gated paths change.
+no upload. The copy is exact (`imagetools create --prefer-index=false`), so the retagged
+version records the *same* digest as the release it came from, and a version search matches every
+result produced with that image. In particular the 25.6 GB nnunet image is only rebuilt when its own gated paths change.
 **The api image is the exception: it is built on every release**, never retagged, because it bakes
 this release's `MORPH_VERSION` and the nnunet/torsion image references in at build time; a retagged
 api image would make release N+1's stack launch release N's model images and report N's version.

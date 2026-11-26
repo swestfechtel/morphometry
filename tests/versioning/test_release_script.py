@@ -168,7 +168,8 @@ def test_execute_initial_release(initial):
     assert [c for c in mutating if c[:2] == ["docker", "push"]] == [
         ["docker", "push", f"{IMAGES[k].repo}:1.0.0"] for k in IMAGES]
     latest = [c for c in mutating if c[:4] == ["docker", "buildx", "imagetools", "create"]]
-    assert [c[5] for c in latest] == [f"{IMAGES[k].repo}:latest" for k in IMAGES]
+    assert latest == [[*release.REGISTRY_COPY, "-t", f"{IMAGES[k].repo}:latest", f"{IMAGES[k].repo}@sha256:" + d * 64]
+                      for k, d in zip(IMAGES, "1234")]
     git_calls = [c for c in mutating if c[0] == "git"]
     assert git_calls[1] == ["git", "commit", "-m", "release: v1.0.0"]
     assert git_calls[2][:4] == ["git", "tag", "-a", "--cleanup=verbatim"] and "torsion: first." in git_calls[2][-1]
@@ -214,7 +215,9 @@ def test_execute_retag_is_registry_side(initial):
             *(release.ImageAction(k, "skip", None, "x") for k in ("torsion", "api", "frontend"))]
     release.execute(initial, "1.0.0", head, plan, runner)
     mutating = runner.mutating()
-    assert mutating[0] == ["docker", "buildx", "imagetools", "create", "-t", "swestfechtel/nnunet_torsion:1.0.0", src]
+    assert mutating[0] == [*release.REGISTRY_COPY, "-t", "swestfechtel/nnunet_torsion:1.0.0", src]
+    # a carbon copy: the retagged release keeps the source digest (no new manifest-list wrapper)
+    assert "--prefer-index=false" in mutating[0]
     assert not any(c[:2] in (["docker", "build"], ["docker", "push"]) for c in mutating)
 
 

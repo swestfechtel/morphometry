@@ -20,8 +20,8 @@ gathers the state it needs and executes the plan:
    another directory.
 4. Per image in ``IMAGES`` order (nnunet, torsion, api, frontend): re-check that
    ``:<version>`` is still absent, then ``build`` (``docker build`` with OCI labels, re-check
-   absence again, ``docker push``) or ``retag`` (``docker buildx imagetools create``:
-   registry-side, nothing downloaded); ``skip`` reuses the existing tag. Read back the pushed
+   absence again, ``docker push``) or ``retag`` (``docker buildx imagetools create --prefer-index=false``:
+   registry-side, nothing downloaded, same digest); ``skip`` reuses the existing tag. Read back the pushed
    digest. The api image is built with the nnunet/torsion digests of this release, which is why
    those two come first; it is therefore built on every release, never retagged.
 5. Write ``release/images.json[<version>]``, commit ``release: v<version>``, create the
@@ -77,6 +77,15 @@ def default_runner(cmd: list[str], cwd: Path, capture: bool = True) -> subproces
     if cmd[0] == "git":  # always captured; git output is short
         return git(cwd, *cmd[1:], check=False)
     return subprocess.run(cmd, cwd=cwd, check=False, text=True, capture_output=capture)
+
+
+# Registry-side tag copy. ``--prefer-index=false`` makes it a carbon copy of the source manifest, so
+# the new tag resolves to the *same* digest. Without it, buildx wraps a single image in a new
+# manifest list with a digest of its own: a retagged release would then record a digest no result
+# was ever produced with, and searching results by version would no longer match that image's
+# earlier results. (1.0.0's ``:latest`` tags were moved before this flag was added and are such
+# wrappers; harmless, since nothing runs ``:latest``.)
+REGISTRY_COPY = ["docker", "buildx", "imagetools", "create", "--prefer-index=false"]
 
 
 def _checked(run: Runner, cmd: list[str], cwd: Path, capture: bool = True) -> subprocess.CompletedProcess:
@@ -272,7 +281,7 @@ def execute(repo: Path, version: str, head_sha: str, plan: list[ImageAction], ru
                 _checked(run, ["docker", "push", tag], repo, capture=False)
             else:
                 print(f"tagging {action.from_ref} as {tag} …", flush=True)
-                _checked(run, ["docker", "buildx", "imagetools", "create", "-t", tag, action.from_ref], repo)
+                _checked(run, [*REGISTRY_COPY, "-t", tag, action.from_ref], repo)
         refs[key] = f"{spec.repo}@{hub_digest(run, tag, repo)}"
         if action.action == "retag" and parse_digest_ref(refs[key])[1] != parse_digest_ref(action.from_ref)[1]:
             print(f"warning: {tag} resolved to {refs[key]}, not {action.from_ref}", flush=True)
@@ -295,7 +304,7 @@ def execute(repo: Path, version: str, head_sha: str, plan: list[ImageAction], ru
     # Convenience only, after the release is recorded and pushed (a failure here leaves no
     # :latest pointing at an unrecorded release; re-run these commands by hand).
     for key, spec in IMAGES.items():
-        _checked(run, ["docker", "buildx", "imagetools", "create", "-t", f"{spec.repo}:latest", refs[key]], repo)
+        _checked(run, [*REGISTRY_COPY, "-t", f"{spec.repo}:latest", refs[key]], repo)
     return entry
 
 
