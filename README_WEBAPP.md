@@ -72,14 +72,17 @@ one stacked "whole-leg" series or as three separate series), the app:
 ```
 
 Four cooperating processes share **Redis**, the **SQLite database** and the
-**storage directory**:
+**storage directory**. In production all four run as containers of one release
+(`deploy/compose.yml`: `redis`, `api`, `worker`, `frontend`; the api and worker
+share the `morphometry_api` image, and the worker starts the two model images
+through the host's docker socket); in development they run from the checkout:
 
 | Process | Role | Needs |
 |---|---|---|
 | **Redis** | RQ broker + job queue | — |
 | **FastAPI app** (`uvicorn api.main:app`) | HTTP API: ingest, metadata, results, volume streaming. Never runs models and never blocks on docker. | Python venv |
 | **RQ worker** (`python -m api.tasks.worker`) | Runs the jobs: loads volumes, runs the two docker images, stores results. | Python venv, docker socket, NVIDIA GPU + container runtime |
-| **Next.js UI** (`npm run dev:webpack` / `npm start`) | The only client of the API. | Node.js |
+| **Next.js UI** (dev: `npm run dev:webpack`; production: the `frontend` image) | The only client of the API. | Node.js (dev only) |
 
 Design principles:
 
@@ -173,6 +176,10 @@ Scripts can drive the same workflow over REST with an `X-API-Key`
 
 ## Installation & first run
 
+**To run a released version** (no Python or Node install, nothing built) skip to
+[Production deployment (compose)](#production-deployment-compose). Steps 1–5
+below set up the **development** stack, which runs your checkout.
+
 ### Prerequisites
 
 | Component | Version / note |
@@ -194,7 +201,7 @@ pip install -r requirements.txt
 cd frontend && npm install && cd ..
 ```
 
-### 2. Build (or pull) the two model images
+### 2. Model images (nothing to do, usually)
 
 For development only. Released images are built and pushed solely by
 `scripts/release.py` ([`docs/releasing.md`](docs/releasing.md)); without
@@ -203,13 +210,20 @@ digest-pinned images of the current release from `release/images.json`
 (falling back to `:latest` with a warning if there is no entry). A locally
 built image is run and recorded as `released: false`.
 
+Usually you build nothing: the worker pulls the released images on first use.
+To try a local change to a model image, build it under a `:dev` tag (never
+`:latest` or a version; those belong to releases) and point the worker at it:
+
 ```bash
 # GPU segmentation image; checkpoints must exist under
 # api/docker/nnunet_torsion/checkpoints/{hip,knee,ankle}/ before building
-cd api/docker/nnunet_torsion && docker build -t swestfechtel/nnunet_torsion:latest . && cd -
+cd api/docker/nnunet_torsion && docker build -t swestfechtel/nnunet_torsion:dev . && cd -
 
 # CPU torsion image; the build context is the morphometry/ package directory
-cd morphometry && docker build -t swestfechtel/torsion:latest . && cd -
+cd morphometry && docker build -t swestfechtel/torsion:dev . && cd -
+
+# in api/.env (remove again afterwards, or the worker keeps running the dev image)
+MORPH_API_TORSION_IMAGE=swestfechtel/torsion:dev
 ```
 
 The refs are configurable (`MORPH_API_NNUNET_IMAGE`, `MORPH_API_TORSION_IMAGE`).
@@ -228,7 +242,7 @@ cp frontend/.env.example frontend/.env.local    # optional, usually left empty
 environment variables win over both). See
 [Configuration reference](#configuration-reference).
 
-### 4. Start the stack (four terminals, repo root, venv active)
+### 4. Start the development stack (four terminals, repo root, venv active)
 
 ```bash
 # 1. Redis
@@ -272,10 +286,18 @@ The CLI uses the same `MORPH_API_*` settings, hence the same database, as the AP
 from the released images of one version:
 
 ```bash
-cp deploy/.env.example deploy/.env      # MORPH_VERSION, MORPH_DATA_DIR, DOCKER_GID, secrets
+git pull                                # release/images.json must list MORPH_VERSION
+cp deploy/.env.example deploy/.env      # MORPH_VERSION, MORPH_DATA_DIR, DOCKER_GID, CORS
+mkdir -p /srv/morphometry               # = MORPH_DATA_DIR
+docker pull swestfechtel/nnunet_torsion:1.0.0   # optional pre-pull (25.6 GB), see notes
 docker compose -f deploy/compose.yml --env-file deploy/.env up -d
-curl localhost:8000/version
+curl localhost:8000/version             # "version": "1.0.0", "images_from": "1.0.0"
+docker compose -f deploy/compose.yml --env-file deploy/.env exec api python -m api.users create alice
 ```
+
+The UI is on `http://<host>:3000`. Follow the worker with
+`docker compose -f deploy/compose.yml --env-file deploy/.env logs -f worker`;
+stop the stack with `… down` (data and the redis volume persist).
 
 `MORPH_DATA_DIR` is bind-mounted at the **same absolute path** in the
 containers, and the worker's job scratch dirs live under it
@@ -292,8 +314,11 @@ change `MORPH_API_PORT` without building the frontend image with a matching
 - Set `MORPH_API_AUTH_REQUIRED=true`, an explicit `MORPH_API_SECRET_KEY`
   (shared by all API replicas) and explicit `MORPH_API_CORS_ALLOW_ORIGINS`
   (not `*`).
-- Serve the UI with `npm run build && npm start`. `NEXT_PUBLIC_*` variables are
-  inlined at build time — rebuild after changing them.
+- Run production from the released images (`deploy/compose.yml`, above), not
+  from a checkout with `uvicorn` / `npm start`: only then does every result carry
+  a released version.
+- Pre-pull the nnUNet image (`docker pull swestfechtel/nnunet_torsion:<version>`,
+  25.6 GB) before the first job, or that job spends its timeout downloading it.
 - Keep exactly one worker per GPU.
 - Back up `storage_dir` (it holds both `api.db` and the volumes).
 
@@ -677,7 +702,8 @@ npm run lint
 
 ## Operations
 
-- **Logs**: `MORPH_API_LOG_DIR` (default `api/logs/`), rotating, shared by API
+- **Logs**: `MORPH_API_LOG_DIR` (default `api/logs/`; under compose
+  `$MORPH_DATA_DIR/logs/`, plus `docker compose … logs`), rotating, shared by API
   and worker. Container output is logged in full when a container exits
   non-zero, and per-measurement torsion errors are logged at ERROR.
 - **Restart safety**: job status lives in the DB. A job that was `running` when

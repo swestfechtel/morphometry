@@ -143,11 +143,45 @@ The web app ships as four docker images (`nnunet_torsion`, `torsion`,
 can be found by version (`GET /examinations?version=`, the UI's version filter).
 Releases are made only by `scripts/release.py`; the rules, the changelog format
 and the 1.0.0 bootstrap are in [`docs/releasing.md`](docs/releasing.md).
-Production runs from `deploy/compose.yml` (`MORPH_VERSION` selects the release;
-see [`deploy/README.md`](deploy/README.md)); the sections below describe the
-development setup.
+There are two ways to run the web app:
 
-## Running the stack
+| | **Production** | **Development** |
+|---|---|---|
+| What runs | the released images of one version, via Docker Compose | your checkout: venv + `uvicorn` + `npm run dev:webpack` |
+| Started with | `docker compose … up -d` (below) | four terminals ([Running the stack (development)](#running-the-stack-development)) |
+| Model images | the release's digests from `release/images.json` | the same, unless `MORPH_API_*_IMAGE` override them |
+| Results recorded as | `released: true` | `released: true` with released model images; a local build is `released: false` |
+
+## Running in production (Docker Compose)
+
+`deploy/compose.yml` runs four containers from the images of the release
+`MORPH_VERSION`: **redis**, the **api**, the **worker** (same image as the api,
+plus the host's docker socket, so it can start the nnUNet and torsion
+containers) and the **frontend**. Nothing is built; everything is pulled from
+Docker Hub. Needs Docker with the compose plugin and the NVIDIA Container
+Toolkit on the host, and a checkout of this repo (compose mounts its
+`release/images.json`).
+
+```bash
+git pull                                        # release/images.json must list MORPH_VERSION
+cp deploy/.env.example deploy/.env              # then set MORPH_VERSION, MORPH_DATA_DIR, DOCKER_GID, CORS
+mkdir -p /srv/morphometry                       # = MORPH_DATA_DIR (absolute; DB, volumes, job dirs)
+docker pull swestfechtel/nnunet_torsion:1.0.0  # optional (use your MORPH_VERSION): pre-pull the 25.6 GB
+                                                # nnUNet image so the first job doesn't spend its timeout
+                                                # downloading it (tags never move, so it is the same image)
+docker compose -f deploy/compose.yml --env-file deploy/.env up -d
+curl localhost:8000/version                     # {"version": "1.0.0", "images_from": "1.0.0", ...}
+docker compose -f deploy/compose.yml --env-file deploy/.env exec api python -m api.users create <name>
+```
+
+The UI is then on `http://<host>:3000`, the API on `:8000`. Upgrade or roll
+back: `git pull`, change `MORPH_VERSION` in `deploy/.env`, re-run `up -d`.
+Logs: `docker compose -f deploy/compose.yml --env-file deploy/.env logs -f worker`.
+Stop: `… down` (data under `MORPH_DATA_DIR` and the redis volume persist).
+Details and pitfalls (same-path data mount, why `MORPH_API_PORT` must stay
+8000): [`deploy/README.md`](deploy/README.md).
+
+## Running the stack (development)
 
 For the web application as a whole (intended workflow, REST API reference,
 pipeline internals, configuration, known limitations) see the standalone

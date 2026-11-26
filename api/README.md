@@ -152,7 +152,7 @@ MORPH_API_CORS_ALLOW_ORIGINS=http://localhost:3000 \
 
 Auth: send `X-API-Key` when `MORPH_API_API_KEYS` is set (`/health` is exempt; the
 volume endpoints also accept `?api_key=`). The worker is the only process that
-needs the docker socket. See the repo root `README.md` → "Running the stack" for
+needs the docker socket. See the repo root `README.md` → "Running the stack (development)" for
 the full walkthrough including the frontend.
 
 ## Versioning, provenance and deployment

@@ -14,7 +14,7 @@ This is the `frontend/` part of the `morphometry` monorepo — the web client fo
 npm run dev          # Dev server with Turbopack
 npm run dev:webpack  # Dev server with webpack — USE THIS for the Cornerstone viewer
 npm run build        # Production build (webpack)
-npm start            # Production server
+npm start            # Serve that build locally (production runs the frontend image, ../deploy/)
 npm run lint         # ESLint
 ```
 
@@ -238,8 +238,10 @@ Username/password login against the API (`POST /auth/login`), managed by
 `app/server_config.ts` exposes a `model_api` base URL as a **getter**, resolved
 per access because it must differ between SSR and the browser:
 
-- **SSR** (server components fetching during render): `http://localhost:<port>` —
-  the API on loopback of the same machine, always reachable.
+- **SSR** (server components fetching during render): `MODEL_API_INTERNAL` if set
+  (a **runtime** variable; compose sets `http://api:8000`, because inside the frontend
+  container `localhost` is the container itself), else `http://localhost:<port>` — the
+  API on loopback of the same machine (dev).
 - **Browser** (client fetches, login, Cornerstone volume/preview URLs): same
   `protocol`+`hostname` as the current page, on the API port. This is what makes
   the UI work when opened via **both** `http://localhost:3000` and
@@ -251,7 +253,8 @@ per access because it must differ between SSR and the browser:
 
 Resolution order: `NEXT_PUBLIC_MODEL_API` (explicit override, set only when the API
 is on a different host than the UI) → browser same-hostname derivation
-(`NEXT_PUBLIC_MODEL_API_PORT`, default 8000) → `http://localhost:<port>`.
+(`NEXT_PUBLIC_MODEL_API_PORT`, default 8000) → SSR `MODEL_API_INTERNAL` →
+`http://localhost:<port>`.
 `NEXT_PUBLIC_*` values are inlined at build time, so rebuild after changing them;
 copy `.env.example` to `.env.local` to override. Components import `server_config`
 directly (`@/app/server_config`) for API calls. Path alias `@/*` maps to project
