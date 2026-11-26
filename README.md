@@ -7,7 +7,8 @@ whole-leg CT, plus a FastAPI service and batch-processing scripts.
 ## Layout
 
 - **Versioning and deployment** — `VERSION` / `CHANGELOG.md` (one semver for
-  the four docker images), `versioning/` (the check and release logic),
+  the four docker images), `versioning/` (the check and release logic; overview in
+  [`versioning/README.md`](versioning/README.md)),
   `scripts/release.py` (the only build/push path), `scripts/check_version.py`,
   `release/images.json` (digests per release) and `deploy/` (production compose
   stack). See [`docs/releasing.md`](docs/releasing.md).
@@ -141,8 +142,10 @@ The web app ships as four docker images (`nnunet_torsion`, `torsion`,
 `morphometry_api`, `morphometry_frontend`) sharing one semantic version
 (`VERSION`). Every examination records which image ran each stage, and results
 can be found by version (`GET /examinations?version=`, the UI's version filter).
-Releases are made only by `scripts/release.py`; the rules, the changelog format
-and the 1.0.0 bootstrap are in [`docs/releasing.md`](docs/releasing.md).
+Releases are made only by `scripts/release.py`. A short overview of the model,
+the rules and the tooling is [`versioning/README.md`](versioning/README.md); the
+full procedure, the changelog format and the 1.0.0 bootstrap are in
+[`docs/releasing.md`](docs/releasing.md).
 There are two ways to run the web app:
 
 | | **Production** | **Development** |
