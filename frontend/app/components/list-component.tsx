@@ -46,6 +46,7 @@ export function ListComponent({ examinations, description }: { examinations: Bas
                   <th className="py-2 px-4 border-b border-gray-300 dark:border-gray-700 text-left text-lg font-semibold text-gray-800 dark:text-white">{t("headers.examinationDate")}</th>
                   <th className="py-2 px-4 border-b border-gray-300 dark:border-gray-700 text-left text-lg font-semibold text-gray-800 dark:text-white">{t("headers.examinationTime")}</th>
                   <th className="py-2 px-4 border-b border-gray-300 dark:border-gray-700 text-left text-lg font-semibold text-gray-800 dark:text-white">{t("headers.status")}</th>
+                  <th className="py-2 px-4 border-b border-gray-300 dark:border-gray-700 text-left text-lg font-semibold text-gray-800 dark:text-white">{t("headers.versions")}</th>
                   <th className="py-2 px-4 border-b border-gray-300 dark:border-gray-700 text-left text-lg font-semibold text-gray-800 dark:text-white">{t("headers.actions")}</th>
               </tr>
               </thead>
@@ -70,6 +71,7 @@ export function ListComponent({ examinations, description }: { examinations: Bas
                       <input type="text" placeholder={t("filters.status")} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="border border-gray-300 dark:border-gray-700 rounded p-2"/>
                   </td>
                   <td className="py-2 px-4 border-b border-gray-300 dark:border-gray-700 text-lg text-gray-800 dark:text-white"></td>
+                  <td className="py-2 px-4 border-b border-gray-300 dark:border-gray-700 text-lg text-gray-800 dark:text-white"></td>
               </tr>
               {filteredExaminations.map((examination) => (
                   <ListElementComponent examination={examination} key={examination.accession_number}/>
@@ -78,6 +80,18 @@ export function ListComponent({ examinations, description }: { examinations: Bas
           </table>
       </div>
     );
+}
+
+/**
+ * Compact display of the release versions that produced a stage's output.
+ *
+ * @param versions - Ascending release versions, or undefined/empty when unknown.
+ * @return "–" when empty, the single version, or "first–last" when there are several.
+ */
+export function formatVersions(versions?: string[]): string {
+    if (!versions || versions.length === 0) return "–";
+    if (versions.length === 1) return versions[0];
+    return `${versions[0]}–${versions[versions.length - 1]}`;
 }
 
 function ListElementComponent({ examination }: { examination: BaseExamination }) {
@@ -125,6 +139,11 @@ function ListElementComponent({ examination }: { examination: BaseExamination })
                 :
                     examination.status
                 }
+            </td>
+            <td className="py-2 px-4 border-b border-gray-300 dark:border-gray-700 text-sm text-gray-800 dark:text-white whitespace-nowrap">
+                {(["torsion", "segmentation"] as const).map((stage) => (
+                    <div key={stage}>{t(`versionStage.${stage}`)}: {formatVersions(examination.image_versions?.[stage])}</div>
+                ))}
             </td>
             <td className="py-2 px-4 border-b border-gray-300 dark:border-gray-700">
                 {examination.status === 'processed' &&

@@ -4,8 +4,11 @@ These replace the metadata responsibilities of the old FileController (the image
 side moves to ``api.storage``). All functions take an explicit Session so they
 are trivially testable and free of global state.
 """
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Literal
 
+from sqlalchemy import and_, func, or_
 from sqlmodel import Session, select
 
 from api.db.models import Examination, Job, User
@@ -29,8 +32,46 @@ def get_examination(session: Session, examination_id: str) -> Examination | None
     return session.get(Examination, examination_id)
 
 
-def list_examinations(session: Session) -> list[Examination]:
-    return list(session.exec(select(Examination)).all())
+@dataclass(frozen=True)
+class VersionFilter:
+    """Provenance-based filter for :func:`list_examinations`.
+
+    :param stages: provenance stage keys to inspect (``segmentation`` and/or ``torsion``); OR-combined.
+    :param mode: ``digest`` (recorded digest equals ``digests[stage]``), ``unreleased`` (stage record has
+        ``released: false``) or ``none`` (no record for the stage, incl. null provenance).
+    :param digests: stage -> image ref to match; used by mode ``digest`` only.
+    """
+    stages: tuple[str, ...]
+    mode: Literal["digest", "unreleased", "none"]
+    digests: dict[str, str] = field(default_factory=dict)
+
+
+def _version_clause(vf: VersionFilter):
+    """Build the SQL WHERE clause for a :class:`VersionFilter` (json_extract on the provenance column)."""
+    clauses = []
+    for stage in vf.stages:
+        if vf.mode == "digest":
+            if stage in vf.digests:
+                clauses.append(func.json_extract(Examination.provenance, f"$.{stage}.digest") == vf.digests[stage])
+        elif vf.mode == "unreleased":
+            # JSON false is extracted as integer 0
+            clauses.append(func.json_extract(Examination.provenance, f"$.{stage}.released") == 0)
+        else:
+            clauses.append(func.json_extract(Examination.provenance, f"$.{stage}").is_(None))
+    return or_(*clauses) if clauses else and_(False)
+
+
+def list_examinations(session: Session, *, version_filter: VersionFilter | None = None) -> list[Examination]:
+    """List examinations, optionally restricted by recorded image provenance.
+
+    :param session: open DB session.
+    :param version_filter: if given, only rows matching it (evaluated in SQL); ``None`` returns all rows.
+    :return: the matching examinations.
+    """
+    stmt = select(Examination)
+    if version_filter is not None:
+        stmt = stmt.where(_version_clause(version_filter))
+    return list(session.exec(stmt).all())
 
 
 def delete_examination(session: Session, examination_id: str) -> bool:

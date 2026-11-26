@@ -21,7 +21,13 @@
 //      the localhost + LAN-IP dual-access setup).
 //   2. In the browser: same protocol + hostname as the current page, on the API
 //      port (NEXT_PUBLIC_MODEL_API_PORT, default 8000).
-//   3. On the server (or if `window` is somehow unavailable): http://localhost:<port>.
+//   3. On the server: runtime env MODEL_API_INTERNAL (not NEXT_PUBLIC, so it is read when
+//      the process runs, not inlined at build time) — used by the docker image, where the
+//      API is not on this container's loopback (e.g. http://api:8000).
+//   4. Otherwise (or if `window` is somehow unavailable): http://localhost:<port>.
+//
+// MODEL_API_INTERNAL never affects the browser branch: the browser cannot resolve
+// container-internal hostnames.
 //
 // NEXT_PUBLIC_* values are inlined at build time, so rebuild after changing them.
 
@@ -33,7 +39,7 @@ function resolveApiBase(): string {
   if (typeof window !== "undefined") {
     return `${window.location.protocol}//${window.location.hostname}:${API_PORT}`;
   }
-  return `http://localhost:${API_PORT}`;
+  return process.env.MODEL_API_INTERNAL ?? `http://localhost:${API_PORT}`;
 }
 
 const server_config = {

@@ -5,6 +5,7 @@ tags, shared-memory size, API keys, CORS origins) live here so the service can b
 deployed without code changes. Override any field with an ``MORPH_API_``-prefixed
 environment variable or an entry in a local ``.env`` file.
 """
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
@@ -12,7 +13,13 @@ from typing import Annotated
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from api import release_manifest as _manifest
+from api.version import get_version
+
+logger = logging.getLogger("api")
+
 _API_DIR = Path(__file__).resolve().parent
+_warned_latest = False  # the ':latest' fallback warning is logged once per process
 
 
 class Settings(BaseSettings):
@@ -48,9 +55,17 @@ class Settings(BaseSettings):
     orthanc_debounce_seconds: int = 10
 
     # --- docker model images ---------------------------------------------------
-    nnunet_image: str = "swestfechtel/nnunet_torsion:latest"
-    torsion_image: str = "swestfechtel/torsion:latest"
+    #: Explicit image override (env). ``None`` = use the release manifest (see ``resolved_*``).
+    nnunet_image: str | None = None
+    torsion_image: str | None = None
     docker_shm_size: str = "32G"
+    #: Release manifest (``release/images.json``) to read. ``None`` = the source tree's
+    #: ``release/images.json`` (venv / dev). The api image ships no ``release/``, so production
+    #: compose bind-mounts the deploy checkout's file and sets ``MORPH_API_RELEASE_MANIFEST``.
+    release_manifest: Path | None = None
+
+    #: Parent directory for per-job scratch dirs (``None`` = system temp). Created on use.
+    job_tmp_dir: Path | None = None
 
     # --- image encoding --------------------------------------------------------
     #: Worker-side matplotlib pool size for slice PNG rendering (None = os default).
@@ -89,6 +104,46 @@ class Settings(BaseSettings):
     def resolved_database_url(self) -> str:
         """The DB URL, defaulting to a SQLite file inside ``storage_dir``."""
         return self.database_url or f"sqlite:///{self.storage_dir / 'api.db'}"
+
+    @property
+    def manifest_file(self) -> Path:
+        """The release manifest this instance reads.
+
+        :return: ``release_manifest`` if set, else ``api.release_manifest.MANIFEST_PATH``.
+        """
+        return _manifest.MANIFEST_PATH if self.release_manifest is None else self.release_manifest
+
+    def _resolve_image(self, key: str, override: str | None) -> str:
+        """Env override, else manifest entry for the running version, else ``:latest`` (warns once)."""
+        global _warned_latest
+        if override:
+            return override
+        _, entry = _manifest.images_for(get_version(), _manifest.load_manifest(self.manifest_file))
+        if entry.get(key):
+            return entry[key]
+        repo = {"nnunet": "swestfechtel/nnunet_torsion", "torsion": "swestfechtel/torsion"}[key]
+        if not _warned_latest:
+            _warned_latest = True
+            logger.warning("No manifest entry for %s image at version %s; falling back to %s:latest",
+                           key, get_version(), repo)
+        return f"{repo}:latest"
+
+    @property
+    def resolved_nnunet_image(self) -> str:
+        """nnUNet image: ``MORPH_API_NNUNET_IMAGE`` if set, else the release manifest, else ``:latest``."""
+        return self._resolve_image("nnunet", self.nnunet_image)
+
+    @property
+    def resolved_torsion_image(self) -> str:
+        """Torsion image: ``MORPH_API_TORSION_IMAGE`` if set, else the release manifest, else ``:latest``."""
+        return self._resolve_image("torsion", self.torsion_image)
+
+    def job_tempdir_parent(self) -> str | None:
+        """Create (if needed) and return ``job_tmp_dir`` for ``TemporaryDirectory(dir=...)``; ``None`` if unset."""
+        if self.job_tmp_dir is None:
+            return None
+        self.job_tmp_dir.mkdir(parents=True, exist_ok=True)
+        return str(self.job_tmp_dir)
 
     @property
     def incoming_dir(self) -> Path:

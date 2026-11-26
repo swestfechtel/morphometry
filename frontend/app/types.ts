@@ -45,6 +45,16 @@ export interface BaseExamination {
     status: ExaminationStatus;
     // Id of a queued/running job for this examination (null when nothing is in flight).
     active_job_id?: string | null;
+    // Release versions whose docker image produced this examination, per stage
+    // ("segmentation" / "torsion"), ascending. Empty/absent when unknown.
+    image_versions?: Record<string, string[]>;
+}
+
+/** One entry of GET /releases (newest first). */
+export interface Release {
+    version: string;
+    date: string | null;
+    images: Record<string, string>;
 }
 
 // --- Torsion (MRI) types ---

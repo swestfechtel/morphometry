@@ -46,18 +46,47 @@ from morphometry.measurements.hip import (
     calculate_femoral_offset,
     calculate_femoral_offset_projected,
 )
-from morphometry.measurements.cartilage import (
-    calculate_tibial_cartilage_thickness,
-    calculate_femoral_cartilage_thickness,
-    calculate_knee_cartilage_thickness,
-    calculate_thinnest_cartilage_area,
-    plot_knee_segments,
-    plot_knee_thickness,
-    find_thinnest_area,
-    find_thinnest_area_by_compartment,
-    split_tibia_thickness_by_compartment,
-    plot_thinnest_point,
+import importlib
+
+# Cartilage re-exports are resolved lazily (PEP 562) so that importing any measurement -- notably the
+# torsion docker image's entry point -- does not load the cartilage code.
+_CARTILAGE_MODULE = "cartilage"
+_CARTILAGE_NAMES = (
+    "calculate_tibial_cartilage_thickness",
+    "calculate_femoral_cartilage_thickness",
+    "calculate_knee_cartilage_thickness",
+    "calculate_thinnest_cartilage_area",
+    "plot_knee_segments",
+    "plot_knee_thickness",
+    "find_thinnest_area",
+    "find_thinnest_area_by_compartment",
+    "split_tibia_thickness_by_compartment",
+    "plot_thinnest_point",
 )
+
+
+def __getattr__(name):
+    """Resolve a cartilage re-export on first access (PEP 562).
+
+    :param name: attribute requested from ``morphometry.measurements``.
+    :return: the cartilage object of that name (cached in module globals afterwards).
+    :raises AttributeError: if ``name`` is not one of the lazily exported cartilage names.
+    """
+    if name in _CARTILAGE_NAMES:
+        # Deliberately NOT an import statement and with a non-literal first argument: cartilage is
+        # intentionally outside the torsion image's versioned import closure (the release tooling's
+        # static walker does not follow this). A change here must be reviewed with that in mind.
+        module = importlib.import_module(__name__ + "." + _CARTILAGE_MODULE)
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    """List module attributes including the lazily exported cartilage names."""
+    return sorted(set(globals()) | set(_CARTILAGE_NAMES))
+
 
 __all__ = [
     "calculate_femoral_torsion",

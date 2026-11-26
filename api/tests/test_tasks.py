@@ -78,3 +78,23 @@ def test_run_torsion_malformed_output(runtime, fake_docker_run, monkeypatch):
         assert ex.status == "failed"  # not 'processed' — no partial write of results
         assert ex.torsion_values is None
         assert repository.get_job(s, job_id).status == "failed"
+
+
+def test_run_torsion_writes_provenance(runtime, fake_docker_run, monkeypatch):
+    engine, store, job_id = _seed(runtime)
+    monkeypatch.setattr(subprocess, "run", fake_docker_run(returncode=0))
+    monkeypatch.setattr("api.tasks.provenance.inspect_image", lambda ref: (f"{ref}@sha256:aa", "sha256:bb"))
+
+    from api.tasks.torsion import run_torsion
+    run_torsion("ACC1", job_id, mode="full")
+    with session_scope(engine) as s:
+        prov = repository.get_examination(s, "ACC1").provenance
+    assert set(prov) == {"segmentation", "torsion"}
+    seg_before, torsion_before = prov["segmentation"], prov["torsion"]
+    assert seg_before["digest"] and torsion_before["digest"]
+
+    run_torsion("ACC1", job_id, mode="torsion")
+    with session_scope(engine) as s:
+        prov = repository.get_examination(s, "ACC1").provenance
+    assert prov["segmentation"] == seg_before
+    assert prov["torsion"]["ran_at"] > torsion_before["ran_at"]
