@@ -94,11 +94,11 @@ Run from a clean `main` that equals `origin/main`, with docker logged in to Dock
 ```bash
 python scripts/release.py --dry-run    # gather state, print per-image build / retag / skip, change nothing
 python scripts/release.py              # execute the plan
-python scripts/release.py --adopt nnunet   # 1.0.0 only, see the bootstrap
+python scripts/release.py --adopt nnunet   # initial release only: release an existing, unlabelled image as is
 ```
 
-`--adopt` combines with `--dry-run` (`python scripts/release.py --adopt nnunet --dry-run` previews the
-bootstrap plan).
+`--adopt` combines with `--dry-run`. The 1.0.0 bootstrap ended up building every image, so it does not
+use `--adopt`.
 
 **It refuses** (exit 1, with the reasons listed) unless: the work tree is clean, the branch is `main`
 and equals `origin/main`; `check_version` passes (bump above the last tag, changelog section, golden
@@ -110,7 +110,7 @@ nnunet is rebuilt (there is no option to verify another directory).
 
 **The plan.** Per image: `build` if its gated paths changed since the last release tag (or there is no
 tag), else `retag`: add `:<VERSION>` to the previous release's digest registry-side, no rebuild and
-no upload. In particular the 79.5 GB nnunet image is only rebuilt when its own gated paths change.
+no upload. In particular the 25.6 GB nnunet image is only rebuilt when its own gated paths change.
 **The api image is the exception: it is built on every release**, never retagged, because it bakes
 this release's `MORPH_VERSION` and the nnunet/torsion image references in at build time; a retagged
 api image would make release N+1's stack launch release N's model images and report N's version.
@@ -166,23 +166,24 @@ the inputs: `VERSION` is `1.0.0` and `CHANGELOG.md` has its section already.
    git add api/docker/nnunet_torsion/checkpoints.sha256 && git commit -m "chore: checkpoint manifest"
    ```
    (~32 GB hashed.) `checkpoints.sha256` is a gated nnunet path: committing it **after** `v1.0.0` would
-   count as an nnunet change and force a 79.5 GB rebuild for 1.0.1.
-4. **Adopt the existing nnunet image as 1.0.0** (only nnunet is adopted). The local image `70229af9...`
-   is the one the API has been running; first confirm the local `:latest` still is that image, then push
-   it as the release image:
-   ```bash
-   docker image inspect --format '{{.Id}}' swestfechtel/nnunet_torsion:latest   # must be sha256:70229af9…; stop otherwise
-   docker tag swestfechtel/nnunet_torsion:latest swestfechtel/nnunet_torsion:1.0.0
-   docker push swestfechtel/nnunet_torsion:1.0.0
-   ```
-   It has no revision label, so `release.py` would refuse it without `--adopt nnunet`. The superseded Hub
-   `:latest` stays reachable by its manifest digest (recorded in the changelog).
+   count as an nnunet change and force a 25.6 GB nnunet rebuild and upload for 1.0.1.
+4. **Build nnunet fresh; nothing is adopted.** The pre-versioning image `70229af9...` (79.5 GB) is not
+   released: 1.0.0 is a slim rebuild from the same checkpoints and its exact `pip freeze`
+   (`api/docker/nnunet_torsion/requirements.txt`), checked on a stored examination: old vs slim masks differ by
+   at most 2 voxels per region, the same as two runs of the old image (GPU inference is not
+   bit-deterministic). If a `:1.0.0` tag was already pushed by hand (an earlier version of this
+   checklist did that), **delete it on Docker Hub first** (repository `nnunet_torsion` → Tags → `1.0.0`
+   → Delete, then remove the untagged image under Image Management if it is still listed): `release.py`
+   refuses an existing `:1.0.0` without this commit's revision label, by design. Nothing references that
+   tag yet (no `v1.0.0`, empty `release/images.json`), so this is the one time a version tag may go.
+   The superseded Hub `:latest` stays reachable by its manifest digest (recorded in the changelog).
 5. **Push `main`** (so `HEAD` equals `origin/main`) and make sure the work tree is clean. The pre-push
    hook from step 1 runs `scripts/check_version.py`; a violation stops the push.
-6. **Dry run:** `python scripts/release.py --adopt nnunet --dry-run` (without `--adopt nnunet` it
-   refuses the unlabelled nnunet tag). Expect nnunet `skip` (adopted), torsion, api and
-   frontend `build`. Read the refusals if any.
-7. **Release:** `python scripts/release.py --adopt nnunet`. If interrupted, re-run it (see resume).
+6. **Dry run:** `python scripts/release.py --dry-run`. Expect `build` for all four images (no release tag
+   exists yet). Read the refusals if any.
+7. **Release:** `python scripts/release.py`. It re-verifies the checkpoints against
+   `checkpoints.sha256` (~32 GB hashed) before the nnunet build, and pushes 25.6 GB for nnunet. If
+   interrupted, re-run it (see resume).
 8. **Verify:** `docker manifest inspect swestfechtel/<image>:1.0.0` for each of the four; `release/images.json`
    holds four digests; `git tag` shows `v1.0.0` and it is on origin; CI is green on the release commit;
    on the deploy host, `git pull` (to get the `release: v1.0.0` commit, whose `release/images.json` compose
