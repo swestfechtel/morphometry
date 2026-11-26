@@ -1,1 +1,10 @@
-{}
+{
+  "1.0.0": {
+    "nnunet": "swestfechtel/nnunet_torsion@sha256:7249eef0da21d15460fd0aead12b4df2134ee375afe099961119696e6751f010",
+    "torsion": "swestfechtel/torsion@sha256:18131fd8610b2f4eeded3141a8685ee676398f75997ccf9dfbe7bf1ca91af116",
+    "api": "swestfechtel/morphometry_api@sha256:ef877f31e1ddae2137cd7ca6091d458b50ef967a192fedb31d5a279c3be71064",
+    "frontend": "swestfechtel/morphometry_frontend@sha256:8ee5864e56e3a70776516c9e02578121f67abdc494c209f6560fac6d37d37bf0",
+    "git_commit": "f481edebcac5c359235c398ad2b9f3065fdbac12",
+    "date": "2026-11-26"
+  }
+}
