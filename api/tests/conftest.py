@@ -19,6 +19,22 @@ from api.settings import Settings
 _REAL_RUN = _subprocess.run
 
 
+@pytest.fixture(autouse=True)
+def _no_dotenv(monkeypatch):
+    """Stop every ``Settings()`` built during a test from reading the developer's ``.env`` files.
+
+    ``Settings`` loads the repo-root ``.env`` and ``api/.env`` (see ``api/settings.py``). Those
+    are untracked, per-machine files, so a key set there (for example ``MORPH_API_NNUNET_IMAGE``)
+    would silently override what a test configures and make the suite pass or fail depending on
+    whose checkout it runs in. Real environment variables still apply; tests set or delete those
+    explicitly with ``monkeypatch``.
+
+    :param monkeypatch: pytest's monkeypatch fixture; the config change is undone after the test.
+    :return: None.
+    """
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+
+
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     """A Settings instance pointed entirely at temp directories."""
